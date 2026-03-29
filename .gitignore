@@ -1,0 +1,28 @@
+# Environment
+.env
+
+# Binary
+vendia-server
+*.exe
+
+# Build artifacts
+tmp/
+*.out
+coverage.out
+
+# Dependencies
+vendor/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Claude Code
+CLAUDE.md
+.claude/

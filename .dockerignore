@@ -1,0 +1,6 @@
+.env
+.git
+*.md
+vendia-server
+docker-compose.yml
+deploy.sh
