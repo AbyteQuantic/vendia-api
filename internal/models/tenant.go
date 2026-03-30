@@ -5,10 +5,14 @@ import "time"
 type BusinessType string
 
 const (
-	BusinessTypeTiendaBarrio BusinessType = "tienda_barrio"
-	BusinessTypeMinimercado  BusinessType = "minimercado"
-	BusinessTypeBar          BusinessType = "bar"
-	BusinessTypeMiscelanea   BusinessType = "miscelanea"
+	BusinessTypeTiendaBarrio  BusinessType = "tienda_barrio"
+	BusinessTypeMinimercado   BusinessType = "minimercado"
+	BusinessTypeBar           BusinessType = "bar"
+	BusinessTypeMiscelanea    BusinessType = "miscelanea"
+	BusinessTypeMuebles       BusinessType = "muebles"
+	BusinessTypeManufactura   BusinessType = "manufactura"
+	BusinessTypeReparacion    BusinessType = "reparacion"
+	BusinessTypeComidas       BusinessType = "comidas_rapidas"
 )
 
 type Tenant struct {
