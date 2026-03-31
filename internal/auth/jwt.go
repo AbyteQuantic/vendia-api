@@ -9,8 +9,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-const AccessTokenDuration = 15 * time.Minute
-const RefreshTokenDuration = 30 * 24 * time.Hour
+const AccessTokenDuration = 7 * 24 * time.Hour   // 7 days — zero friction for tiendas
+const RefreshTokenDuration = 90 * 24 * time.Hour  // 90 days
 
 type Claims struct {
 	TenantID     string `json:"tenant_id"`

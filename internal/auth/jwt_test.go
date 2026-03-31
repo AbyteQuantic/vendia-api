@@ -23,7 +23,7 @@ func TestGenerateToken_ProducesValidJWT(t *testing.T) {
 	assert.Equal(t, "vendia-backend", claims.Issuer)
 }
 
-func TestGenerateToken_ExpiresIn15Minutes(t *testing.T) {
+func TestGenerateToken_ExpiresIn7Days(t *testing.T) {
 	token, err := GenerateToken("550e8400-e29b-41d4-a716-446655440000", "3001234567", "TestBiz", testSecret)
 	require.NoError(t, err)
 
@@ -31,8 +31,8 @@ func TestGenerateToken_ExpiresIn15Minutes(t *testing.T) {
 	require.NoError(t, err)
 
 	expiry := claims.ExpiresAt.Time
-	expectedMin := time.Now().Add(14 * time.Minute)
-	expectedMax := time.Now().Add(16 * time.Minute)
+	expectedMin := time.Now().Add(7*24*time.Hour - 1*time.Minute)
+	expectedMax := time.Now().Add(7*24*time.Hour + 1*time.Minute)
 	assert.True(t, expiry.After(expectedMin))
 	assert.True(t, expiry.Before(expectedMax))
 }
