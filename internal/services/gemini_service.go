@@ -81,11 +81,24 @@ Formato: cuadrado 512x512, esquinas redondeadas.`, businessName, businessType)
 	return results, nil
 }
 
-func (s *GeminiService) EnhancePhoto(ctx context.Context, imageData []byte, mimeType string) ([]byte, error) {
-	prompt := `Mejora esta foto de comida para un catálogo de restaurante.
-Mantén la comida exactamente igual (no alterar el plato).
-Cambia el fondo a negro elegante profesional.
-Mejora iluminación y colores. Estilo food photography premium.`
+// EnhancePhoto generates a professional e-commerce product photo.
+// productInfo is optional context (e.g., "Coca-Cola Botella 350ml").
+func (s *GeminiService) EnhancePhoto(ctx context.Context, imageData []byte, mimeType string, productInfo string) ([]byte, error) {
+	description := ""
+	if productInfo != "" {
+		description = fmt.Sprintf("\nEl producto es: %s.", productInfo)
+	}
+
+	prompt := fmt.Sprintf(`Genera una foto profesional de e-commerce de este producto.%s
+
+Instrucciones estrictas:
+- Fondo BLANCO puro (#FFFFFF), limpio, sin sombras de fondo.
+- Mostrar el producto completo, centrado, sin recortar.
+- Iluminación suave y uniforme tipo estudio fotográfico.
+- Colores fieles al producto real, nítidos y vibrantes.
+- Sin texto, logos adicionales, ni marcas de agua.
+- Estilo Amazon/MercadoLibre: producto aislado sobre fondo blanco.
+- La imagen debe ser digna de un catálogo de e-commerce profesional.`, description)
 
 	b64 := base64.StdEncoding.EncodeToString(imageData)
 

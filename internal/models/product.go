@@ -23,4 +23,6 @@ type Product struct {
 	PriceStatus       string  `gorm:"default:'set'" json:"price_status"`
 	SupplierID        *string `gorm:"type:uuid" json:"supplier_id,omitempty"`
 	Unit              string  `gorm:"default:'unit'" json:"unit"`
+	Presentation      string  `json:"presentation,omitempty"`  // botella, lata, bolsa, caja, etc.
+	Content           string  `json:"content,omitempty"`       // 350ml, 500g, 1L, etc.
 }

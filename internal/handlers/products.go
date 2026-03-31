@@ -42,6 +42,8 @@ func CreateProduct(db *gorm.DB) gin.HandlerFunc {
 		ImageURL          string  `json:"image_url"`
 		RequiresContainer bool    `json:"requires_container"`
 		ContainerPrice    int64   `json:"container_price"`
+		Presentation      string  `json:"presentation"`
+		Content           string  `json:"content"`
 	}
 
 	return func(c *gin.Context) {
@@ -68,6 +70,8 @@ func CreateProduct(db *gorm.DB) gin.HandlerFunc {
 			IsAvailable:       true,
 			RequiresContainer: req.RequiresContainer,
 			ContainerPrice:    req.ContainerPrice,
+			Presentation:      req.Presentation,
+			Content:           req.Content,
 		}
 		if req.ID != "" {
 			product.ID = req.ID
@@ -90,6 +94,9 @@ func UpdateProduct(db *gorm.DB) gin.HandlerFunc {
 		IsAvailable       *bool    `json:"is_available"`
 		RequiresContainer *bool    `json:"requires_container"`
 		ContainerPrice    *int64   `json:"container_price"`
+		ImageURL          *string  `json:"image_url"`
+		Presentation      *string  `json:"presentation"`
+		Content           *string  `json:"content"`
 	}
 
 	return func(c *gin.Context) {
@@ -127,6 +134,15 @@ func UpdateProduct(db *gorm.DB) gin.HandlerFunc {
 		}
 		if req.ContainerPrice != nil {
 			updates["container_price"] = *req.ContainerPrice
+		}
+		if req.ImageURL != nil {
+			updates["image_url"] = *req.ImageURL
+		}
+		if req.Presentation != nil {
+			updates["presentation"] = *req.Presentation
+		}
+		if req.Content != nil {
+			updates["content"] = *req.Content
 		}
 
 		if err := db.Model(&product).Updates(updates).Error; err != nil {

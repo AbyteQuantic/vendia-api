@@ -281,7 +281,16 @@ func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, r2Svc *
 			return
 		}
 
-		enhanced, err := geminiSvc.EnhancePhoto(ctx, imageData, resp.Header.Get("Content-Type"))
+		// Build product description for better AI results
+		productInfo := product.Name
+		if product.Presentation != "" {
+			productInfo += " " + product.Presentation
+		}
+		if product.Content != "" {
+			productInfo += " " + product.Content
+		}
+
+		enhanced, err := geminiSvc.EnhancePhoto(ctx, imageData, resp.Header.Get("Content-Type"), productInfo)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al mejorar foto: %v", err)})
 			return
