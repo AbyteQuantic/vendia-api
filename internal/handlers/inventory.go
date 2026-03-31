@@ -132,6 +132,30 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 	}
 }
 
+// CatalogDump returns all cached catalog products for offline-first sync.
+func CatalogDump(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var products []models.CatalogProduct
+		if err := db.Order("name ASC").Limit(500).Find(&products).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al obtener catálogo"})
+			return
+		}
+
+		type item struct {
+			Name     string `json:"name"`
+			Brand    string `json:"brand"`
+			ImageURL string `json:"image_url"`
+		}
+
+		items := make([]item, 0, len(products))
+		for _, p := range products {
+			items = append(items, item{Name: p.Name, Brand: p.Brand, ImageURL: p.ImageURL})
+		}
+
+		c.JSON(http.StatusOK, gin.H{"data": items})
+	}
+}
+
 func SearchProductsOFF(cacheSvc *services.CatalogCacheService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		q := c.Query("q")
