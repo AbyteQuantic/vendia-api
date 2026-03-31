@@ -141,11 +141,21 @@ Instrucciones estrictas:
 		return nil, fmt.Errorf("failed to read enhance response: %w", err)
 	}
 
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("gemini API returned %d: %s", resp.StatusCode, string(respBody[:min(len(respBody), 200)]))
+	}
+
 	var geminiResp geminiResponse
 	if err := json.Unmarshal(respBody, &geminiResp); err != nil {
 		return nil, fmt.Errorf("failed to parse enhance response: %w", err)
 	}
 
+	if geminiResp.Error != nil {
+		return nil, fmt.Errorf("gemini error %d: %s", geminiResp.Error.Code, geminiResp.Error.Message)
+	}
+
+	// Collect any text response for debugging
+	var textParts []string
 	for _, candidate := range geminiResp.Candidates {
 		for _, part := range candidate.Content.Parts {
 			if part.InlineData.Data != "" {
@@ -155,10 +165,17 @@ Instrucciones estrictas:
 				}
 				return decoded, nil
 			}
+			if part.Text != "" {
+				textParts = append(textParts, part.Text)
+			}
 		}
 	}
 
-	return nil, fmt.Errorf("no image returned from Gemini enhance")
+	if len(textParts) > 0 {
+		return nil, fmt.Errorf("gemini returned text instead of image: %s", strings.Join(textParts, " ")[:min(len(strings.Join(textParts, " ")), 200)])
+	}
+
+	return nil, fmt.Errorf("no image returned from Gemini (candidates=%d)", len(geminiResp.Candidates))
 }
 
 func (s *GeminiService) callWithImage(ctx context.Context, imageData []byte, mimeType, prompt string) (string, error) {
@@ -291,5 +308,10 @@ type geminiResponse struct {
 				} `json:"inlineData"`
 			} `json:"parts"`
 		} `json:"content"`
+		FinishReason string `json:"finishReason"`
 	} `json:"candidates"`
+	Error *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
 }

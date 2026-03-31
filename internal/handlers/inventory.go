@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
@@ -268,12 +269,30 @@ func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, r2Svc *
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 		defer cancel()
 
-		resp, err := http.Get(sourceURL)
+		imgReq, err := http.NewRequestWithContext(ctx, "GET", sourceURL, nil)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al obtener foto actual"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al preparar descarga de foto"})
+			return
+		}
+		imgReq.Header.Set("User-Agent", "VendIA-POS/1.0 (vendia.co)")
+
+		resp, err := http.DefaultClient.Do(imgReq)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al obtener foto: %v", err)})
 			return
 		}
 		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("la URL de la foto devolvió %d", resp.StatusCode)})
+			return
+		}
+
+		contentType := resp.Header.Get("Content-Type")
+		if !strings.HasPrefix(contentType, "image/") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "la URL no contiene una imagen válida"})
+			return
+		}
 
 		imageData, err := io.ReadAll(resp.Body)
 		if err != nil {
@@ -290,7 +309,7 @@ func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, r2Svc *
 			productInfo += " " + product.Content
 		}
 
-		enhanced, err := geminiSvc.EnhancePhoto(ctx, imageData, resp.Header.Get("Content-Type"), productInfo)
+		enhanced, err := geminiSvc.EnhancePhoto(ctx, imageData, contentType, productInfo)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al mejorar foto: %v", err)})
 			return
