@@ -108,6 +108,7 @@ func main() {
 		v1.PATCH("/products/:id", handlers.UpdateProduct(db))
 		v1.POST("/products/seed", middleware.DevOnly(cfg.Env), handlers.SeedProducts(db))
 		v1.GET("/products/lookup", handlers.LookupBarcode(offSvc))
+		v1.GET("/products/search-off", handlers.SearchProductsOFF(offSvc))
 		v1.GET("/products/pending-prices", handlers.PendingPrices(db))
 		v1.PATCH("/products/:id/price", handlers.SetProductPrice(db))
 		v1.POST("/products/:id/photo", handlers.UploadProductPhoto(db, r2Svc))

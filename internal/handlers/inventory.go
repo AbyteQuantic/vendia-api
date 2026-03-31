@@ -131,6 +131,32 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 	}
 }
 
+func SearchProductsOFF(offSvc *services.OpenFoodFactsService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		q := c.Query("q")
+		if q == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "parámetro q requerido"})
+			return
+		}
+
+		if offSvc == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "servicio no disponible"})
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
+		defer cancel()
+
+		products, err := offSvc.SearchProducts(ctx, q, 5)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{"data": []any{}})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"data": products})
+	}
+}
+
 func LookupBarcode(offSvc *services.OpenFoodFactsService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		barcode := c.Query("barcode")
