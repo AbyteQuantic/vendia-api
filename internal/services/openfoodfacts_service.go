@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -53,7 +54,7 @@ func (s *OpenFoodFactsService) SearchProducts(ctx context.Context, query string,
 	if limit <= 0 || limit > 10 {
 		limit = 5
 	}
-	url := fmt.Sprintf("https://world.openfoodfacts.org/cgi/search.pl?search_terms=%s&search_simple=1&action=process&json=1&page_size=%d&fields=product_name,image_small_url,brands", query, limit)
+	url := fmt.Sprintf("https://world.openfoodfacts.org/cgi/search.pl?search_terms=%s&search_simple=1&action=process&json=1&page_size=%d&fields=product_name,image_small_url,brands&tagtype_0=countries&tag_contains_0=contains&tag_0=colombia&lang=es&lc=es", url.QueryEscape(query), limit)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -102,7 +103,7 @@ func (s *OpenFoodFactsService) SearchProducts(ctx context.Context, query string,
 }
 
 func (s *OpenFoodFactsService) searchV2(ctx context.Context, query string, limit int) ([]OFFProduct, error) {
-	url := fmt.Sprintf("https://world.openfoodfacts.org/api/v2/search?search_terms=%s&fields=product_name,image_small_url,brands&page_size=%d", query, limit)
+	url := fmt.Sprintf("https://world.openfoodfacts.org/api/v2/search?search_terms=%s&countries_tags=colombia&fields=product_name,image_small_url,brands&page_size=%d&lang=es&sort_by=unique_scans_n", url.QueryEscape(query), limit)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {

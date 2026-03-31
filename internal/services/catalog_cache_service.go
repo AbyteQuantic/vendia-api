@@ -206,11 +206,25 @@ func (s *CatalogCacheService) refreshStaleEntries(ctx context.Context) {
 // Colombian tiendas de barrio.
 func (s *CatalogCacheService) seedCommonProducts(ctx context.Context) {
 	queries := []string{
-		"coca cola", "pepsi", "agua", "leche", "pan",
-		"arroz", "aceite", "azucar", "cafe", "chocolate",
-		"galletas", "jabon", "detergente", "cerveza", "aguardiente",
-		"atun", "sardinas", "pasta", "harina", "sal",
-		"jugo", "yogurt", "queso", "huevos", "mantequilla",
+		// Bebidas colombianas
+		"coca cola", "postobon", "colombiana", "pepsi", "hit",
+		"jugos del valle", "agua cristal", "pony malta", "club colombia",
+		"aguila", "poker cerveza", "aguardiente", "ron medellin",
+		// Lácteos y huevos
+		"leche alpina", "leche alqueria", "yogurt alpina", "bon yurt",
+		"queso", "mantequilla", "huevos kikes",
+		// Despensa colombiana
+		"arroz diana", "arroz roa", "aceite girasol", "azucar manuelita",
+		"cafe sello rojo", "cafe juan valdez", "chocolate corona", "chocolate sol",
+		"panela", "harina pan", "harina de trigo",
+		// Snacks y galletas
+		"galletas noel", "galletas festival", "chocoramo", "bimbo",
+		"de todito", "doritos", "papas margarita",
+		// Enlatados y básicos
+		"atun van camps", "sardinas", "pasta doria", "pasta la muñeca",
+		"frijoles", "lentejas", "sal refisal",
+		// Aseo y cuidado
+		"jabon", "detergente fab", "clorox", "papel higienico familia",
 	}
 
 	for _, q := range queries {
