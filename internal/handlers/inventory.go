@@ -251,7 +251,7 @@ func UploadProductPhoto(db *gorm.DB, storageSvc services.FileStorage) gin.Handle
 		key := fmt.Sprintf("products/%s/%s.webp", tenantID, productUUID)
 		mimeType := header.Header.Get("Content-Type")
 
-		photoURL, err := storageSvc.Upload(c.Request.Context(), "vendia-product-photos", key, data, mimeType)
+		photoURL, err := storageSvc.Upload(c.Request.Context(), "product-photos", key, data, mimeType)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al subir foto"})
 			return
@@ -339,10 +339,10 @@ func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, storage
 			return
 		}
 
-		key := fmt.Sprintf("products/%s/%s-enhanced.webp", tenantID, productUUID)
-		newURL, err := storageSvc.Upload(ctx, "vendia-product-photos", key, enhanced, "image/webp")
+		key := fmt.Sprintf("products/%s/%s-enhanced.png", tenantID, productUUID)
+		newURL, err := storageSvc.Upload(ctx, "product-photos", key, enhanced, "image/png")
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al guardar foto mejorada"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al guardar foto mejorada: %v", err)})
 			return
 		}
 
