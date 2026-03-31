@@ -15,8 +15,9 @@ type Config struct {
 	AllowedOrigins []string
 	Env            string
 	RateLimitLogin int
-	GeminiAPIKey   string
-	GeminiModel    string
+	GeminiAPIKey      string
+	GeminiModel       string
+	GeminiImageModel  string
 	R2AccountID    string
 	R2AccessKeyID  string
 	R2SecretKey    string
@@ -68,8 +69,9 @@ func Load() *Config {
 		AllowedOrigins: allowedOrigins,
 		Env:            env,
 		RateLimitLogin: rateLimit,
-		GeminiAPIKey:   os.Getenv("GEMINI_API_KEY"),
-		GeminiModel:    os.Getenv("GEMINI_MODEL"),
+		GeminiAPIKey:      os.Getenv("GEMINI_API_KEY"),
+		GeminiModel:       os.Getenv("GEMINI_MODEL"),
+		GeminiImageModel:  os.Getenv("GEMINI_IMAGE_MODEL"),
 		R2AccountID:    os.Getenv("R2_ACCOUNT_ID"),
 		R2AccessKeyID:  os.Getenv("R2_ACCESS_KEY_ID"),
 		R2SecretKey:    os.Getenv("R2_SECRET_ACCESS_KEY"),

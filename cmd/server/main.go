@@ -29,7 +29,7 @@ func main() {
 	// ── Initialize external services (optional, nil-safe) ───────────────────
 	var geminiSvc *services.GeminiService
 	if cfg.GeminiAPIKey != "" {
-		geminiSvc = services.NewGeminiService(cfg.GeminiAPIKey, cfg.GeminiModel, 30*time.Second)
+		geminiSvc = services.NewGeminiService(cfg.GeminiAPIKey, cfg.GeminiModel, cfg.GeminiImageModel, 30*time.Second)
 		log.Println("[SVC] Gemini service initialized")
 	}
 

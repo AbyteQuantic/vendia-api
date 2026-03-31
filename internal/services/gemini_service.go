@@ -13,19 +13,23 @@ import (
 )
 
 type GeminiService struct {
-	apiKey  string
-	model   string
-	timeout time.Duration
+	apiKey     string
+	model      string
+	imageModel string
+	timeout    time.Duration
 }
 
-func NewGeminiService(apiKey, model string, timeout time.Duration) *GeminiService {
+func NewGeminiService(apiKey, model, imageModel string, timeout time.Duration) *GeminiService {
 	if model == "" {
 		model = "gemini-2.0-flash"
+	}
+	if imageModel == "" {
+		imageModel = "gemini-2.5-flash-image"
 	}
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
-	return &GeminiService{apiKey: apiKey, model: model, timeout: timeout}
+	return &GeminiService{apiKey: apiKey, model: model, imageModel: imageModel, timeout: timeout}
 }
 
 type InvoiceProduct struct {
@@ -122,7 +126,7 @@ Instrucciones estrictas:
 	}
 
 	body, _ := json.Marshal(payload)
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", s.model, s.apiKey)
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", s.imageModel, s.apiKey)
 
 	reqCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
@@ -254,7 +258,7 @@ func (s *GeminiService) callImageGeneration(ctx context.Context, prompt string, 
 	}
 
 	body, _ := json.Marshal(payload)
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", s.model, s.apiKey)
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", s.imageModel, s.apiKey)
 
 	reqCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
