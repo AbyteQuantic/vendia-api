@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"time"
 	"vendia-backend/internal/config"
@@ -43,6 +44,9 @@ func main() {
 	}
 
 	offSvc := services.NewOpenFoodFactsService()
+	catalogCacheSvc := services.NewCatalogCacheService(db, offSvc)
+	catalogCacheSvc.StartDailyRefresh(context.Background())
+	log.Println("[SVC] Catalog cache service initialized (daily refresh active)")
 	itunesSvc := services.NewITunesService()
 
 	// ── Gin setup ───────────────────────────────────────────────────────────
@@ -108,7 +112,7 @@ func main() {
 		v1.PATCH("/products/:id", handlers.UpdateProduct(db))
 		v1.POST("/products/seed", middleware.DevOnly(cfg.Env), handlers.SeedProducts(db))
 		v1.GET("/products/lookup", handlers.LookupBarcode(offSvc))
-		v1.GET("/products/search-off", handlers.SearchProductsOFF(offSvc))
+		v1.GET("/products/search-off", handlers.SearchProductsOFF(catalogCacheSvc))
 		v1.GET("/products/pending-prices", handlers.PendingPrices(db))
 		v1.PATCH("/products/:id/price", handlers.SetProductPrice(db))
 		v1.POST("/products/:id/photo", handlers.UploadProductPhoto(db, r2Svc))

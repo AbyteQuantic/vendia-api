@@ -131,7 +131,7 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 	}
 }
 
-func SearchProductsOFF(offSvc *services.OpenFoodFactsService) gin.HandlerFunc {
+func SearchProductsOFF(cacheSvc *services.CatalogCacheService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		q := c.Query("q")
 		if q == "" {
@@ -139,7 +139,7 @@ func SearchProductsOFF(offSvc *services.OpenFoodFactsService) gin.HandlerFunc {
 			return
 		}
 
-		if offSvc == nil {
+		if cacheSvc == nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "servicio no disponible"})
 			return
 		}
@@ -147,7 +147,7 @@ func SearchProductsOFF(offSvc *services.OpenFoodFactsService) gin.HandlerFunc {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
 		defer cancel()
 
-		products, err := offSvc.SearchProducts(ctx, q, 5)
+		products, err := cacheSvc.SearchProducts(ctx, q, 5)
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{"data": []any{}})
 			return
