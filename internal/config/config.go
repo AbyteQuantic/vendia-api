@@ -20,8 +20,10 @@ type Config struct {
 	R2AccountID    string
 	R2AccessKeyID  string
 	R2SecretKey    string
-	R2PublicURL    string
-	RedisURL       string
+	R2PublicURL       string
+	RedisURL          string
+	SupabaseURL       string
+	SupabaseServiceKey string
 }
 
 func Load() *Config {
@@ -71,8 +73,10 @@ func Load() *Config {
 		R2AccountID:    os.Getenv("R2_ACCOUNT_ID"),
 		R2AccessKeyID:  os.Getenv("R2_ACCESS_KEY_ID"),
 		R2SecretKey:    os.Getenv("R2_SECRET_ACCESS_KEY"),
-		R2PublicURL:    os.Getenv("R2_PUBLIC_URL"),
-		RedisURL:       os.Getenv("REDIS_URL"),
+		R2PublicURL:       os.Getenv("R2_PUBLIC_URL"),
+		RedisURL:          os.Getenv("REDIS_URL"),
+		SupabaseURL:       os.Getenv("SUPABASE_URL"),
+		SupabaseServiceKey: os.Getenv("SUPABASE_SERVICE_KEY"),
 	}
 }
 

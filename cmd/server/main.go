@@ -33,12 +33,17 @@ func main() {
 		log.Println("[SVC] Gemini service initialized")
 	}
 
-	var r2Svc *services.R2Service
-	if cfg.R2AccountID != "" && cfg.R2AccessKeyID != "" && cfg.R2SecretKey != "" {
-		r2Svc, err = services.NewR2Service(cfg.R2AccountID, cfg.R2AccessKeyID, cfg.R2SecretKey, cfg.R2PublicURL)
+	// Storage: prefer Supabase Storage, fallback to R2
+	var storageSvc services.FileStorage
+	if cfg.SupabaseURL != "" && cfg.SupabaseServiceKey != "" {
+		storageSvc = services.NewStorageService(cfg.SupabaseURL, cfg.SupabaseServiceKey)
+		log.Println("[SVC] Supabase Storage service initialized")
+	} else if cfg.R2AccountID != "" && cfg.R2AccessKeyID != "" && cfg.R2SecretKey != "" {
+		r2, err := services.NewR2Service(cfg.R2AccountID, cfg.R2AccessKeyID, cfg.R2SecretKey, cfg.R2PublicURL)
 		if err != nil {
 			log.Printf("[SVC] warning: R2 init failed: %v", err)
 		} else {
+			storageSvc = r2
 			log.Println("[SVC] Cloudflare R2 service initialized")
 		}
 	}
@@ -115,8 +120,8 @@ func main() {
 		v1.GET("/products/search-off", handlers.SearchProductsOFF(catalogCacheSvc))
 		v1.GET("/products/pending-prices", handlers.PendingPrices(db))
 		v1.PATCH("/products/:id/price", handlers.SetProductPrice(db))
-		v1.POST("/products/:id/photo", handlers.UploadProductPhoto(db, r2Svc))
-		v1.POST("/products/:id/enhance", handlers.EnhanceProductPhoto(db, geminiSvc, r2Svc))
+		v1.POST("/products/:id/photo", handlers.UploadProductPhoto(db, storageSvc))
+		v1.POST("/products/:id/enhance", handlers.EnhanceProductPhoto(db, geminiSvc, storageSvc))
 
 		// Inventory IA
 		v1.POST("/inventory/scan-invoice", handlers.ScanInvoice(db, geminiSvc, offSvc))
@@ -194,8 +199,8 @@ func main() {
 		v1.GET("/payments/qr", handlers.GeneratePaymentQR(db))
 
 		// Logo IA
-		v1.POST("/tenant/generate-logo", handlers.GenerateLogo(db, geminiSvc, r2Svc))
-		v1.POST("/tenant/upload-logo", handlers.UploadLogo(db, r2Svc))
+		v1.POST("/tenant/generate-logo", handlers.GenerateLogo(db, geminiSvc, storageSvc))
+		v1.POST("/tenant/upload-logo", handlers.UploadLogo(db, storageSvc))
 
 		// Analytics / Reportes
 		v1.GET("/analytics/dashboard", handlers.AnalyticsDashboard(db))

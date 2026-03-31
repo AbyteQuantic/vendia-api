@@ -189,7 +189,7 @@ func LookupBarcode(offSvc *services.OpenFoodFactsService) gin.HandlerFunc {
 	}
 }
 
-func UploadProductPhoto(db *gorm.DB, r2Svc *services.R2Service) gin.HandlerFunc {
+func UploadProductPhoto(db *gorm.DB, storageSvc services.FileStorage) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
 		productUUID := c.Param("id")
@@ -219,7 +219,7 @@ func UploadProductPhoto(db *gorm.DB, r2Svc *services.R2Service) gin.HandlerFunc 
 			return
 		}
 
-		if r2Svc == nil {
+		if storageSvc == nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "servicio de almacenamiento no configurado"})
 			return
 		}
@@ -227,7 +227,7 @@ func UploadProductPhoto(db *gorm.DB, r2Svc *services.R2Service) gin.HandlerFunc 
 		key := fmt.Sprintf("products/%s/%s.webp", tenantID, productUUID)
 		mimeType := header.Header.Get("Content-Type")
 
-		photoURL, err := r2Svc.Upload(c.Request.Context(), "vendia-product-photos", key, data, mimeType)
+		photoURL, err := storageSvc.Upload(c.Request.Context(), "vendia-product-photos", key, data, mimeType)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al subir foto"})
 			return
@@ -239,7 +239,7 @@ func UploadProductPhoto(db *gorm.DB, r2Svc *services.R2Service) gin.HandlerFunc 
 	}
 }
 
-func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, r2Svc *services.R2Service) gin.HandlerFunc {
+func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
 		productUUID := c.Param("id")
@@ -256,7 +256,7 @@ func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, r2Svc *
 			return
 		}
 
-		if geminiSvc == nil || r2Svc == nil {
+		if geminiSvc == nil || storageSvc == nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "servicios de IA no configurados"})
 			return
 		}
@@ -316,7 +316,7 @@ func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, r2Svc *
 		}
 
 		key := fmt.Sprintf("products/%s/%s-enhanced.webp", tenantID, productUUID)
-		newURL, err := r2Svc.Upload(ctx, "vendia-product-photos", key, enhanced, "image/webp")
+		newURL, err := storageSvc.Upload(ctx, "vendia-product-photos", key, enhanced, "image/webp")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al guardar foto mejorada"})
 			return

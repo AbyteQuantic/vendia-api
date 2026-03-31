@@ -15,7 +15,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func GenerateLogo(db *gorm.DB, geminiSvc *services.GeminiService, r2Svc *services.R2Service) gin.HandlerFunc {
+func GenerateLogo(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
 
@@ -45,9 +45,9 @@ func GenerateLogo(db *gorm.DB, geminiSvc *services.GeminiService, r2Svc *service
 
 		var options []LogoOption
 		for i, logo := range logos {
-			if r2Svc != nil {
+			if storageSvc != nil {
 				key := fmt.Sprintf("logos/%s/option-%d-%s.webp", tenantID, i+1, uuid.NewString()[:8])
-				url, err := r2Svc.Upload(ctx, "vendia-logos", key, logo.ImageData, "image/webp")
+				url, err := storageSvc.Upload(ctx, "vendia-logos", key, logo.ImageData, "image/webp")
 				if err == nil {
 					options = append(options, LogoOption{URL: url})
 					continue
@@ -60,7 +60,7 @@ func GenerateLogo(db *gorm.DB, geminiSvc *services.GeminiService, r2Svc *service
 	}
 }
 
-func UploadLogo(db *gorm.DB, r2Svc *services.R2Service) gin.HandlerFunc {
+func UploadLogo(db *gorm.DB, storageSvc services.FileStorage) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
 
@@ -82,7 +82,7 @@ func UploadLogo(db *gorm.DB, r2Svc *services.R2Service) gin.HandlerFunc {
 			return
 		}
 
-		if r2Svc == nil {
+		if storageSvc == nil {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "servicio de almacenamiento no configurado"})
 			return
 		}
@@ -90,7 +90,7 @@ func UploadLogo(db *gorm.DB, r2Svc *services.R2Service) gin.HandlerFunc {
 		mimeType := header.Header.Get("Content-Type")
 		key := fmt.Sprintf("logos/%s/custom-%s.webp", tenantID, uuid.NewString()[:8])
 
-		logoURL, err := r2Svc.Upload(c.Request.Context(), "vendia-logos", key, data, mimeType)
+		logoURL, err := storageSvc.Upload(c.Request.Context(), "vendia-logos", key, data, mimeType)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al subir logo"})
 			return
