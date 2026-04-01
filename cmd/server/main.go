@@ -124,6 +124,7 @@ func main() {
 		v1.PATCH("/products/:id/price", handlers.SetProductPrice(db))
 		v1.POST("/products/:id/photo", handlers.UploadProductPhoto(db, storageSvc))
 		v1.POST("/products/:id/enhance", handlers.EnhanceProductPhoto(db, geminiSvc, storageSvc))
+		v1.POST("/products/:id/generate-image", handlers.GenerateProductImage(db, geminiSvc, storageSvc))
 
 		// Inventory IA
 		v1.POST("/inventory/scan-invoice", handlers.ScanInvoice(db, geminiSvc, offSvc))

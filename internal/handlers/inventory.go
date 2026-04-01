@@ -352,6 +352,53 @@ func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, storage
 	}
 }
 
+func GenerateProductImage(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		productUUID := c.Param("id")
+
+		var product models.Product
+		if err := db.Where("id = ? AND tenant_id = ?", productUUID, tenantID).
+			First(&product).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "producto no encontrado"})
+			return
+		}
+
+		if geminiSvc == nil || storageSvc == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "servicios de IA no configurados"})
+			return
+		}
+
+		productInfo := product.Name
+		if product.Presentation != "" {
+			productInfo += " " + product.Presentation
+		}
+		if product.Content != "" {
+			productInfo += " " + product.Content
+		}
+
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
+		defer cancel()
+
+		generated, err := geminiSvc.GenerateProductImage(ctx, productInfo)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al generar imagen: %v", err)})
+			return
+		}
+
+		key := fmt.Sprintf("products/%s/%s-generated.png", tenantID, productUUID)
+		newURL, err := storageSvc.Upload(ctx, "product-photos", key, generated, "image/png")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al guardar imagen: %v", err)})
+			return
+		}
+
+		db.Model(&product).Updates(map[string]any{"photo_url": newURL, "image_url": newURL})
+
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{"photo_url": newURL}})
+	}
+}
+
 func PendingPrices(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)

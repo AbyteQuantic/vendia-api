@@ -182,6 +182,81 @@ Instrucciones estrictas:
 	return nil, fmt.Errorf("no image returned from Gemini (candidates=%d)", len(geminiResp.Candidates))
 }
 
+// GenerateProductImage creates a product image from just a text description (no source photo needed).
+func (s *GeminiService) GenerateProductImage(ctx context.Context, productInfo string) ([]byte, error) {
+	prompt := fmt.Sprintf(`Genera una foto profesional de e-commerce del siguiente producto: %s
+
+Instrucciones estrictas:
+- Fondo BLANCO puro (#FFFFFF), limpio, sin sombras de fondo.
+- Mostrar el producto completo, centrado, sin recortar.
+- Iluminación suave y uniforme tipo estudio fotográfico.
+- Colores fieles al producto real, nítidos y vibrantes.
+- Sin texto, logos adicionales, ni marcas de agua.
+- Estilo Amazon/MercadoLibre: producto aislado sobre fondo blanco.
+- La imagen debe ser digna de un catálogo de e-commerce profesional.
+- El producto debe verse realista, como una foto real del producto.`, productInfo)
+
+	payload := map[string]any{
+		"contents": []map[string]any{
+			{
+				"parts": []map[string]any{
+					{"text": prompt},
+				},
+			},
+		},
+		"generationConfig": map[string]any{
+			"responseModalities": []string{"TEXT", "IMAGE"},
+		},
+	}
+
+	body, _ := json.Marshal(payload)
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", s.imageModel, s.apiKey)
+
+	reqCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+
+	req, _ := http.NewRequestWithContext(reqCtx, "POST", url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("gemini generate image request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read generate image response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("gemini API returned %d: %s", resp.StatusCode, string(respBody[:min(len(respBody), 200)]))
+	}
+
+	var geminiResp geminiResponse
+	if err := json.Unmarshal(respBody, &geminiResp); err != nil {
+		return nil, fmt.Errorf("failed to parse generate image response: %w", err)
+	}
+
+	if geminiResp.Error != nil {
+		return nil, fmt.Errorf("gemini error %d: %s", geminiResp.Error.Code, geminiResp.Error.Message)
+	}
+
+	for _, candidate := range geminiResp.Candidates {
+		for _, part := range candidate.Content.Parts {
+			if part.InlineData.Data != "" {
+				decoded, err := base64.StdEncoding.DecodeString(part.InlineData.Data)
+				if err != nil {
+					return nil, fmt.Errorf("failed to decode generated image: %w", err)
+				}
+				return decoded, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("no image returned from Gemini for product generation")
+}
+
 func (s *GeminiService) callWithImage(ctx context.Context, imageData []byte, mimeType, prompt string) (string, error) {
 	b64 := base64.StdEncoding.EncodeToString(imageData)
 
