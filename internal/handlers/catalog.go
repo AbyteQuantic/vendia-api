@@ -17,8 +17,8 @@ func SearchCatalog(catalogSvc *services.CatalogService, cacheSvc *services.Catal
 
 		limit := 10
 
-		// Search catalog (user-contributed + OFF)
-		results, err := catalogSvc.SearchCatalog(c.Request.Context(), q, limit)
+		// Search: local premium first, OFF fallback if < 3 results
+		results, err := catalogSvc.SearchCatalogWithFallback(c.Request.Context(), q, limit, cacheSvc)
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{"data": []any{}})
 			return

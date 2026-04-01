@@ -15,6 +15,7 @@ type CatalogProduct struct {
 	Presentation   string     `json:"presentation,omitempty"`
 	Content        string     `json:"content,omitempty"`
 	Category       string     `json:"category,omitempty"`
+	IsAIEnhanced   bool       `gorm:"default:false" json:"is_ai_enhanced"`
 	Source         string     `gorm:"default:'off'" json:"source"`
 	FetchedAt      *time.Time `gorm:"index" json:"-"`
 	CreatedAt      time.Time  `json:"-"`

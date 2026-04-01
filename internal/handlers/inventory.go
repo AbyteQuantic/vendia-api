@@ -346,7 +346,7 @@ func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, storage
 			return
 		}
 
-		db.Model(&product).Update("photo_url", newURL)
+		db.Model(&product).Updates(map[string]any{"photo_url": newURL, "is_ai_enhanced": true})
 
 		// Catalog integration
 		var catalogImageID string
@@ -413,7 +413,7 @@ func GenerateProductImage(db *gorm.DB, geminiSvc *services.GeminiService, storag
 			return
 		}
 
-		db.Model(&product).Updates(map[string]any{"photo_url": newURL, "image_url": newURL})
+		db.Model(&product).Updates(map[string]any{"photo_url": newURL, "image_url": newURL, "is_ai_enhanced": true})
 
 		// Catalog integration
 		var catalogImageID string

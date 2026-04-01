@@ -53,6 +53,7 @@ func (s *CatalogService) FindOrCreateCatalogProduct(barcode, name, brand, presen
 		Presentation:   presentation,
 		Content:        content,
 		Category:       category,
+		IsAIEnhanced:   true,
 		Source:         "user",
 	}
 	if err := s.db.Create(&cp).Error; err != nil {
@@ -117,14 +118,22 @@ func (s *CatalogService) GetAcceptedImages(catalogProductID string) ([]models.Ca
 	return images, err
 }
 
-// SearchCatalog searches catalog_products, prioritizing user-contributed entries.
+// SearchCatalog searches with quality hierarchy:
+// 1. AI-enhanced products with complete data (premium) — first
+// 2. User-contributed products — second
+// 3. OFF-cached products — third
+// If local results < 3, falls back to OFF API via cacheSvc.
 func (s *CatalogService) SearchCatalog(ctx context.Context, query string, limit int) ([]CatalogSearchResult, error) {
 	q := "%" + strings.ToLower(query) + "%"
 
 	var products []models.CatalogProduct
 	err := s.db.WithContext(ctx).
 		Where("LOWER(name) LIKE ? OR LOWER(brand) LIKE ? OR LOWER(barcode) LIKE ?", q, q, q).
-		Order("CASE WHEN source = 'user' THEN 0 ELSE 1 END, updated_at DESC").
+		Order(`CASE
+			WHEN source = 'user' AND is_ai_enhanced = true AND presentation != '' AND content != '' THEN 0
+			WHEN source = 'user' THEN 1
+			ELSE 2
+		END, updated_at DESC`).
 		Limit(limit).
 		Find(&products).Error
 	if err != nil {
@@ -137,12 +146,57 @@ func (s *CatalogService) SearchCatalog(ctx context.Context, query string, limit 
 		if p.Source == "user" {
 			images, _ := s.GetAcceptedImages(p.ID)
 			r.Images = images
-			// Use first accepted image as main image_url if not set
 			if r.ImageURL == "" && len(images) > 0 {
 				r.ImageURL = images[0].ImageURL
 			}
 		}
 		results = append(results, r)
+	}
+
+	return results, nil
+}
+
+// SearchCatalogWithFallback searches local first, then OFF if not enough results.
+func (s *CatalogService) SearchCatalogWithFallback(ctx context.Context, query string, limit int, cacheSvc *CatalogCacheService) ([]CatalogSearchResult, error) {
+	results, err := s.SearchCatalog(ctx, query, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	// If we have enough premium results, return them
+	if len(results) >= 3 {
+		return results, nil
+	}
+
+	// Fallback: fetch from OFF via cache service
+	if cacheSvc != nil {
+		offProducts, err := cacheSvc.SearchProducts(ctx, query, limit-len(results))
+		if err == nil {
+			// Deduplicate: don't add OFF results that match existing local names
+			seen := make(map[string]bool)
+			for _, r := range results {
+				seen[strings.ToLower(r.Name)] = true
+			}
+			for _, op := range offProducts {
+				if seen[strings.ToLower(op.Name)] {
+					continue
+				}
+				seen[strings.ToLower(op.Name)] = true
+				results = append(results, CatalogSearchResult{
+					CatalogProduct: models.CatalogProduct{
+						Name:     op.Name,
+						Brand:    op.Brand,
+						ImageURL: op.ImageURL,
+						Barcode:  op.Barcode,
+						Category: op.Category,
+						Source:   "off",
+					},
+				})
+				if len(results) >= limit {
+					break
+				}
+			}
+		}
 	}
 
 	return results, nil
