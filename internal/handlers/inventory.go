@@ -263,7 +263,7 @@ func UploadProductPhoto(db *gorm.DB, storageSvc services.FileStorage) gin.Handle
 	}
 }
 
-func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage) gin.HandlerFunc {
+func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage, catalogSvc *services.CatalogService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
 		productUUID := c.Param("id")
@@ -348,11 +348,31 @@ func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, storage
 
 		db.Model(&product).Update("photo_url", newURL)
 
-		c.JSON(http.StatusOK, gin.H{"data": gin.H{"photo_url": newURL}})
+		// Catalog integration
+		var catalogImageID string
+		if catalogSvc != nil {
+			key := fmt.Sprintf("products/%s/%s-enhanced.png", tenantID, productUUID)
+			cp, err := catalogSvc.FindOrCreateCatalogProduct(
+				product.Barcode, product.Name, "", product.Presentation, product.Content, "")
+			if err == nil {
+				count, _ := catalogSvc.CountAcceptedImages(cp.ID)
+				if count < 3 {
+					img, err := catalogSvc.CreatePendingImage(cp.ID, tenantID, newURL, key)
+					if err == nil {
+						catalogImageID = img.ID
+					}
+				}
+			}
+		}
+
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{
+			"photo_url":        newURL,
+			"catalog_image_id": catalogImageID,
+		}})
 	}
 }
 
-func GenerateProductImage(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage) gin.HandlerFunc {
+func GenerateProductImage(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage, catalogSvc *services.CatalogService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
 		productUUID := c.Param("id")
@@ -395,7 +415,26 @@ func GenerateProductImage(db *gorm.DB, geminiSvc *services.GeminiService, storag
 
 		db.Model(&product).Updates(map[string]any{"photo_url": newURL, "image_url": newURL})
 
-		c.JSON(http.StatusOK, gin.H{"data": gin.H{"photo_url": newURL}})
+		// Catalog integration
+		var catalogImageID string
+		if catalogSvc != nil {
+			cp, err := catalogSvc.FindOrCreateCatalogProduct(
+				product.Barcode, product.Name, "", product.Presentation, product.Content, "")
+			if err == nil {
+				count, _ := catalogSvc.CountAcceptedImages(cp.ID)
+				if count < 3 {
+					img, err := catalogSvc.CreatePendingImage(cp.ID, tenantID, newURL, key)
+					if err == nil {
+						catalogImageID = img.ID
+					}
+				}
+			}
+		}
+
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{
+			"photo_url":        newURL,
+			"catalog_image_id": catalogImageID,
+		}})
 	}
 }
 

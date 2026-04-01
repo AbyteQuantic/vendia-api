@@ -54,6 +54,20 @@ func (r *R2Service) Upload(ctx context.Context, bucket, key string, data []byte,
 	return url, nil
 }
 
+func (r *R2Service) Delete(ctx context.Context, bucket, key string) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	_, err := r.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return fmt.Errorf("R2 delete failed: %w", err)
+	}
+	return nil
+}
+
 func (r *R2Service) Download(ctx context.Context, bucket, key string) ([]byte, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()

@@ -56,6 +56,29 @@ func (s *StorageService) Upload(ctx context.Context, bucket, key string, data []
 	return publicURL, nil
 }
 
+// Delete removes a file from Supabase Storage.
+func (s *StorageService) Delete(ctx context.Context, bucket, key string) error {
+	url := fmt.Sprintf("%s/storage/v1/object/%s/%s", s.supabaseURL, bucket, key)
+
+	req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
+	if err != nil {
+		return fmt.Errorf("storage delete: failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+s.serviceKey)
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("storage delete failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("storage delete returned %d: %s", resp.StatusCode, string(body[:min(len(body), 200)]))
+	}
+	return nil
+}
+
 // Download downloads a file from Supabase Storage.
 func (s *StorageService) Download(ctx context.Context, bucket, key string) ([]byte, string, error) {
 	url := fmt.Sprintf("%s/storage/v1/object/%s/%s", s.supabaseURL, bucket, key)

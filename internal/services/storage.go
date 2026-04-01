@@ -6,4 +6,5 @@ import "context"
 type FileStorage interface {
 	Upload(ctx context.Context, bucket, key string, data []byte, contentType string) (string, error)
 	Download(ctx context.Context, bucket, key string) ([]byte, string, error)
+	Delete(ctx context.Context, bucket, key string) error
 }

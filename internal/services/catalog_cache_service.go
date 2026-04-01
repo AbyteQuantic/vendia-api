@@ -94,7 +94,7 @@ func (s *CatalogCacheService) cacheProducts(products []OFFProduct) {
 				ImageURL:  p.ImageURL,
 				Barcode:   p.Barcode,
 				Category:  p.Category,
-				FetchedAt: now,
+				FetchedAt: &now,
 			})
 		}
 	}

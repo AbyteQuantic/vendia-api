@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
+	"vendia-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -32,7 +33,7 @@ func ListProducts(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-func CreateProduct(db *gorm.DB) gin.HandlerFunc {
+func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.HandlerFunc {
 	type Request struct {
 		ID                string  `json:"id"`
 		Name              string  `json:"name"     binding:"required"`
@@ -42,6 +43,7 @@ func CreateProduct(db *gorm.DB) gin.HandlerFunc {
 		ImageURL          string  `json:"image_url"`
 		RequiresContainer bool    `json:"requires_container"`
 		ContainerPrice    int64   `json:"container_price"`
+		CatalogImageID    string  `json:"catalog_image_id"`
 		Presentation      string  `json:"presentation"`
 		Content           string  `json:"content"`
 	}
@@ -82,15 +84,21 @@ func CreateProduct(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// Accept catalog image if provided
+		if req.CatalogImageID != "" && catalogSvc != nil {
+			catalogSvc.AcceptImage(req.CatalogImageID)
+		}
+
 		c.JSON(http.StatusCreated, gin.H{"data": product})
 	}
 }
 
-func UpdateProduct(db *gorm.DB) gin.HandlerFunc {
+func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.HandlerFunc {
 	type Request struct {
 		Name              *string  `json:"name"`
 		Price             *float64 `json:"price"`
 		Stock             *int     `json:"stock"`
+		CatalogImageID    *string  `json:"catalog_image_id"`
 		IsAvailable       *bool    `json:"is_available"`
 		RequiresContainer *bool    `json:"requires_container"`
 		ContainerPrice    *int64   `json:"container_price"`
@@ -148,6 +156,11 @@ func UpdateProduct(db *gorm.DB) gin.HandlerFunc {
 		if err := db.Model(&product).Updates(updates).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al actualizar producto"})
 			return
+		}
+
+		// Accept catalog image if provided
+		if req.CatalogImageID != nil && *req.CatalogImageID != "" && catalogSvc != nil {
+			catalogSvc.AcceptImage(*req.CatalogImageID)
 		}
 
 		c.JSON(http.StatusOK, gin.H{"data": product})

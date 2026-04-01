@@ -52,6 +52,10 @@ func main() {
 	catalogCacheSvc := services.NewCatalogCacheService(db, offSvc)
 	catalogCacheSvc.StartDailyRefresh(context.Background())
 	log.Println("[SVC] Catalog cache service initialized (daily refresh active)")
+
+	catalogSvc := services.NewCatalogService(db, storageSvc)
+	catalogSvc.StartCleanupTicker(context.Background())
+
 	itunesSvc := services.NewITunesService()
 
 	// ── Gin setup ───────────────────────────────────────────────────────────
@@ -113,8 +117,8 @@ func main() {
 
 		// Products
 		v1.GET("/products", handlers.ListProducts(db))
-		v1.POST("/products", handlers.CreateProduct(db))
-		v1.PATCH("/products/:id", handlers.UpdateProduct(db))
+		v1.POST("/products", handlers.CreateProduct(db, catalogSvc))
+		v1.PATCH("/products/:id", handlers.UpdateProduct(db, catalogSvc))
 		v1.DELETE("/products/:id", handlers.DeleteProduct(db))
 		v1.POST("/products/seed", middleware.DevOnly(cfg.Env), handlers.SeedProducts(db))
 		v1.GET("/products/lookup", handlers.LookupBarcode(offSvc))
@@ -123,8 +127,13 @@ func main() {
 		v1.GET("/products/pending-prices", handlers.PendingPrices(db))
 		v1.PATCH("/products/:id/price", handlers.SetProductPrice(db))
 		v1.POST("/products/:id/photo", handlers.UploadProductPhoto(db, storageSvc))
-		v1.POST("/products/:id/enhance", handlers.EnhanceProductPhoto(db, geminiSvc, storageSvc))
-		v1.POST("/products/:id/generate-image", handlers.GenerateProductImage(db, geminiSvc, storageSvc))
+		v1.POST("/products/:id/enhance", handlers.EnhanceProductPhoto(db, geminiSvc, storageSvc, catalogSvc))
+		v1.POST("/products/:id/generate-image", handlers.GenerateProductImage(db, geminiSvc, storageSvc, catalogSvc))
+
+		// Catalog
+		v1.GET("/catalog/search", handlers.SearchCatalog(catalogSvc, catalogCacheSvc))
+		v1.GET("/catalog/:id/images", handlers.GetCatalogImages(catalogSvc))
+		v1.POST("/catalog/images/:image_id/accept", handlers.AcceptCatalogImage(catalogSvc))
 
 		// Inventory IA
 		v1.POST("/inventory/scan-invoice", handlers.ScanInvoice(db, geminiSvc, offSvc))
