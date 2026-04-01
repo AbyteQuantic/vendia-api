@@ -33,7 +33,12 @@ func GenerateLogo(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc ser
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
 		defer cancel()
 
-		logos, err := geminiSvc.GenerateLogo(ctx, tenant.BusinessName, string(tenant.BusinessType))
+		// Use query param "types" if provided (comma-separated), fallback to tenant's type
+		businessTypeStr := c.Query("types")
+		if businessTypeStr == "" {
+			businessTypeStr = string(tenant.BusinessType)
+		}
+		logos, err := geminiSvc.GenerateLogo(ctx, tenant.BusinessName, businessTypeStr)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al generar logos: %v", err)})
 			return
