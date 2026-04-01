@@ -154,6 +154,27 @@ func UpdateProduct(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+func DeleteProduct(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		productID := c.Param("id")
+
+		var product models.Product
+		if err := db.Where("id = ? AND tenant_id = ?", productID, tenantID).
+			First(&product).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "producto no encontrado"})
+			return
+		}
+
+		if err := db.Delete(&product).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al eliminar producto"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "producto eliminado"})
+	}
+}
+
 func SeedProducts(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)

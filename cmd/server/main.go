@@ -115,6 +115,7 @@ func main() {
 		v1.GET("/products", handlers.ListProducts(db))
 		v1.POST("/products", handlers.CreateProduct(db))
 		v1.PATCH("/products/:id", handlers.UpdateProduct(db))
+		v1.DELETE("/products/:id", handlers.DeleteProduct(db))
 		v1.POST("/products/seed", middleware.DevOnly(cfg.Env), handlers.SeedProducts(db))
 		v1.GET("/products/lookup", handlers.LookupBarcode(offSvc))
 		v1.GET("/products/search-off", handlers.SearchProductsOFF(catalogCacheSvc))
