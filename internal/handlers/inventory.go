@@ -54,7 +54,18 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 
 		result, err := geminiSvc.ScanInvoice(ctx, data, mimeType)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al procesar factura: %v", err)})
+			// Return 422 for AI/parsing errors (not a server crash)
+			c.JSON(http.StatusUnprocessableEntity, gin.H{
+				"error": "No se pudieron leer los productos de la factura. Intente tomar la foto con mejor iluminación.",
+				"detail": err.Error(),
+			})
+			return
+		}
+
+		if len(result.Products) == 0 {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{
+				"error": "No se encontraron productos legibles en la factura. Intente con mejor iluminación o más cerca del texto.",
+			})
 			return
 		}
 

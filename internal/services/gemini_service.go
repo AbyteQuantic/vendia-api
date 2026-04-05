@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -62,18 +63,51 @@ REGLAS CRÍTICAS (violarlas es inaceptable):
 Retorna JSON estricto sin markdown:
 {"provider":"nombre del proveedor","products":[{"name":"texto exacto de factura","quantity":0,"unit_price":0,"total_price":0,"barcode":"","confidence":0.95}],"invoice_total":0}
 
-Si la imagen NO es una factura o no contiene productos, retorna: {"provider":"","products":[],"invoice_total":0}`
+Si la imagen NO es una factura o no contiene productos, retorna: {"provider":"","products":[],"invoice_total":0}
+
+RETURN ONLY RAW JSON. DO NOT WRAP THE RESPONSE IN MARKDOWN BLOCK QUOTES. DO NOT ADD ANY EXPLANATIONS, COMMENTS OR TEXT OUTSIDE THE JSON.`
 
 	text, err := s.callWithImageLowTemp(ctx, imageData, mimeType, prompt)
 	if err != nil {
 		return nil, err
 	}
 
+	// Log raw response for debugging
+	log.Printf("[OCR] Raw AI response (%d chars): %.500s", len(text), text)
+
+	// Strip markdown artifacts that break json.Unmarshal
+	text = stripMarkdownJSON(text)
+
+	if text == "" {
+		return &InvoiceScanResult{Provider: "", Products: nil, InvoiceTotal: 0}, nil
+	}
+
 	var result InvoiceScanResult
 	if err := json.Unmarshal([]byte(text), &result); err != nil {
-		return nil, fmt.Errorf("failed to parse Gemini invoice response: %w (raw: %s)", err, text)
+		log.Printf("[OCR] JSON parse error: %v | cleaned text: %.300s", err, text)
+		return nil, fmt.Errorf("no se pudo interpretar la respuesta de la IA: %w", err)
 	}
 	return &result, nil
+}
+
+// stripMarkdownJSON removes markdown code fences and stray text around JSON.
+func stripMarkdownJSON(s string) string {
+	s = strings.TrimSpace(s)
+	// Remove ```json ... ``` or ``` ... ```
+	s = strings.TrimPrefix(s, "```json")
+	s = strings.TrimPrefix(s, "```JSON")
+	s = strings.TrimPrefix(s, "```")
+	s = strings.TrimSuffix(s, "```")
+	s = strings.TrimSpace(s)
+	// If there's still stray text before the first '{', strip it
+	if idx := strings.Index(s, "{"); idx > 0 {
+		s = s[idx:]
+	}
+	// If there's stray text after the last '}', strip it
+	if idx := strings.LastIndex(s, "}"); idx >= 0 && idx < len(s)-1 {
+		s = s[:idx+1]
+	}
+	return strings.TrimSpace(s)
 }
 
 type LogoResult struct {
@@ -318,22 +352,33 @@ func (s *GeminiService) callWithImageLowTemp(ctx context.Context, imageData []by
 		return "", fmt.Errorf("failed to read gemini response: %w", err)
 	}
 
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[GEMINI-OCR] API HTTP %d: %.300s", resp.StatusCode, string(respBody))
+		return "", fmt.Errorf("gemini API returned HTTP %d", resp.StatusCode)
+	}
+
 	var geminiResp geminiResponse
 	if err := json.Unmarshal(respBody, &geminiResp); err != nil {
+		log.Printf("[GEMINI-OCR] Parse error: %.500s", string(respBody))
 		return "", fmt.Errorf("failed to parse gemini response: %w", err)
 	}
 
-	if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {
-		return "", fmt.Errorf("empty gemini response")
+	if geminiResp.Error != nil {
+		return "", fmt.Errorf("gemini error %d: %s", geminiResp.Error.Code, geminiResp.Error.Message)
+	}
+
+	if len(geminiResp.Candidates) == 0 {
+		log.Printf("[GEMINI-OCR] No candidates: %.500s", string(respBody))
+		return "", fmt.Errorf("la IA no generó respuesta. Intente con otra foto")
+	}
+
+	if len(geminiResp.Candidates[0].Content.Parts) == 0 {
+		log.Printf("[GEMINI-OCR] No parts: %.500s", string(respBody))
+		return "", fmt.Errorf("respuesta vacía de la IA")
 	}
 
 	text := geminiResp.Candidates[0].Content.Parts[0].Text
-	text = strings.TrimPrefix(text, "```json")
-	text = strings.TrimPrefix(text, "```")
-	text = strings.TrimSuffix(text, "```")
-	text = strings.TrimSpace(text)
-
-	return text, nil
+	return strings.TrimSpace(text), nil
 }
 
 func (s *GeminiService) callWithImage(ctx context.Context, imageData []byte, mimeType, prompt string) (string, error) {
