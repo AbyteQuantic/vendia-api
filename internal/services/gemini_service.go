@@ -93,16 +93,22 @@ func (s *GeminiService) EnhancePhoto(ctx context.Context, imageData []byte, mime
 		description = fmt.Sprintf("\nEl producto es: %s.", productInfo)
 	}
 
-	prompt := fmt.Sprintf(`Genera una foto profesional de e-commerce de este producto.%s
+	prompt := fmt.Sprintf(`Eres un EDITOR FOTOGRÁFICO profesional, NO un artista creativo.%s
 
-Instrucciones estrictas:
-- Fondo BLANCO puro (#FFFFFF), limpio, sin sombras de fondo.
-- Mostrar el producto completo, centrado, sin recortar.
-- Iluminación suave y uniforme tipo estudio fotográfico.
-- Colores fieles al producto real, nítidos y vibrantes.
-- Sin texto, logos adicionales, ni marcas de agua.
-- Estilo Amazon/MercadoLibre: producto aislado sobre fondo blanco.
-- La imagen debe ser digna de un catálogo de e-commerce profesional.`, description)
+TAREA: Toma esta foto real de un producto y edítala para catálogo de e-commerce.
+
+REGLAS ESTRICTAS (PROHIBIDO violarlas):
+1. PROHIBIDO cambiar el color original del producto. Si es rojo, DEBE seguir siendo rojo. Si es verde, DEBE seguir siendo verde. Los colores originales son SAGRADOS.
+2. PROHIBIDO alterar las letras, marca, logo o forma del envase/empaque.
+3. PROHIBIDO inventar detalles que no existan en la foto original.
+4. Tu ÚNICA función es:
+   a) Eliminar el fondo y reemplazarlo por BLANCO PURO sólido (#FFFFFF).
+   b) Centrar el producto completo en el encuadre.
+   c) Aplicar iluminación suave y uniforme tipo estudio fotográfico.
+5. Si el producto está recortado en los bordes, autocompleta el envase respetando la geometría y textura ORIGINAL.
+6. Sin texto adicional, sin logos extras, sin marcas de agua.
+
+Resultado esperado: Fotografía tipo catálogo Amazon — producto REAL sobre fondo blanco puro.`, description)
 
 	b64 := base64.StdEncoding.EncodeToString(imageData)
 
@@ -122,6 +128,7 @@ Instrucciones estrictas:
 		},
 		"generationConfig": map[string]any{
 			"responseModalities": []string{"TEXT", "IMAGE"},
+			"temperature":        0.2, // Low creativity — preserve original colors
 		},
 	}
 
