@@ -21,16 +21,107 @@ type GeminiService struct {
 }
 
 func NewGeminiService(apiKey, model, imageModel string, timeout time.Duration) *GeminiService {
-	if model == "" {
-		model = "gemini-1.5-flash-latest"
+	if timeout == 0 {
+		timeout = 30 * time.Second
+	}
+
+	svc := &GeminiService{apiKey: apiKey, model: model, imageModel: imageModel, timeout: timeout}
+
+	// Discover models dynamically if not explicitly configured
+	if model == "" || imageModel == "" {
+		textModel, imgModel := svc.discoverModels()
+		if model == "" {
+			svc.model = textModel
+		}
+		if imageModel == "" {
+			svc.imageModel = imgModel
+		}
+	}
+
+	log.Printf("[GEMINI] Using models — text/OCR: %s | image: %s", svc.model, svc.imageModel)
+	return svc
+}
+
+// discoverModels queries the Google AI API to find available models dynamically.
+// Returns (textModel, imageModel) picking the best flash variants available.
+func (s *GeminiService) discoverModels() (string, string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models?key=%s", s.apiKey)
+	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("[GEMINI] Failed to list models: %v — using hardcoded fallbacks", err)
+		return "gemini-1.5-flash-latest", "gemini-2.0-flash-exp"
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[GEMINI] ListModels HTTP %d: %.200s — using fallbacks", resp.StatusCode, string(body))
+		return "gemini-1.5-flash-latest", "gemini-2.0-flash-exp"
+	}
+
+	var listResp struct {
+		Models []struct {
+			Name                       string   `json:"name"`
+			SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(body, &listResp); err != nil {
+		log.Printf("[GEMINI] Failed to parse models list: %v", err)
+		return "gemini-1.5-flash-latest", "gemini-2.0-flash-exp"
+	}
+
+	var textModel, imageModel string
+
+	// Score models: prefer flash, then pro; prefer newer versions
+	for _, m := range listResp.Models {
+		name := strings.TrimPrefix(m.Name, "models/")
+		supportsGenerate := false
+		for _, method := range m.SupportedGenerationMethods {
+			if method == "generateContent" {
+				supportsGenerate = true
+				break
+			}
+		}
+		if !supportsGenerate {
+			continue
+		}
+
+		isFlash := strings.Contains(name, "flash")
+		isGemini := strings.Contains(name, "gemini")
+
+		if !isGemini {
+			continue
+		}
+
+		// Text/OCR model: prefer flash with multimodal capability
+		if isFlash && !strings.Contains(name, "image") && !strings.Contains(name, "thinking") {
+			if textModel == "" || strings.Compare(name, textModel) > 0 {
+				textModel = name
+			}
+		}
+
+		// Image generation model: prefer flash-image or flash-exp
+		if strings.Contains(name, "image") || strings.Contains(name, "flash-exp") {
+			if imageModel == "" || strings.Compare(name, imageModel) > 0 {
+				imageModel = name
+			}
+		}
+	}
+
+	if textModel == "" {
+		textModel = "gemini-1.5-flash-latest"
 	}
 	if imageModel == "" {
 		imageModel = "gemini-2.0-flash-exp"
 	}
-	if timeout == 0 {
-		timeout = 30 * time.Second
-	}
-	return &GeminiService{apiKey: apiKey, model: model, imageModel: imageModel, timeout: timeout}
+
+	log.Printf("[GEMINI] Discovered %d models. Selected text=%s, image=%s", len(listResp.Models), textModel, imageModel)
+	return textModel, imageModel
 }
 
 type InvoiceProduct struct {
@@ -334,42 +425,29 @@ func (s *GeminiService) callWithImageLowTemp(ctx context.Context, imageData []by
 
 	body, _ := json.Marshal(payload)
 
-	// Try primary model, fallback to alternatives on 404
-	models := []string{s.model, "gemini-1.5-flash-latest", "gemini-1.5-pro-latest", "gemini-pro-vision"}
-	var respBody []byte
-	var lastStatus int
+	// Use the dynamically discovered model (set at init time)
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", s.model, s.apiKey)
 
-	for _, modelName := range models {
-		url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", modelName, s.apiKey)
+	reqCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
 
-		reqCtx, cancel := context.WithTimeout(ctx, s.timeout)
-		req, _ := http.NewRequestWithContext(reqCtx, "POST", url, bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
+	req, _ := http.NewRequestWithContext(reqCtx, "POST", url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 
-		resp, err := http.DefaultClient.Do(req)
-		cancel()
-		if err != nil {
-			return "", fmt.Errorf("gemini request failed: %w", err)
-		}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("gemini request failed: %w", err)
+	}
+	defer resp.Body.Close()
 
-		respBody, err = io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			return "", fmt.Errorf("failed to read gemini response: %w", err)
-		}
-
-		lastStatus = resp.StatusCode
-		if resp.StatusCode == http.StatusOK {
-			log.Printf("[GEMINI-OCR] Success with model: %s", modelName)
-			break
-		}
-
-		log.Printf("[GEMINI-OCR] Model %s returned HTTP %d, trying next...", modelName, resp.StatusCode)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read gemini response: %w", err)
 	}
 
-	if lastStatus != http.StatusOK {
-		log.Printf("[GEMINI-OCR] All models failed. Last HTTP %d: %.300s", lastStatus, string(respBody))
-		return "", fmt.Errorf("gemini API: ningún modelo disponible (HTTP %d)", lastStatus)
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[GEMINI-OCR] Model %s returned HTTP %d: %.300s", s.model, resp.StatusCode, string(respBody))
+		return "", fmt.Errorf("gemini API returned HTTP %d for model %s", resp.StatusCode, s.model)
 	}
 
 	var geminiResp geminiResponse
