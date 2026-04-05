@@ -22,10 +22,10 @@ type GeminiService struct {
 
 func NewGeminiService(apiKey, model, imageModel string, timeout time.Duration) *GeminiService {
 	if model == "" {
-		model = "gemini-1.5-flash"
+		model = "gemini-1.5-flash-latest"
 	}
 	if imageModel == "" {
-		imageModel = "gemini-2.5-flash-image"
+		imageModel = "gemini-2.0-flash-exp"
 	}
 	if timeout == 0 {
 		timeout = 30 * time.Second
@@ -333,28 +333,43 @@ func (s *GeminiService) callWithImageLowTemp(ctx context.Context, imageData []by
 	}
 
 	body, _ := json.Marshal(payload)
-	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", s.model, s.apiKey)
 
-	reqCtx, cancel := context.WithTimeout(ctx, s.timeout)
-	defer cancel()
+	// Try primary model, fallback to alternatives on 404
+	models := []string{s.model, "gemini-1.5-flash-latest", "gemini-1.5-pro-latest", "gemini-pro-vision"}
+	var respBody []byte
+	var lastStatus int
 
-	req, _ := http.NewRequestWithContext(reqCtx, "POST", url, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
+	for _, modelName := range models {
+		url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", modelName, s.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("gemini request failed: %w", err)
+		reqCtx, cancel := context.WithTimeout(ctx, s.timeout)
+		req, _ := http.NewRequestWithContext(reqCtx, "POST", url, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		cancel()
+		if err != nil {
+			return "", fmt.Errorf("gemini request failed: %w", err)
+		}
+
+		respBody, err = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return "", fmt.Errorf("failed to read gemini response: %w", err)
+		}
+
+		lastStatus = resp.StatusCode
+		if resp.StatusCode == http.StatusOK {
+			log.Printf("[GEMINI-OCR] Success with model: %s", modelName)
+			break
+		}
+
+		log.Printf("[GEMINI-OCR] Model %s returned HTTP %d, trying next...", modelName, resp.StatusCode)
 	}
-	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read gemini response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("[GEMINI-OCR] API HTTP %d: %.300s", resp.StatusCode, string(respBody))
-		return "", fmt.Errorf("gemini API returned HTTP %d", resp.StatusCode)
+	if lastStatus != http.StatusOK {
+		log.Printf("[GEMINI-OCR] All models failed. Last HTTP %d: %.300s", lastStatus, string(respBody))
+		return "", fmt.Errorf("gemini API: ningún modelo disponible (HTTP %d)", lastStatus)
 	}
 
 	var geminiResp geminiResponse
