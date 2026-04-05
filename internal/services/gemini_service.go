@@ -48,13 +48,23 @@ type InvoiceScanResult struct {
 }
 
 func (s *GeminiService) ScanInvoice(ctx context.Context, imageData []byte, mimeType string) (*InvoiceScanResult, error) {
-	prompt := `Analiza esta imagen de factura de proveedor colombiano.
-Extrae TODOS los productos con: nombre, cantidad, precio_unitario, precio_total.
-Si ves códigos de barras, inclúyelos.
-Retorna JSON estricto sin markdown con esta estructura:
-{"provider":"nombre proveedor","products":[{"name":"","quantity":0,"unit_price":0,"total_price":0,"barcode":"","confidence":0.95}],"invoice_total":0}`
+	prompt := `Eres un sistema OCR contable de PRECISIÓN ABSOLUTA. Tu única tarea es extraer los ítems facturados de esta imagen.
 
-	text, err := s.callWithImage(ctx, imageData, mimeType, prompt)
+REGLAS CRÍTICAS (violarlas es inaceptable):
+1. EXTRAE SOLO lo que está escrito TEXTUALMENTE en la tabla/lista de la factura.
+2. PROHIBIDO inventar, deducir o suponer nombres de productos, marcas o cantidades que NO estén impresas en la imagen.
+3. Si una fila está borrosa, cortada o no se puede leer con certeza, IGNÓRALA completamente. Prefiere menos productos correctos a más productos inventados.
+4. El campo "name" debe contener el TEXTO EXACTO tal como aparece impreso en la factura (incluyendo abreviaciones como "PACA X12", "CJA", "UND").
+5. Los precios deben ser los números EXACTOS impresos. No calcules ni redondees.
+6. Si ves un nombre de proveedor en el encabezado, extráelo. Si no, pon "Desconocido".
+7. El campo "confidence" debe reflejar tu certeza real (0.0 a 1.0). Si dudas de una lectura, pon confidence < 0.7.
+
+Retorna JSON estricto sin markdown:
+{"provider":"nombre del proveedor","products":[{"name":"texto exacto de factura","quantity":0,"unit_price":0,"total_price":0,"barcode":"","confidence":0.95}],"invoice_total":0}
+
+Si la imagen NO es una factura o no contiene productos, retorna: {"provider":"","products":[],"invoice_total":0}`
+
+	text, err := s.callWithImageLowTemp(ctx, imageData, mimeType, prompt)
 	if err != nil {
 		return nil, err
 	}
@@ -262,6 +272,68 @@ Instrucciones estrictas:
 	}
 
 	return nil, fmt.Errorf("no image returned from Gemini for product generation")
+}
+
+// callWithImageLowTemp is like callWithImage but forces temperature=0 for strict OCR extraction.
+func (s *GeminiService) callWithImageLowTemp(ctx context.Context, imageData []byte, mimeType, prompt string) (string, error) {
+	b64 := base64.StdEncoding.EncodeToString(imageData)
+
+	payload := map[string]any{
+		"contents": []map[string]any{
+			{
+				"parts": []map[string]any{
+					{
+						"inlineData": map[string]any{
+							"mimeType": mimeType,
+							"data":     b64,
+						},
+					},
+					{"text": prompt},
+				},
+			},
+		},
+		"generationConfig": map[string]any{
+			"responseMimeType": "application/json",
+			"temperature":      0.0,
+		},
+	}
+
+	body, _ := json.Marshal(payload)
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", s.model, s.apiKey)
+
+	reqCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+
+	req, _ := http.NewRequestWithContext(reqCtx, "POST", url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("gemini request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read gemini response: %w", err)
+	}
+
+	var geminiResp geminiResponse
+	if err := json.Unmarshal(respBody, &geminiResp); err != nil {
+		return "", fmt.Errorf("failed to parse gemini response: %w", err)
+	}
+
+	if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {
+		return "", fmt.Errorf("empty gemini response")
+	}
+
+	text := geminiResp.Candidates[0].Content.Parts[0].Text
+	text = strings.TrimPrefix(text, "```json")
+	text = strings.TrimPrefix(text, "```")
+	text = strings.TrimSuffix(text, "```")
+	text = strings.TrimSpace(text)
+
+	return text, nil
 }
 
 func (s *GeminiService) callWithImage(ctx context.Context, imageData []byte, mimeType, prompt string) (string, error) {
