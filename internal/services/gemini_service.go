@@ -22,7 +22,7 @@ type GeminiService struct {
 
 func NewGeminiService(apiKey, model, imageModel string, timeout time.Duration) *GeminiService {
 	if model == "" {
-		model = "gemini-2.0-flash"
+		model = "gemini-1.5-flash"
 	}
 	if imageModel == "" {
 		imageModel = "gemini-2.5-flash-image"
