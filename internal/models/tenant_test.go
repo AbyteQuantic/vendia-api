@@ -7,18 +7,18 @@ import (
 )
 
 func TestBusinessType_Constants(t *testing.T) {
-	assert.Equal(t, BusinessType("tienda_barrio"), BusinessTypeTiendaBarrio)
-	assert.Equal(t, BusinessType("minimercado"), BusinessTypeMinimercado)
-	assert.Equal(t, BusinessType("bar"), BusinessTypeBar)
-	assert.Equal(t, BusinessType("miscelanea"), BusinessTypeMiscelanea)
+	assert.Equal(t, "tienda_barrio", BusinessTypeTiendaBarrio)
+	assert.Equal(t, "minimercado", BusinessTypeMinimercado)
+	assert.Equal(t, "bar", BusinessTypeBar)
+	assert.Equal(t, "miscelanea", BusinessTypeMiscelanea)
 }
 
 func TestTenant_StoreFields(t *testing.T) {
 	slug := "don-pepe"
 	tenant := Tenant{
-		BusinessName:   "Tienda Don Pepe",
-		BusinessType:   BusinessTypeTiendaBarrio,
-		StoreSlug:      &slug,
+		BusinessName:  "Tienda Don Pepe",
+		BusinessTypes: []string{BusinessTypeTiendaBarrio},
+		StoreSlug:     &slug,
 		IsDeliveryOpen: true,
 		DeliveryCost:   3000,
 		MinOrderAmount: 10000,
@@ -30,6 +30,7 @@ func TestTenant_StoreFields(t *testing.T) {
 	assert.Equal(t, float64(3000), tenant.DeliveryCost)
 	assert.Equal(t, float64(10000), tenant.MinOrderAmount)
 	assert.NotEmpty(t, tenant.LogoURL)
+	assert.Contains(t, tenant.BusinessTypes, BusinessTypeTiendaBarrio)
 }
 
 func TestTenant_ChargeModes(t *testing.T) {

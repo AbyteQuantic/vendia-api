@@ -23,11 +23,12 @@ type OwnerInput struct {
 }
 
 type BusinessInput struct {
-	Name        string              `json:"name"         binding:"required"`
-	Type        models.BusinessType `json:"type"         binding:"required"`
-	RazonSocial string              `json:"razon_social"`
-	NIT         string              `json:"nit"`
-	Address     string              `json:"address"`
+	Name        string   `json:"name"         binding:"required"`
+	Type        string   `json:"type"`
+	Types       []string `json:"types"`
+	RazonSocial string   `json:"razon_social"`
+	NIT         string   `json:"nit"`
+	Address     string   `json:"address"`
 }
 
 type ConfigInput struct {
@@ -70,8 +71,8 @@ func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 				OwnerName:    req.Owner.Name,
 				Phone:        req.Owner.Phone,
 				PasswordHash: string(ownerHash),
-				BusinessName: req.Business.Name,
-				BusinessType: req.Business.Type,
+				BusinessName:  req.Business.Name,
+				BusinessTypes: resolveBusinessTypes(req.Business),
 				RazonSocial:  req.Business.RazonSocial,
 				NIT:          req.Business.NIT,
 				Address:      req.Business.Address,
@@ -131,4 +132,15 @@ func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 
 		c.JSON(http.StatusCreated, resp)
 	}
+}
+
+// resolveBusinessTypes supports both legacy single "type" and new "types" array.
+func resolveBusinessTypes(b BusinessInput) []string {
+	if len(b.Types) > 0 {
+		return b.Types
+	}
+	if b.Type != "" {
+		return []string{b.Type}
+	}
+	return []string{}
 }

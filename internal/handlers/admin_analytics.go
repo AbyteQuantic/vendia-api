@@ -58,7 +58,7 @@ func AdminListTenants(db *gorm.DB) gin.HandlerFunc {
 		db.Model(&models.Tenant{}).Count(&total)
 
 		var tenants []models.Tenant
-		if err := db.Select("id, created_at, owner_name, phone, business_name, business_type, subscription_status, subscription_ends_at, last_sync_at, pending_sync_ops").
+		if err := db.Select("id, created_at, owner_name, phone, business_name, business_types, subscription_status, subscription_ends_at, last_sync_at, pending_sync_ops").
 			Order("created_at DESC").
 			Offset((p.Page - 1) * p.PerPage).
 			Limit(p.PerPage).

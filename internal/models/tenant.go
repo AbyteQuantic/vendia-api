@@ -2,17 +2,16 @@ package models
 
 import "time"
 
-type BusinessType string
-
+// Valid business type values.
 const (
-	BusinessTypeTiendaBarrio  BusinessType = "tienda_barrio"
-	BusinessTypeMinimercado   BusinessType = "minimercado"
-	BusinessTypeBar           BusinessType = "bar"
-	BusinessTypeMiscelanea    BusinessType = "miscelanea"
-	BusinessTypeMuebles       BusinessType = "muebles"
-	BusinessTypeManufactura   BusinessType = "manufactura"
-	BusinessTypeReparacion    BusinessType = "reparacion"
-	BusinessTypeComidas       BusinessType = "comidas_rapidas"
+	BusinessTypeTiendaBarrio = "tienda_barrio"
+	BusinessTypeMinimercado  = "minimercado"
+	BusinessTypeBar          = "bar"
+	BusinessTypeMiscelanea   = "miscelanea"
+	BusinessTypeMuebles      = "muebles"
+	BusinessTypeManufactura  = "manufactura"
+	BusinessTypeReparacion   = "reparacion"
+	BusinessTypeComidas      = "comidas_rapidas"
 )
 
 type Tenant struct {
@@ -22,8 +21,8 @@ type Tenant struct {
 	Phone        string `gorm:"not null;uniqueIndex" json:"phone"`
 	PasswordHash string `gorm:"not null" json:"-"`
 
-	BusinessName string       `gorm:"not null" json:"business_name"`
-	BusinessType BusinessType `gorm:"not null" json:"business_type"`
+	BusinessName  string   `gorm:"not null" json:"business_name"`
+	BusinessTypes []string `gorm:"serializer:json;default:'[]'" json:"business_types"`
 	RazonSocial  string       `gorm:"not null;default:''" json:"razon_social"`
 	NIT          string       `gorm:"not null;default:''" json:"nit"`
 	Address      string       `gorm:"not null;default:''" json:"address"`

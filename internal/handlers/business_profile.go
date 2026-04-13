@@ -23,14 +23,14 @@ func GetBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{
-				"business_name": tenant.BusinessName,
-				"business_type": tenant.BusinessType,
-				"nit":           tenant.NIT,
-				"razon_social":  tenant.RazonSocial,
-				"address":       tenant.Address,
-				"logo_url":      tenant.LogoURL,
-				"owner_name":    tenant.OwnerName,
-				"phone":         tenant.Phone,
+				"business_name":  tenant.BusinessName,
+				"business_types": tenant.BusinessTypes,
+				"nit":            tenant.NIT,
+				"razon_social":   tenant.RazonSocial,
+				"address":        tenant.Address,
+				"logo_url":       tenant.LogoURL,
+				"owner_name":     tenant.OwnerName,
+				"phone":          tenant.Phone,
 			},
 		})
 	}
@@ -40,11 +40,11 @@ func GetBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 // PATCH /api/v1/store/profile
 func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 	type Request struct {
-		BusinessName *string              `json:"business_name"`
-		BusinessType *models.BusinessType `json:"business_type"`
-		NIT          *string              `json:"nit"`
-		RazonSocial  *string              `json:"razon_social"`
-		Address      *string              `json:"address"`
+		BusinessName  *string  `json:"business_name"`
+		BusinessTypes []string `json:"business_types"`
+		NIT           *string  `json:"nit"`
+		RazonSocial   *string  `json:"razon_social"`
+		Address       *string  `json:"address"`
 	}
 
 	return func(c *gin.Context) {
@@ -64,8 +64,8 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 			}
 			updates["business_name"] = *req.BusinessName
 		}
-		if req.BusinessType != nil {
-			updates["business_type"] = *req.BusinessType
+		if req.BusinessTypes != nil {
+			updates["business_types"] = req.BusinessTypes
 		}
 		if req.NIT != nil {
 			updates["nit"] = *req.NIT

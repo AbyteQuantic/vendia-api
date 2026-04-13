@@ -45,8 +45,8 @@ func GenerateLogo(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc ser
 			if req.BusinessName == "" {
 				req.BusinessName = tenant.BusinessName
 			}
-			if req.BusinessType == "" {
-				req.BusinessType = string(tenant.BusinessType)
+			if req.BusinessType == "" && len(tenant.BusinessTypes) > 0 {
+				req.BusinessType = tenant.BusinessTypes[0]
 			}
 		}
 
