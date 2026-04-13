@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
@@ -65,7 +66,8 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 			updates["business_name"] = *req.BusinessName
 		}
 		if req.BusinessTypes != nil {
-			updates["business_types"] = req.BusinessTypes
+			typesJSON, _ := json.Marshal(req.BusinessTypes)
+			updates["business_types"] = string(typesJSON)
 		}
 		if req.NIT != nil {
 			updates["nit"] = *req.NIT
