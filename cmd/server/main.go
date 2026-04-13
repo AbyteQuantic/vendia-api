@@ -205,6 +205,10 @@ func main() {
 		v1.GET("/store/config", handlers.GetStoreConfig(db))
 		v1.PATCH("/store/config", handlers.UpdateStoreConfig(db))
 
+		// Business profile
+		v1.GET("/store/profile", handlers.GetBusinessProfile(db))
+		v1.PATCH("/store/profile", handlers.UpdateBusinessProfile(db))
+
 		// Payment info (Nequi/Daviplata)
 		v1.GET("/tenant/payment-info", handlers.GetPaymentInfo(db))
 		v1.PATCH("/tenant/payment-info", handlers.UpdatePaymentInfo(db))
