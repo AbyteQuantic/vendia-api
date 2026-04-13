@@ -52,8 +52,13 @@ func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 			return
 		}
 
-		var existing models.Tenant
-		if err := db.Where("phone = ?", req.Owner.Phone).First(&existing).Error; err == nil {
+		// Check both users and tenants tables for existing phone
+		var existingUser models.User
+		userExists := db.Where("phone = ?", req.Owner.Phone).First(&existingUser).Error == nil
+		var existingTenant models.Tenant
+		tenantExists := db.Where("phone = ?", req.Owner.Phone).First(&existingTenant).Error == nil
+
+		if userExists || tenantExists {
 			c.JSON(http.StatusConflict, gin.H{"error": "ese número ya está registrado"})
 			return
 		}
@@ -65,25 +70,61 @@ func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 		}
 
 		var tenant models.Tenant
+		var user models.User
 
 		txErr := db.Transaction(func(tx *gorm.DB) error {
-			tenant = models.Tenant{
-				OwnerName:    req.Owner.Name,
+			// 1. Create User (global identity)
+			user = models.User{
 				Phone:        req.Owner.Phone,
+				Name:         req.Owner.Name,
 				PasswordHash: string(ownerHash),
+			}
+			if err := tx.Create(&user).Error; err != nil {
+				return err
+			}
+
+			// 2. Create Tenant (business) — dual-write phone/password for legacy compat
+			tenant = models.Tenant{
+				OwnerName:     req.Owner.Name,
+				Phone:         req.Owner.Phone,
+				PasswordHash:  string(ownerHash),
 				BusinessName:  req.Business.Name,
 				BusinessTypes: resolveBusinessTypes(req.Business),
-				RazonSocial:  req.Business.RazonSocial,
-				NIT:          req.Business.NIT,
-				Address:      req.Business.Address,
-				SaleTypes:    req.Config.SaleTypes,
-				HasShowcases: req.Config.HasShowcases,
-				HasTables:    req.Config.HasTables,
+				RazonSocial:   req.Business.RazonSocial,
+				NIT:           req.Business.NIT,
+				Address:       req.Business.Address,
+				SaleTypes:     req.Config.SaleTypes,
+				HasShowcases:  req.Config.HasShowcases,
+				HasTables:     req.Config.HasTables,
 			}
 			if err := tx.Create(&tenant).Error; err != nil {
 				return err
 			}
 
+			// 3. Create default Branch
+			branch := models.Branch{
+				TenantID: tenant.ID,
+				Name:     "Principal",
+				Address:  req.Business.Address,
+				IsActive: true,
+			}
+			if err := tx.Create(&branch).Error; err != nil {
+				return err
+			}
+
+			// 4. Create UserWorkspace (owner link)
+			ws := models.UserWorkspace{
+				UserID:    user.ID,
+				TenantID:  tenant.ID,
+				BranchID:  &branch.ID,
+				Role:      models.RoleOwner,
+				IsDefault: true,
+			}
+			if err := tx.Create(&ws).Error; err != nil {
+				return err
+			}
+
+			// 5. Create Employee(s)
 			if len(req.Employees) == 0 {
 				defaultCashier := models.Employee{
 					TenantID:     tenant.ID,
@@ -124,7 +165,8 @@ func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 			return
 		}
 
-		resp, err := createTokenPair(db, tenant, jwtSecret)
+		// Generate workspace-aware token
+		resp, err := createWorkspaceTokenPair(db, user, tenant.ID, "", tenant.BusinessName, string(models.RoleOwner), jwtSecret)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al generar tokens"})
 			return

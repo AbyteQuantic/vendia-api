@@ -9,6 +9,9 @@ import (
 )
 
 const TenantIDKey = "tenant_id"
+const UserIDKey = "user_id"
+const BranchIDKey = "branch_id"
+const RoleKey = "role"
 const ClaimsKey = "claims"
 
 func Auth(jwtSecret string) gin.HandlerFunc {
@@ -39,12 +42,47 @@ func Auth(jwtSecret string) gin.HandlerFunc {
 
 		c.Set(TenantIDKey, claims.TenantID)
 		c.Set(ClaimsKey, claims)
+		// Multi-workspace fields (may be empty for legacy tokens)
+		if claims.UserID != "" {
+			c.Set(UserIDKey, claims.UserID)
+		}
+		if claims.BranchID != "" {
+			c.Set(BranchIDKey, claims.BranchID)
+		}
+		if claims.Role != "" {
+			c.Set(RoleKey, claims.Role)
+		}
 		c.Next()
 	}
 }
 
+// GetTenantID returns tenant_id from JWT. Works with both old and new tokens.
 func GetTenantID(c *gin.Context) string {
 	v, _ := c.Get(TenantIDKey)
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func GetUserID(c *gin.Context) string {
+	v, _ := c.Get(UserIDKey)
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func GetBranchID(c *gin.Context) string {
+	v, _ := c.Get(BranchIDKey)
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func GetRole(c *gin.Context) string {
+	v, _ := c.Get(RoleKey)
 	if s, ok := v.(string); ok {
 		return s
 	}

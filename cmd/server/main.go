@@ -81,6 +81,7 @@ func main() {
 	r.POST("/login", loginLimiter, handlers.Login(db, cfg.JWTSecret))
 	r.POST("/api/v1/tenant/register", handlers.TenantRegister(db, cfg.JWTSecret))
 	r.POST("/api/v1/auth/refresh", handlers.RefreshToken(db, cfg.JWTSecret))
+	r.POST("/api/v1/auth/select-workspace", middleware.Auth(cfg.JWTSecret), handlers.SelectWorkspace(db, cfg.JWTSecret))
 
 	// Public store / catalog (no auth required)
 	r.GET("/api/v1/store/:slug/catalog", handlers.PublicCatalog(db))
@@ -101,6 +102,7 @@ func main() {
 	v1.Use(middleware.Auth(cfg.JWTSecret))
 	{
 		v1.POST("/auth/logout", handlers.Logout(db))
+		v1.GET("/auth/workspaces", handlers.ListWorkspaces(db))
 
 		// Sync (offline-first)
 		v1.POST("/sync/batch", handlers.SyncBatch(db))

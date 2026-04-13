@@ -17,6 +17,10 @@ type Claims struct {
 	Phone        string `json:"phone"`
 	BusinessName string `json:"business_name"`
 	IsSuperAdmin bool   `json:"is_super_admin,omitempty"`
+	// Multi-workspace fields (omitempty for backward compat with old tokens)
+	UserID   string `json:"user_id,omitempty"`
+	BranchID string `json:"branch_id,omitempty"`
+	Role     string `json:"role,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -25,6 +29,25 @@ func GenerateToken(tenantID, phone, businessName, secret string) (string, error)
 		TenantID:     tenantID,
 		Phone:        phone,
 		BusinessName: businessName,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(AccessTokenDuration)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			Issuer:    "vendia-backend",
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString([]byte(secret))
+}
+
+// GenerateWorkspaceToken creates a JWT with full multi-workspace context.
+func GenerateWorkspaceToken(userID, tenantID, branchID, phone, businessName, role, secret string) (string, error) {
+	claims := Claims{
+		TenantID:     tenantID,
+		Phone:        phone,
+		BusinessName: businessName,
+		UserID:       userID,
+		BranchID:     branchID,
+		Role:         role,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(AccessTokenDuration)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
