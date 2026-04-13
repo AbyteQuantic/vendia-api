@@ -28,6 +28,8 @@ func GetStoreConfig(db *gorm.DB) gin.HandlerFunc {
 				"min_order_amount": tenant.MinOrderAmount,
 				"logo_url":         tenant.LogoURL,
 				"business_name":    tenant.BusinessName,
+				"enable_fiados":    tenant.EnableFiados,
+				"default_margin":   tenant.DefaultMargin,
 			},
 		})
 	}
@@ -39,6 +41,8 @@ func UpdateStoreConfig(db *gorm.DB) gin.HandlerFunc {
 		IsDeliveryOpen *bool    `json:"is_delivery_open"`
 		DeliveryCost   *float64 `json:"delivery_cost"`
 		MinOrderAmount *float64 `json:"min_order_amount"`
+		EnableFiados   *bool    `json:"enable_fiados"`
+		DefaultMargin  *float64 `json:"default_margin"`
 	}
 
 	return func(c *gin.Context) {
@@ -68,6 +72,12 @@ func UpdateStoreConfig(db *gorm.DB) gin.HandlerFunc {
 		}
 		if req.MinOrderAmount != nil {
 			updates["min_order_amount"] = *req.MinOrderAmount
+		}
+		if req.EnableFiados != nil {
+			updates["enable_fiados"] = *req.EnableFiados
+		}
+		if req.DefaultMargin != nil {
+			updates["default_margin"] = *req.DefaultMargin
 		}
 
 		if err := db.Model(&models.Tenant{}).Where("id = ?", tenantID).Updates(updates).Error; err != nil {

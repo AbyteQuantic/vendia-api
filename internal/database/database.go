@@ -79,6 +79,7 @@ func Migrate(db *gorm.DB) error {
 		&models.RockolaSuggestion{},
 		&models.CatalogProduct{},
 		&models.CatalogImage{},
+		&models.TenantPaymentMethod{},
 	)
 	if err != nil {
 		return err

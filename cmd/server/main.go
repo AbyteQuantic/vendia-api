@@ -210,10 +210,16 @@ func main() {
 		v1.GET("/store/profile", handlers.GetBusinessProfile(db))
 		v1.PATCH("/store/profile", handlers.UpdateBusinessProfile(db))
 
-		// Payment info (Nequi/Daviplata)
+		// Payment info (Nequi/Daviplata — legacy)
 		v1.GET("/tenant/payment-info", handlers.GetPaymentInfo(db))
 		v1.PATCH("/tenant/payment-info", handlers.UpdatePaymentInfo(db))
 		v1.GET("/payments/qr", handlers.GeneratePaymentQR(db))
+
+		// Payment methods (CRUD)
+		v1.GET("/store/payment-methods", handlers.ListPaymentMethods(db))
+		v1.POST("/store/payment-methods", handlers.CreatePaymentMethod(db))
+		v1.PATCH("/store/payment-methods/:id", handlers.UpdatePaymentMethod(db))
+		v1.DELETE("/store/payment-methods/:id", handlers.DeletePaymentMethod(db))
 
 		// Logo IA
 		v1.POST("/tenant/generate-logo", handlers.GenerateLogo(db, geminiSvc, storageSvc))
