@@ -208,12 +208,14 @@ type LogoResult struct {
 
 func (s *GeminiService) GenerateLogo(ctx context.Context, businessName, businessType string) ([]LogoResult, error) {
 	prompt := fmt.Sprintf(
-		`Genera un logo profesional y moderno para un negocio colombiano llamado '%s'.
-Tipo de negocio: %s.
-Estilo: minimalista, fondo sólido de color vibrante, iniciales grandes o ícono simple.
-Formato: cuadrado 512x512, esquinas redondeadas.`, businessName, businessType)
+		`Un logo minimalista, profesional y moderno para un negocio llamado '%s'. `+
+			`El tipo de negocio es '%s'. `+
+			`Estilo de ilustración vectorial plana, diseño limpio, colores vibrantes, `+
+			`fondo blanco puro sólido. Sin texto complejo adicional, centrado, `+
+			`ideal para un avatar circular de aplicación móvil.`,
+		businessName, businessType)
 
-	results, err := s.callImageGeneration(ctx, prompt, 3)
+	results, err := s.callImageGeneration(ctx, prompt, 1)
 	if err != nil {
 		return nil, err
 	}
