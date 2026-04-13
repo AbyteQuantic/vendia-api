@@ -160,10 +160,11 @@ func main() {
 		v1.POST("/credits/:id/payments", handlers.CreatePayment(db))
 		v1.POST("/fiar/remind/:customer_uuid", handlers.RemindCredit(db))
 
-		// Tables (Modo Bar)
+		// Tables (Floor Plan)
 		v1.GET("/tables", handlers.ListTables(db))
 		v1.POST("/tables", handlers.CreateTable(db))
 		v1.PATCH("/tables/:id", handlers.UpdateTable(db))
+		v1.POST("/tables/sync", handlers.SyncTables(db))
 
 		// Tabs (Open accounts — legacy)
 		v1.GET("/tabs", handlers.ListOpenTabs(db))
