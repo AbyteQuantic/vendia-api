@@ -28,8 +28,11 @@ func GetStoreConfig(db *gorm.DB) gin.HandlerFunc {
 				"min_order_amount": tenant.MinOrderAmount,
 				"logo_url":         tenant.LogoURL,
 				"business_name":    tenant.BusinessName,
-				"enable_fiados":    tenant.EnableFiados,
-				"default_margin":   tenant.DefaultMargin,
+				"enable_fiados":       tenant.EnableFiados,
+				"default_margin":      tenant.DefaultMargin,
+				"receipt_header":      tenant.ReceiptHeader,
+				"receipt_footer":      tenant.ReceiptFooter,
+				"printer_mac_address": tenant.PrinterMacAddress,
 			},
 		})
 	}
@@ -41,8 +44,11 @@ func UpdateStoreConfig(db *gorm.DB) gin.HandlerFunc {
 		IsDeliveryOpen *bool    `json:"is_delivery_open"`
 		DeliveryCost   *float64 `json:"delivery_cost"`
 		MinOrderAmount *float64 `json:"min_order_amount"`
-		EnableFiados   *bool    `json:"enable_fiados"`
-		DefaultMargin  *float64 `json:"default_margin"`
+		EnableFiados      *bool    `json:"enable_fiados"`
+		DefaultMargin     *float64 `json:"default_margin"`
+		ReceiptHeader     *string  `json:"receipt_header"`
+		ReceiptFooter     *string  `json:"receipt_footer"`
+		PrinterMacAddress *string  `json:"printer_mac_address"`
 	}
 
 	return func(c *gin.Context) {
@@ -78,6 +84,15 @@ func UpdateStoreConfig(db *gorm.DB) gin.HandlerFunc {
 		}
 		if req.DefaultMargin != nil {
 			updates["default_margin"] = *req.DefaultMargin
+		}
+		if req.ReceiptHeader != nil {
+			updates["receipt_header"] = *req.ReceiptHeader
+		}
+		if req.ReceiptFooter != nil {
+			updates["receipt_footer"] = *req.ReceiptFooter
+		}
+		if req.PrinterMacAddress != nil {
+			updates["printer_mac_address"] = *req.PrinterMacAddress
 		}
 
 		if err := db.Model(&models.Tenant{}).Where("id = ?", tenantID).Updates(updates).Error; err != nil {

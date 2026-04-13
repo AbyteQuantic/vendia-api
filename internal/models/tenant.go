@@ -44,6 +44,11 @@ type Tenant struct {
 	SubscriptionStatus string     `gorm:"default:'trial'" json:"subscription_status"`
 	SubscriptionEndsAt *time.Time `json:"subscription_ends_at"`
 
+	// Printer / Receipts
+	ReceiptHeader     string `gorm:"default:''" json:"receipt_header"`
+	ReceiptFooter     string `gorm:"default:''" json:"receipt_footer"`
+	PrinterMacAddress string `gorm:"default:''" json:"printer_mac_address"`
+
 	// Store / Delivery
 	StoreSlug      *string `gorm:"uniqueIndex" json:"store_slug,omitempty"`
 	IsDeliveryOpen bool    `gorm:"default:false" json:"is_delivery_open"`
