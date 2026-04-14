@@ -90,7 +90,10 @@ func InitFiado(db *gorm.DB) gin.HandlerFunc {
 				Phone:    req.CustomerPhone,
 				Email:    req.CustomerEmail,
 			}
-			db.Create(&customer)
+			if err := db.Create(&customer).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al crear cliente: %v", err)})
+				return
+			}
 		} else {
 			updates := map[string]any{}
 			if req.CustomerEmail != "" && customer.Email == "" {
@@ -120,7 +123,7 @@ func InitFiado(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		if err := db.Create(&credit).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al crear fiado"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al crear fiado: %v", err)})
 			return
 		}
 
