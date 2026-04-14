@@ -59,6 +59,129 @@ func AnalyticsDashboard(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// FinancialSummary returns aggregated financial data by payment method.
+// GET /api/v1/analytics/financial-summary?period=today|week|month
+func FinancialSummary(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		period := c.DefaultQuery("period", "today")
+
+		now := time.Now()
+		var since time.Time
+		switch period {
+		case "week":
+			since = now.AddDate(0, 0, -7)
+		case "month":
+			since = now.AddDate(0, -1, 0)
+		default: // today
+			since = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		}
+
+		// Total sales by payment method
+		type MethodTotal struct {
+			PaymentMethod string  `json:"payment_method"`
+			Total         float64 `json:"total"`
+			Count         int64   `json:"count"`
+		}
+		var byMethod []MethodTotal
+		db.Model(&models.Sale{}).
+			Select("payment_method, COALESCE(SUM(total), 0) as total, COUNT(*) as count").
+			Where("tenant_id = ? AND created_at >= ? AND deleted_at IS NULL", tenantID, since).
+			Group("payment_method").
+			Scan(&byMethod)
+
+		var totalSales float64
+		var totalCount int64
+		cashInDrawer := 0.0
+		digitalMoney := 0.0
+		for _, m := range byMethod {
+			totalSales += m.Total
+			totalCount += m.Count
+			switch m.PaymentMethod {
+			case "cash":
+				cashInDrawer = m.Total
+			case "transfer", "card", "nequi", "daviplata":
+				digitalMoney += m.Total
+			}
+		}
+
+		// Accounts receivable (open credits)
+		var accountsReceivable float64
+		db.Model(&models.CreditAccount{}).
+			Where("tenant_id = ? AND status IN ('open', 'partial')", tenantID).
+			Select("COALESCE(SUM(total_amount - paid_amount), 0)").
+			Scan(&accountsReceivable)
+
+		// Profit estimate (sales - cost)
+		var totalCost float64
+		db.Model(&models.SaleItem{}).
+			Select("COALESCE(SUM(sale_items.quantity * p.purchase_price), 0)").
+			Joins("JOIN sales ON sales.id = sale_items.sale_id").
+			Joins("JOIN products p ON p.id = sale_items.product_id").
+			Where("sales.tenant_id = ? AND sales.created_at >= ? AND sales.deleted_at IS NULL",
+				tenantID, since).
+			Scan(&totalCost)
+
+		// Daily average (last 30 days)
+		thirtyDaysAgo := now.AddDate(0, 0, -30)
+		var last30Total float64
+		db.Model(&models.Sale{}).
+			Where("tenant_id = ? AND created_at >= ? AND deleted_at IS NULL", tenantID, thirtyDaysAgo).
+			Select("COALESCE(SUM(total), 0)").
+			Scan(&last30Total)
+		dailyAvg := last30Total / 30
+
+		c.JSON(http.StatusOK, gin.H{
+			"data": gin.H{
+				"total_sales":          totalSales,
+				"transaction_count":    totalCount,
+				"total_profit":         totalSales - totalCost,
+				"daily_average":        dailyAvg,
+				"cash_in_drawer":       cashInDrawer,
+				"digital_money":        digitalMoney,
+				"accounts_receivable":  accountsReceivable,
+				"by_method":            byMethod,
+			},
+		})
+	}
+}
+
+// SalesHistoryByPeriod returns paginated sales filtered by period.
+// GET /api/v1/analytics/sales-history?period=today&page=1&per_page=20
+func SalesHistoryByPeriod(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		period := c.DefaultQuery("period", "today")
+		p := parsePagination(c)
+
+		now := time.Now()
+		var since time.Time
+		switch period {
+		case "week":
+			since = now.AddDate(0, 0, -7)
+		case "month":
+			since = now.AddDate(0, -1, 0)
+		default:
+			since = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		}
+
+		var total int64
+		db.Model(&models.Sale{}).
+			Where("tenant_id = ? AND created_at >= ? AND deleted_at IS NULL", tenantID, since).
+			Count(&total)
+
+		var sales []models.Sale
+		db.Preload("Items").
+			Where("tenant_id = ? AND created_at >= ? AND deleted_at IS NULL", tenantID, since).
+			Order("created_at DESC").
+			Offset((p.Page - 1) * p.PerPage).
+			Limit(p.PerPage).
+			Find(&sales)
+
+		c.JSON(http.StatusOK, newPaginatedResponse(sales, total, p))
+	}
+}
+
 func TopProducts(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)

@@ -234,6 +234,8 @@ func main() {
 		v1.GET("/analytics/sales-by-employee", handlers.SalesByEmployee(db))
 		v1.GET("/analytics/inventory-health", handlers.InventoryHealth(db))
 		v1.GET("/analytics/ingestion-method", handlers.IngestionMethod(db))
+		v1.GET("/analytics/financial-summary", handlers.FinancialSummary(db))
+		v1.GET("/analytics/sales-history", handlers.SalesHistoryByPeriod(db))
 
 		// Rockola (admin)
 		v1.GET("/rockola/pending", handlers.PendingSongs(db))
