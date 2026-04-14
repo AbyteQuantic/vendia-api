@@ -393,6 +393,9 @@ Instrucciones estrictas:
 				if err != nil {
 					return nil, fmt.Errorf("failed to decode generated image: %w", err)
 				}
+				if len(decoded) < 100 {
+					return nil, fmt.Errorf("generated image too small (%d bytes), likely corrupted", len(decoded))
+				}
 				return decoded, nil
 			}
 		}

@@ -31,6 +31,11 @@ func NewStorageService(supabaseURL, serviceKey string) *StorageService {
 // Upload uploads a file to Supabase Storage.
 // bucket: "product-photos", key: "products/tenant-uuid/product-uuid.webp"
 func (s *StorageService) Upload(ctx context.Context, bucket, key string, data []byte, contentType string) (string, error) {
+	// Reject empty data — prevents ghost URLs pointing to nothing
+	if len(data) == 0 {
+		return "", fmt.Errorf("storage upload: empty data, nothing to upload")
+	}
+
 	url := fmt.Sprintf("%s/storage/v1/object/%s/%s", s.supabaseURL, bucket, key)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(data))
@@ -52,7 +57,19 @@ func (s *StorageService) Upload(ctx context.Context, bucket, key string, data []
 		return "", fmt.Errorf("storage upload returned %d: %s", resp.StatusCode, string(body[:min(len(body), 200)]))
 	}
 
+	// Verify the file is actually accessible
 	publicURL := fmt.Sprintf("%s/%s/%s", s.publicURL, bucket, key)
+	verifyReq, err := http.NewRequestWithContext(ctx, "HEAD", publicURL, nil)
+	if err == nil {
+		verifyResp, verifyErr := s.client.Do(verifyReq)
+		if verifyErr == nil {
+			verifyResp.Body.Close()
+			if verifyResp.StatusCode != http.StatusOK {
+				return "", fmt.Errorf("storage upload: file uploaded but not accessible (HEAD returned %d)", verifyResp.StatusCode)
+			}
+		}
+	}
+
 	return publicURL, nil
 }
 
