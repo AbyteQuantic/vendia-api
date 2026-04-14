@@ -139,7 +139,7 @@ func buildFiadoResponse(db *gorm.DB, credit models.CreditAccount, tenantID strin
 	var customer models.Customer
 	db.First(&customer, "id = ?", credit.CustomerID)
 
-	acceptURL := fmt.Sprintf("https://vendia-admin.onrender.com/fiado/%s", credit.FiadoToken)
+	acceptURL := fmt.Sprintf("https://vendia-admin.vercel.app/fiado/%s", credit.FiadoToken)
 
 	resp := gin.H{
 		"credit_id":      credit.ID,
