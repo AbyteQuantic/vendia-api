@@ -335,13 +335,25 @@ func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, storage
 			return
 		}
 
-		// Build product description for better AI results
-		productInfo := product.Name
-		if product.Presentation != "" {
-			productInfo += " " + product.Presentation
+		// Use fresh context from query params if provided (edit screen sends current UI state)
+		name := c.Query("name")
+		if name == "" {
+			name = product.Name
 		}
-		if product.Content != "" {
-			productInfo += " " + product.Content
+		pres := c.Query("presentation")
+		if pres == "" {
+			pres = product.Presentation
+		}
+		content := c.Query("content")
+		if content == "" {
+			content = product.Content
+		}
+		productInfo := name
+		if pres != "" {
+			productInfo += " " + pres
+		}
+		if content != "" {
+			productInfo += " " + content
 		}
 
 		enhanced, err := geminiSvc.EnhancePhoto(ctx, imageData, contentType, productInfo)
@@ -400,12 +412,25 @@ func GenerateProductImage(db *gorm.DB, geminiSvc *services.GeminiService, storag
 			return
 		}
 
-		productInfo := product.Name
-		if product.Presentation != "" {
-			productInfo += " " + product.Presentation
+		// Use fresh context from query params if provided (edit screen sends current UI state)
+		name := c.Query("name")
+		if name == "" {
+			name = product.Name
 		}
-		if product.Content != "" {
-			productInfo += " " + product.Content
+		pres := c.Query("presentation")
+		if pres == "" {
+			pres = product.Presentation
+		}
+		content := c.Query("content")
+		if content == "" {
+			content = product.Content
+		}
+		productInfo := name
+		if pres != "" {
+			productInfo += " " + pres
+		}
+		if content != "" {
+			productInfo += " " + content
 		}
 
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
