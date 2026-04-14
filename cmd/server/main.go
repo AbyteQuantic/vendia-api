@@ -96,6 +96,10 @@ func main() {
 	r.GET("/api/v1/account/:order_uuid", handlers.GetAccountHTTP(db))
 	r.POST("/api/v1/account/:order_uuid/verify", handlers.VerifyAccountPhone(db))
 
+	// Public fiado handshake (customer accepts debt)
+	r.GET("/api/v1/public/fiado/:token", handlers.GetFiadoPublic(db))
+	r.POST("/api/v1/public/fiado/:token/accept", handlers.AcceptFiado(db))
+
 	// ── Protected routes (JWT) ───────────────────────────────────────────────
 	v1 := r.Group("/api/v1")
 	v1.Use(globalLimiter)
@@ -160,6 +164,10 @@ func main() {
 		v1.POST("/credits", handlers.CreateCredit(db))
 		v1.GET("/credits/:id", handlers.GetCredit(db))
 		v1.POST("/credits/:id/payments", handlers.CreatePayment(db))
+
+		// Fiado handshake (protected - init + check status)
+		v1.POST("/fiado/init", handlers.InitFiado(db))
+		v1.GET("/fiado/:token/status", handlers.CheckFiadoStatus(db))
 		v1.POST("/fiar/remind/:customer_uuid", handlers.RemindCredit(db))
 
 		// Tables (Floor Plan)
