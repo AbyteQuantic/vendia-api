@@ -58,7 +58,7 @@ func CreateCredit(db *gorm.DB) gin.HandlerFunc {
 		credit := models.CreditAccount{
 			TenantID:    tenantID,
 			CustomerID:  req.CustomerID,
-			SaleID:      req.SaleID,
+			SaleID:      &req.SaleID,
 			TotalAmount: req.TotalAmount,
 			Status:      "open",
 		}
