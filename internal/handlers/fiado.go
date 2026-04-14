@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
@@ -161,13 +162,16 @@ func buildFiadoResponse(db *gorm.DB, credit models.CreditAccount, tenantID strin
 	}
 
 	if customer.Email != "" {
-		subject := url.QueryEscape(fmt.Sprintf("Fiado en %s", tenant.BusinessName))
-		body := url.QueryEscape(fmt.Sprintf(
-			"Hola %s,\n\n%s le ha fiado productos por $%d.\n\nAcepte aquí: %s",
+		subject := "Fiado en " + tenant.BusinessName
+		body := fmt.Sprintf(
+			"Hola %s,\r\n\r\n%s le ha fiado productos por $%d.\r\n\r\nAcepte aquí: %s",
 			customer.Name, tenant.BusinessName, credit.TotalAmount, acceptURL,
-		))
+		)
+		// Use url.PathEscape for spaces (not QueryEscape which uses +)
 		resp["email_url"] = fmt.Sprintf("mailto:%s?subject=%s&body=%s",
-			customer.Email, subject, body)
+			customer.Email,
+			strings.ReplaceAll(url.QueryEscape(subject), "+", "%20"),
+			strings.ReplaceAll(url.QueryEscape(body), "+", "%20"))
 	}
 
 	return gin.H{"data": resp}
