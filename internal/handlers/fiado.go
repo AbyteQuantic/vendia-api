@@ -27,7 +27,7 @@ func InitFiado(db *gorm.DB) gin.HandlerFunc {
 	type Request struct {
 		IdempotencyKey string `json:"idempotency_key"`
 		CustomerName   string `json:"customer_name" binding:"required"`
-		CustomerPhone  string `json:"customer_phone" binding:"required"`
+		CustomerPhone  string `json:"customer_phone"`
 		CustomerEmail  string `json:"customer_email"`
 		TotalAmount    int64  `json:"total_amount" binding:"required"`
 	}
@@ -38,6 +38,11 @@ func InitFiado(db *gorm.DB) gin.HandlerFunc {
 		var req Request
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		if req.CustomerPhone == "" && req.CustomerEmail == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "ingrese al menos un celular o correo"})
 			return
 		}
 
@@ -65,8 +70,20 @@ func InitFiado(db *gorm.DB) gin.HandlerFunc {
 
 		// ── Find or create customer ─────────────────────────────────────
 		var customer models.Customer
-		if err := db.Where("tenant_id = ? AND phone = ?", tenantID, req.CustomerPhone).
-			First(&customer).Error; err != nil {
+		found := false
+		if req.CustomerPhone != "" {
+			if err := db.Where("tenant_id = ? AND phone = ?", tenantID, req.CustomerPhone).
+				First(&customer).Error; err == nil {
+				found = true
+			}
+		}
+		if !found && req.CustomerEmail != "" {
+			if err := db.Where("tenant_id = ? AND email = ?", tenantID, req.CustomerEmail).
+				First(&customer).Error; err == nil {
+				found = true
+			}
+		}
+		if !found {
 			customer = models.Customer{
 				TenantID: tenantID,
 				Name:     req.CustomerName,
@@ -74,8 +91,17 @@ func InitFiado(db *gorm.DB) gin.HandlerFunc {
 				Email:    req.CustomerEmail,
 			}
 			db.Create(&customer)
-		} else if req.CustomerEmail != "" && customer.Email == "" {
-			db.Model(&customer).Update("email", req.CustomerEmail)
+		} else {
+			updates := map[string]any{}
+			if req.CustomerEmail != "" && customer.Email == "" {
+				updates["email"] = req.CustomerEmail
+			}
+			if req.CustomerPhone != "" && customer.Phone == "" {
+				updates["phone"] = req.CustomerPhone
+			}
+			if len(updates) > 0 {
+				db.Model(&customer).Updates(updates)
+			}
 		}
 
 		// ── Create credit account ───────────────────────────────────────
@@ -110,25 +136,38 @@ func buildFiadoResponse(db *gorm.DB, credit models.CreditAccount, tenantID strin
 	db.First(&customer, "id = ?", credit.CustomerID)
 
 	acceptURL := fmt.Sprintf("https://vendia-admin.onrender.com/fiado/%s", credit.FiadoToken)
-	waMessage := fmt.Sprintf(
-		"Hola %s, %s le ha fiado productos por $%d.\n\nAcepte los términos aquí:\n%s",
-		customer.Name, tenant.BusinessName, credit.TotalAmount, acceptURL,
-	)
-	waLink := fmt.Sprintf("https://wa.me/57%s?text=%s", customer.Phone, url.QueryEscape(waMessage))
 
-	return gin.H{
-		"data": gin.H{
-			"credit_id":     credit.ID,
-			"fiado_token":   credit.FiadoToken,
-			"fiado_status":  credit.FiadoStatus,
-			"accept_url":    acceptURL,
-			"whatsapp_url":  waLink,
-			"customer_name": customer.Name,
-			"customer_phone": customer.Phone,
-			"total_amount":  credit.TotalAmount,
-			"is_new_customer": credit.CreatedAt.After(time.Now().Add(-10*time.Second)),
-		},
+	resp := gin.H{
+		"credit_id":      credit.ID,
+		"fiado_token":    credit.FiadoToken,
+		"fiado_status":   credit.FiadoStatus,
+		"accept_url":     acceptURL,
+		"customer_name":  customer.Name,
+		"customer_phone": customer.Phone,
+		"customer_email": customer.Email,
+		"total_amount":   credit.TotalAmount,
 	}
+
+	if customer.Phone != "" {
+		waMessage := fmt.Sprintf(
+			"Hola %s, %s le ha fiado productos por $%d.\n\nAcepte los términos aquí:\n%s",
+			customer.Name, tenant.BusinessName, credit.TotalAmount, acceptURL,
+		)
+		resp["whatsapp_url"] = fmt.Sprintf("https://wa.me/57%s?text=%s",
+			customer.Phone, url.QueryEscape(waMessage))
+	}
+
+	if customer.Email != "" {
+		subject := url.QueryEscape(fmt.Sprintf("Fiado en %s", tenant.BusinessName))
+		body := url.QueryEscape(fmt.Sprintf(
+			"Hola %s,\n\n%s le ha fiado productos por $%d.\n\nAcepte aquí: %s",
+			customer.Name, tenant.BusinessName, credit.TotalAmount, acceptURL,
+		))
+		resp["email_url"] = fmt.Sprintf("mailto:%s?subject=%s&body=%s",
+			customer.Email, subject, body)
+	}
+
+	return gin.H{"data": resp}
 }
 
 // GetFiadoPublic returns fiado details for the public acceptance page.
