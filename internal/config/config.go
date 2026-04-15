@@ -54,6 +54,24 @@ func Load() *Config {
 			}
 		}
 	}
+	// Always include known frontends
+	knownOrigins := []string{
+		"https://vendia-admin.vercel.app",
+		"https://vendia-admin.onrender.com",
+		"http://localhost:3000",
+	}
+	for _, ko := range knownOrigins {
+		found := false
+		for _, ao := range allowedOrigins {
+			if ao == ko {
+				found = true
+				break
+			}
+		}
+		if !found {
+			allowedOrigins = append(allowedOrigins, ko)
+		}
+	}
 
 	rateLimit := 5
 	if v := os.Getenv("RATE_LIMIT_LOGIN"); v != "" {
