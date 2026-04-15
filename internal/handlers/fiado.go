@@ -218,7 +218,7 @@ func GetFiadoPublic(db *gorm.DB) gin.HandlerFunc {
 // POST /api/v1/public/fiado/:token/accept
 func AcceptFiado(db *gorm.DB) gin.HandlerFunc {
 	type Request struct {
-		PhoneConfirm string `json:"phone_confirm" binding:"required"`
+		PhoneConfirm string `json:"phone_confirm"`
 		AcceptTerms  bool   `json:"accept_terms"`
 	}
 
@@ -249,9 +249,15 @@ func AcceptFiado(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		if credit.Customer.Phone != req.PhoneConfirm {
+		// Verify phone only if customer has one registered
+		if credit.Customer.Phone != "" && req.PhoneConfirm != credit.Customer.Phone {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "el teléfono no coincide"})
 			return
+		}
+
+		// If customer had no phone and client provides one, save it
+		if credit.Customer.Phone == "" && req.PhoneConfirm != "" {
+			db.Model(&credit.Customer).Update("phone", req.PhoneConfirm)
 		}
 
 		now := time.Now()
