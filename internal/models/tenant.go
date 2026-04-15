@@ -34,6 +34,7 @@ type Tenant struct {
 	ChargeMode    string  `gorm:"default:'pre_payment'" json:"charge_mode"`
 	EnableFiados  bool    `gorm:"default:true" json:"enable_fiados"`
 	DefaultMargin float64 `gorm:"default:20" json:"default_margin"`
+	PanicMessage  string  `gorm:"default:''" json:"panic_message"`
 
 	NequiPhone     *string `gorm:"size:15" json:"nequi_phone"`
 	DaviplataPhone *string `gorm:"size:15" json:"daviplata_phone"`
