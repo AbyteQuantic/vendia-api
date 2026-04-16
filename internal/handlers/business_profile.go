@@ -29,6 +29,8 @@ func GetBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 				"nit":            tenant.NIT,
 				"razon_social":   tenant.RazonSocial,
 				"address":        tenant.Address,
+				"latitude":       tenant.Latitude,
+				"longitude":      tenant.Longitude,
 				"logo_url":       tenant.LogoURL,
 				"owner_name":     tenant.OwnerName,
 				"phone":          tenant.Phone,
@@ -46,6 +48,8 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 		NIT           *string  `json:"nit"`
 		RazonSocial   *string  `json:"razon_social"`
 		Address       *string  `json:"address"`
+		Latitude      *float64 `json:"latitude"`
+		Longitude     *float64 `json:"longitude"`
 	}
 
 	return func(c *gin.Context) {
@@ -77,6 +81,12 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 		}
 		if req.Address != nil {
 			updates["address"] = *req.Address
+		}
+		if req.Latitude != nil {
+			updates["latitude"] = *req.Latitude
+		}
+		if req.Longitude != nil {
+			updates["longitude"] = *req.Longitude
 		}
 
 		if len(updates) == 0 {

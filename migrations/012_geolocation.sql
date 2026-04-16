@@ -1,0 +1,11 @@
+-- +goose Up
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION DEFAULT 0;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION DEFAULT 0;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS panic_include_address BOOLEAN DEFAULT true;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS panic_include_gps BOOLEAN DEFAULT true;
+
+-- +goose Down
+ALTER TABLE tenants DROP COLUMN IF EXISTS latitude;
+ALTER TABLE tenants DROP COLUMN IF EXISTS longitude;
+ALTER TABLE tenants DROP COLUMN IF EXISTS panic_include_address;
+ALTER TABLE tenants DROP COLUMN IF EXISTS panic_include_gps;

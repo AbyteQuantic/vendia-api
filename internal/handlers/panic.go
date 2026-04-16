@@ -27,17 +27,21 @@ func GetPanicConfig(db *gorm.DB) gin.HandlerFunc {
 
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{
-				"panic_message": tenant.PanicMessage,
-				"contacts":      contacts,
+				"panic_message":         tenant.PanicMessage,
+				"panic_include_address": tenant.PanicIncludeAddress,
+				"panic_include_gps":     tenant.PanicIncludeGPS,
+				"contacts":             contacts,
 			},
 		})
 	}
 }
 
-// UpdatePanicMessage updates the panic message text.
+// UpdatePanicConfig updates the panic message and preferences.
 func UpdatePanicMessage(db *gorm.DB) gin.HandlerFunc {
 	type Request struct {
-		PanicMessage string `json:"panic_message" binding:"required"`
+		PanicMessage        *string `json:"panic_message"`
+		PanicIncludeAddress *bool   `json:"panic_include_address"`
+		PanicIncludeGPS     *bool   `json:"panic_include_gps"`
 	}
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
@@ -46,8 +50,20 @@ func UpdatePanicMessage(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		db.Model(&models.Tenant{}).Where("id = ?", tenantID).Update("panic_message", req.PanicMessage)
-		c.JSON(http.StatusOK, gin.H{"message": "mensaje de pánico actualizado"})
+		updates := map[string]any{}
+		if req.PanicMessage != nil {
+			updates["panic_message"] = *req.PanicMessage
+		}
+		if req.PanicIncludeAddress != nil {
+			updates["panic_include_address"] = *req.PanicIncludeAddress
+		}
+		if req.PanicIncludeGPS != nil {
+			updates["panic_include_gps"] = *req.PanicIncludeGPS
+		}
+		if len(updates) > 0 {
+			db.Model(&models.Tenant{}).Where("id = ?", tenantID).Updates(updates)
+		}
+		c.JSON(http.StatusOK, gin.H{"message": "configuración de pánico actualizada"})
 	}
 }
 
@@ -110,8 +126,16 @@ func DeleteEmergencyContact(db *gorm.DB) gin.HandlerFunc {
 // TriggerPanic sends emergency messages to all contacts (cloud-triggered).
 // Returns 200 immediately — messages are dispatched asynchronously.
 func TriggerPanic(db *gorm.DB) gin.HandlerFunc {
+	type Request struct {
+		LiveLatitude  float64 `json:"live_latitude"`
+		LiveLongitude float64 `json:"live_longitude"`
+	}
+
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+
+		var req Request
+		_ = c.ShouldBindJSON(&req)
 
 		var tenant models.Tenant
 		if err := db.First(&tenant, "id = ?", tenantID).Error; err != nil {
@@ -127,9 +151,26 @@ func TriggerPanic(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// Build message with location context
 		message := tenant.PanicMessage
 		if message == "" {
 			message = fmt.Sprintf("EMERGENCIA en %s. Necesito ayuda inmediata.", tenant.BusinessName)
+		}
+
+		// Append registered address if configured
+		if tenant.PanicIncludeAddress && tenant.Address != "" {
+			message += fmt.Sprintf("\n\nDireccion: %s", tenant.Address)
+		}
+
+		// Append Google Maps link with live GPS or registered coords
+		if tenant.PanicIncludeGPS {
+			lat, lng := req.LiveLatitude, req.LiveLongitude
+			if lat == 0 && lng == 0 {
+				lat, lng = tenant.Latitude, tenant.Longitude
+			}
+			if lat != 0 || lng != 0 {
+				message += fmt.Sprintf("\n\nUbicacion: https://maps.google.com/?q=%.6f,%.6f", lat, lng)
+			}
 		}
 
 		// Respond immediately — dispatch in background
@@ -143,10 +184,8 @@ func TriggerPanic(db *gorm.DB) gin.HandlerFunc {
 			for _, contact := range contacts {
 				switch contact.ContactMethod {
 				case "sms":
-					// TODO: Integrate Twilio SMS API
 					log.Printf("[PANIC-SMS] → %s (%s): %s", contact.Name, contact.PhoneNumber, message)
 				case "whatsapp":
-					// TODO: Integrate Meta WhatsApp Business API
 					log.Printf("[PANIC-WA] → %s (%s): %s", contact.Name, contact.PhoneNumber, message)
 				default:
 					log.Printf("[PANIC] → %s (%s) [%s]: %s", contact.Name, contact.PhoneNumber, contact.ContactMethod, message)
