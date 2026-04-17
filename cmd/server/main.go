@@ -100,6 +100,9 @@ func main() {
 	r.GET("/api/v1/public/fiado/:token", handlers.GetFiadoPublic(db))
 	r.POST("/api/v1/public/fiado/:token/accept", handlers.AcceptFiado(db))
 
+	// Public online orders (customer places order from catalog)
+	r.POST("/api/v1/store/:slug/online-order", handlers.PublicCreateOnlineOrder(db))
+
 	// ── Protected routes (JWT) ───────────────────────────────────────────────
 	v1 := r.Group("/api/v1")
 	v1.Use(globalLimiter)
@@ -175,6 +178,14 @@ func main() {
 		v1.POST("/tables", handlers.CreateTable(db))
 		v1.PATCH("/tables/:id", handlers.UpdateTable(db))
 		v1.POST("/tables/sync", handlers.SyncTables(db))
+
+		// Notifications
+		v1.GET("/notifications", handlers.ListNotifications(db))
+		v1.POST("/notifications/read", handlers.MarkNotificationsRead(db))
+
+		// Online orders (tenant management)
+		v1.GET("/online-orders", handlers.ListOnlineOrders(db))
+		v1.PATCH("/online-orders/:id", handlers.UpdateOnlineOrderStatus(db))
 
 		// Panic button
 		v1.GET("/store/panic-config", handlers.GetPanicConfig(db))

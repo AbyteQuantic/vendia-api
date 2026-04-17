@@ -81,6 +81,8 @@ func Migrate(db *gorm.DB) error {
 		&models.CatalogImage{},
 		&models.TenantPaymentMethod{},
 		&models.EmergencyContact{},
+		&models.Notification{},
+		&models.OnlineOrder{},
 		&models.User{},
 		&models.UserWorkspace{},
 		&models.Branch{},
