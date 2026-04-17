@@ -200,6 +200,38 @@ func GetFiadoPublic(db *gorm.DB) gin.HandlerFunc {
 			credit.FiadoStatus = FiadoLinkOpened
 		}
 
+		// Load payments for timeline
+		var payments []models.CreditPayment
+		db.Where("credit_account_id = ?", credit.ID).Order("created_at ASC").Find(&payments)
+
+		// Build timeline
+		type TimelineEntry struct {
+			Type      string `json:"type"` // debt or payment
+			Amount    int64  `json:"amount"`
+			Note      string `json:"note"`
+			CreatedAt string `json:"created_at"`
+		}
+		var timeline []TimelineEntry
+
+		// Initial debt
+		timeline = append(timeline, TimelineEntry{
+			Type:      "debt",
+			Amount:    credit.TotalAmount,
+			Note:      credit.Description,
+			CreatedAt: credit.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		})
+
+		for _, p := range payments {
+			timeline = append(timeline, TimelineEntry{
+				Type:      "payment",
+				Amount:    p.Amount,
+				Note:      p.Note,
+				CreatedAt: p.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			})
+		}
+
+		balance := credit.TotalAmount - credit.PaidAmount
+
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{
 				"business_name":  tenant.BusinessName,
@@ -207,8 +239,14 @@ func GetFiadoPublic(db *gorm.DB) gin.HandlerFunc {
 				"customer_name":  credit.Customer.Name,
 				"customer_phone": credit.Customer.Phone,
 				"total_amount":   credit.TotalAmount,
+				"paid_amount":    credit.PaidAmount,
+				"balance":        balance,
+				"description":    credit.Description,
 				"fiado_status":   credit.FiadoStatus,
+				"status":         credit.Status,
 				"created_at":     credit.CreatedAt,
+				"accepted_at":    credit.AcceptedAt,
+				"timeline":       timeline,
 			},
 		})
 	}

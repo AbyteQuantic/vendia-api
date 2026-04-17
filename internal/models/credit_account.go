@@ -10,6 +10,7 @@ type CreditAccount struct {
 	SaleID      *string    `gorm:"type:uuid" json:"sale_id,omitempty"`
 	TotalAmount int64      `gorm:"not null" json:"total_amount"`
 	PaidAmount  int64      `gorm:"default:0" json:"paid_amount"`
+	Description string     `gorm:"default:''" json:"description"`
 	Status      string     `gorm:"default:'open'" json:"status"`
 	DueDate     *time.Time `json:"due_date"`
 
