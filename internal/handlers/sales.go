@@ -54,6 +54,20 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// When the sale is linked to an existing credit account but the
+		// client did not send customer_id, inherit it from the credit so
+		// analytics still attribute the purchase to the right customer.
+		if hasCreditAccount && !hasCustomer {
+			var linked models.CreditAccount
+			if err := db.Select("customer_id").
+				Where("id = ? AND tenant_id = ?", *req.CreditAccountID, tenantID).
+				First(&linked).Error; err == nil && linked.CustomerID != "" {
+				cid := linked.CustomerID
+				req.CustomerID = &cid
+				hasCustomer = true
+			}
+		}
+
 		var sale models.Sale
 		err := db.Transaction(func(tx *gorm.DB) error {
 			var items []models.SaleItem
