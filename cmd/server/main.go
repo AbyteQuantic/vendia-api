@@ -181,6 +181,8 @@ func main() {
 		v1.POST("/credits", handlers.CreateCredit(db))
 		v1.GET("/credits/:id", handlers.GetCredit(db))
 		v1.POST("/credits/:id/payments", handlers.CreatePayment(db))
+		// Append to an already-accepted open account (no handshake needed)
+		v1.POST("/credits/:id/append", handlers.AppendToFiado(db))
 
 		// Fiado handshake (protected - init + check status)
 		v1.POST("/fiado/init", handlers.InitFiado(db))

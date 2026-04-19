@@ -108,6 +108,31 @@ func InitFiado(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 
+		// ── One-Open-Account rule: if this customer already has an
+		// accepted (open) fiado, bump its total and return the SAME
+		// credit_id + fiado_token (no new handshake needed).
+		// Only accepted accounts are merged — pending/link_sent are not.
+		var openAcct models.CreditAccount
+		if err := db.Where(
+			"tenant_id = ? AND customer_id = ? AND status = ? AND fiado_status = ?",
+			tenantID, customer.ID, "open", FiadoAccepted,
+		).First(&openAcct).Error; err == nil {
+			newTotal := openAcct.TotalAmount + req.TotalAmount
+			if err := db.Model(&openAcct).Update("total_amount", newTotal).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "error al actualizar fiado existente"})
+				return
+			}
+			openAcct.TotalAmount = newTotal
+			resp := buildFiadoResponse(db, openAcct, tenantID)
+			// Mark as merged so the client knows to skip the WhatsApp handshake.
+			if data, ok := resp["data"].(gin.H); ok {
+				data["merged"] = true
+				data["added_amount"] = req.TotalAmount
+			}
+			c.JSON(http.StatusOK, resp)
+			return
+		}
+
 		// ── Create credit account ───────────────────────────────────────
 		token := req.IdempotencyKey
 		if token == "" || !models.IsValidUUID(token) {
@@ -129,6 +154,57 @@ func InitFiado(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusCreated, buildFiadoResponse(db, credit, tenantID))
+	}
+}
+
+// AppendToFiado adds an amount to an existing, already-accepted (open) credit
+// account. No handshake, no new token — the owner already authorized this
+// line of credit. Used when the cashier picks "Agregar a esta cuenta" from
+// the Cuaderno detail screen.
+// POST /api/v1/fiado/:id/append
+func AppendToFiado(db *gorm.DB) gin.HandlerFunc {
+	type Request struct {
+		TotalAmount int64  `json:"total_amount" binding:"required,gt=0"`
+		Note        string `json:"note"`
+	}
+
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		creditID := c.Param("id")
+
+		var req Request
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		var credit models.CreditAccount
+		if err := db.Where("id = ? AND tenant_id = ?", creditID, tenantID).
+			First(&credit).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "fiado no encontrado"})
+			return
+		}
+		if credit.Status != "open" || credit.FiadoStatus != FiadoAccepted {
+			c.JSON(http.StatusConflict, gin.H{
+				"error": "la cuenta no está abierta o aún no fue aceptada por el cliente",
+			})
+			return
+		}
+
+		newTotal := credit.TotalAmount + req.TotalAmount
+		if err := db.Model(&credit).Update("total_amount", newTotal).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al actualizar fiado"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"data": gin.H{
+				"credit_id":    credit.ID,
+				"total_amount": newTotal,
+				"added_amount": req.TotalAmount,
+				"balance":      newTotal - credit.PaidAmount,
+			},
+		})
 	}
 }
 
