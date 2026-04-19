@@ -202,32 +202,87 @@ func (s *CatalogService) SearchCatalogWithFallback(ctx context.Context, query st
 	return results, nil
 }
 
-// CleanupExpiredImages deletes unaccepted images older than maxAge from bucket and DB.
+// PromoteInUseImages marks as accepted every catalog image that is already
+// referenced by a product's photo_url/image_url. This is a safety net so a
+// stale cleanup run can never delete a bucket file that a merchant's live
+// product depends on.
+func (s *CatalogService) PromoteInUseImages() (int64, error) {
+	res := s.db.Exec(`
+		UPDATE catalog_images ci
+		SET is_accepted = true, updated_at = NOW()
+		FROM products p
+		WHERE ci.is_accepted = false
+		  AND (p.photo_url = ci.image_url OR p.image_url = ci.image_url)
+	`)
+	if res.Error != nil {
+		return 0, fmt.Errorf("promote in-use images: %w", res.Error)
+	}
+	return res.RowsAffected, nil
+}
+
+// CleanupExpiredImages deletes catalog_images rows that expired without being
+// accepted. A row is only safe to delete when no product still references the
+// underlying bucket file — otherwise the file is live merchant data and must
+// never be removed.
 func (s *CatalogService) CleanupExpiredImages(ctx context.Context, maxAge time.Duration) error {
 	cutoff := time.Now().Add(-maxAge)
 
 	var images []models.CatalogImage
 	if err := s.db.Where("is_accepted = false AND created_at < ?", cutoff).Find(&images).Error; err != nil {
-		return err
+		return fmt.Errorf("load expired images: %w", err)
 	}
 
+	promoted := 0
+	deleted := 0
 	for _, img := range images {
+		var inUse int64
+		if err := s.db.Model(&models.Product{}).
+			Where("photo_url = ? OR image_url = ?", img.ImageURL, img.ImageURL).
+			Count(&inUse).Error; err != nil {
+			log.Printf("[CATALOG] cleanup: in-use check failed for %s: %v", img.StorageKey, err)
+			continue
+		}
+		if inUse > 0 {
+			// Merchant's live product depends on this file. Promote the row so
+			// we skip it on future runs instead of re-checking every hour.
+			if err := s.db.Model(&img).Update("is_accepted", true).Error; err != nil {
+				log.Printf("[CATALOG] cleanup: failed to promote in-use image %s: %v", img.StorageKey, err)
+				continue
+			}
+			promoted++
+			continue
+		}
 		if s.storage != nil && img.StorageKey != "" {
 			if err := s.storage.Delete(ctx, "product-photos", img.StorageKey); err != nil {
-				log.Printf("[CATALOG] warning: failed to delete image from bucket: %v", err)
+				log.Printf("[CATALOG] warning: failed to delete %s from bucket: %v", img.StorageKey, err)
+				continue
 			}
 		}
-		s.db.Delete(&img)
+		if err := s.db.Delete(&img).Error; err != nil {
+			log.Printf("[CATALOG] cleanup: failed to delete row %s: %v", img.ID, err)
+			continue
+		}
+		deleted++
 	}
 
-	if len(images) > 0 {
-		log.Printf("[CATALOG] cleaned up %d expired images", len(images))
+	if promoted > 0 || deleted > 0 {
+		log.Printf("[CATALOG] cleanup: promoted %d in-use, deleted %d orphaned", promoted, deleted)
 	}
 	return nil
 }
 
-// StartCleanupTicker runs image cleanup every hour.
+// StartCleanupTicker runs image cleanup every hour. TTL is 7 days to give
+// merchants time to finish editing without losing their uploaded/generated
+// photos. The in-use check in CleanupExpiredImages is the hard guarantee.
 func (s *CatalogService) StartCleanupTicker(ctx context.Context) {
+	// Immediate startup safety net: promote any live product image that is
+	// still marked pending in catalog_images.
+	if n, err := s.PromoteInUseImages(); err != nil {
+		log.Printf("[CATALOG] startup promote failed: %v", err)
+	} else if n > 0 {
+		log.Printf("[CATALOG] startup: promoted %d in-use catalog images", n)
+	}
+
 	go func() {
 		ticker := time.NewTicker(1 * time.Hour)
 		defer ticker.Stop()
@@ -236,11 +291,11 @@ func (s *CatalogService) StartCleanupTicker(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if err := s.CleanupExpiredImages(ctx, 30*time.Minute); err != nil {
+				if err := s.CleanupExpiredImages(ctx, 7*24*time.Hour); err != nil {
 					log.Printf("[CATALOG] cleanup error: %v", err)
 				}
 			}
 		}
 	}()
-	log.Println("[SVC] Catalog image cleanup ticker started (every 1h, TTL 30min)")
+	log.Println("[SVC] Catalog image cleanup ticker started (every 1h, TTL 7 days, in-use protected)")
 }

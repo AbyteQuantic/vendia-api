@@ -56,6 +56,12 @@ func main() {
 	catalogSvc := services.NewCatalogService(db, storageSvc)
 	catalogSvc.StartCleanupTicker(context.Background())
 
+	// Daily self-heal: scan products for URLs whose bucket file is gone and
+	// clear them so the UI can show "generate photo" instead of a broken image.
+	// Loud regression alarm if image loss ever happens again.
+	imageReconciler := services.NewImageReconciler(db, cfg.SupabaseURL)
+	imageReconciler.StartDailyReconcile(context.Background())
+
 	itunesSvc := services.NewITunesService()
 
 	// ── Gin setup ───────────────────────────────────────────────────────────
