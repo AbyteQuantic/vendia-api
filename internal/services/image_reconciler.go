@@ -110,9 +110,12 @@ func (r *ImageReconciler) ReconcileProductImages(ctx context.Context) (Reconcile
 	return stats, nil
 }
 
-// findBroken returns the subset of URLs that respond with 404 Not Found.
-// Network errors and other statuses are treated as "maybe ok" and skipped so
-// a transient outage cannot wipe merchant data.
+// findBroken returns the subset of URLs whose file is definitively gone.
+// Supabase's public storage endpoint responds with 400 for missing objects
+// (not 404), so both codes are treated as "gone". Transient 5xx, timeouts
+// and DNS failures are deliberately ignored so a flaky network cannot wipe
+// merchant data. Every candidate is probed twice with a short delay before
+// being confirmed broken — another belt on the same pair of suspenders.
 func (r *ImageReconciler) findBroken(ctx context.Context, urls map[string]struct{}, concurrency int) map[string]struct{} {
 	broken := make(map[string]struct{})
 	var mu sync.Mutex
@@ -120,26 +123,43 @@ func (r *ImageReconciler) findBroken(ctx context.Context, urls map[string]struct
 	type job struct{ url string }
 	ch := make(chan job)
 
+	isGone := func(code int) bool {
+		return code == http.StatusNotFound || code == http.StatusBadRequest
+	}
+
+	probeOnce := func(url string) (int, bool) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
+		if err != nil {
+			return 0, false
+		}
+		resp, err := r.client.Do(req)
+		if err != nil {
+			return 0, false
+		}
+		resp.Body.Close()
+		return resp.StatusCode, true
+	}
+
 	var wg sync.WaitGroup
 	for i := 0; i < concurrency; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for j := range ch {
-				req, err := http.NewRequestWithContext(ctx, http.MethodHead, j.url, nil)
-				if err != nil {
+				code, ok := probeOnce(j.url)
+				if !ok || !isGone(code) {
 					continue
 				}
-				resp, err := r.client.Do(req)
-				if err != nil {
+				// Confirm with a second probe to avoid deleting URLs due to a
+				// one-off storage hiccup.
+				time.Sleep(500 * time.Millisecond)
+				code2, ok2 := probeOnce(j.url)
+				if !ok2 || !isGone(code2) {
 					continue
 				}
-				resp.Body.Close()
-				if resp.StatusCode == http.StatusNotFound {
-					mu.Lock()
-					broken[j.url] = struct{}{}
-					mu.Unlock()
-				}
+				mu.Lock()
+				broken[j.url] = struct{}{}
+				mu.Unlock()
 			}
 		}()
 	}
