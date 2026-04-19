@@ -3,10 +3,11 @@ package models
 type WorkspaceRole string
 
 const (
-	RoleOwner      WorkspaceRole = "owner"
-	RoleWSAdmin    WorkspaceRole = "admin"
-	RoleWSCashier  WorkspaceRole = "cashier"
-	RoleWSWaiter   WorkspaceRole = "waiter"
+	RoleOwner            WorkspaceRole = "owner"
+	RoleWSAdmin          WorkspaceRole = "admin"
+	RoleWSCashier        WorkspaceRole = "cashier"
+	RoleWSWaiter         WorkspaceRole = "waiter"
+	RoleWSInventoryMgr   WorkspaceRole = "inventory_manager"
 )
 
 type UserWorkspace struct {

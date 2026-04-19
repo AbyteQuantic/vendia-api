@@ -27,6 +27,8 @@ type CreateSaleRequest struct {
 func CreateSale(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+		userID := middleware.GetUserID(c)
+		branchID := middleware.GetBranchID(c)
 
 		var req CreateSaleRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -87,6 +89,8 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 
 			sale = models.Sale{
 				TenantID:      tenantID,
+				CreatedBy:     userID,
+				BranchID:      branchID,
 				Total:         total,
 				PaymentMethod: req.PaymentMethod,
 				CustomerID:    req.CustomerID,
@@ -104,6 +108,8 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 			if sale.IsCredit && req.CustomerID != nil {
 				credit := models.CreditAccount{
 					TenantID:    tenantID,
+					CreatedBy:   userID,
+					BranchID:    branchID,
 					CustomerID:  *req.CustomerID,
 					SaleID:      &sale.ID,
 					TotalAmount: int64(total),

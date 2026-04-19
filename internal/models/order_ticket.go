@@ -23,6 +23,8 @@ type OrderTicket struct {
 	BaseModel
 
 	TenantID        string      `gorm:"type:uuid;not null;index" json:"tenant_id"`
+	CreatedBy       string      `gorm:"type:uuid;index" json:"created_by,omitempty"`
+	BranchID        string      `gorm:"type:uuid;index" json:"branch_id,omitempty"`
 	Label           string      `gorm:"not null" json:"label"`
 	CustomerName    string      `json:"customer_name,omitempty"`
 	EmployeeUUID    string      `gorm:"type:uuid" json:"employee_uuid,omitempty"`

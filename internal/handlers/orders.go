@@ -32,6 +32,8 @@ func CreateOrder(db *gorm.DB) gin.HandlerFunc {
 
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+		userID := middleware.GetUserID(c)
+		branchID := middleware.GetBranchID(c)
 
 		var req Request
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -64,6 +66,8 @@ func CreateOrder(db *gorm.DB) gin.HandlerFunc {
 
 		order := models.OrderTicket{
 			TenantID:        tenantID,
+			CreatedBy:       userID,
+			BranchID:        branchID,
 			Label:           req.Label,
 			CustomerName:    req.CustomerName,
 			EmployeeUUID:    req.EmployeeUUID,

@@ -267,6 +267,10 @@ func main() {
 		v1.POST("/tenant/generate-logo", handlers.GenerateLogo(db, geminiSvc, storageSvc))
 		v1.POST("/tenant/upload-logo", handlers.UploadLogo(db, storageSvc))
 
+		// Owner PIN — cashier handshake for restricted actions (new fiado, void, etc.)
+		v1.POST("/tenant/owner-pin", handlers.SetOwnerPin(db))
+		v1.POST("/tenant/owner-pin/verify", handlers.VerifyOwnerPin(db))
+
 		// Analytics / Reportes
 		v1.GET("/analytics/dashboard", handlers.AnalyticsDashboard(db))
 		v1.GET("/analytics/top-products", handlers.TopProducts(db))

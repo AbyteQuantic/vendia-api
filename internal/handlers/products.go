@@ -50,6 +50,8 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+		userID := middleware.GetUserID(c)
+		branchID := middleware.GetBranchID(c)
 
 		var req Request
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -64,6 +66,8 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 
 		product := models.Product{
 			TenantID:          tenantID,
+			CreatedBy:         userID,
+			BranchID:          branchID,
 			Name:              req.Name,
 			Price:             req.Price,
 			Stock:             req.Stock,

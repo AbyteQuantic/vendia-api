@@ -20,6 +20,9 @@ type Tenant struct {
 	OwnerName    string `gorm:"not null" json:"owner_name"`
 	Phone        string `gorm:"not null;uniqueIndex" json:"phone"`
 	PasswordHash string `gorm:"not null" json:"-"`
+	// OwnerPinHash is bcrypt-hashed 4-digit PIN used to authorize cashier
+	// actions that require owner approval (e.g. new fiado for unknown customer).
+	OwnerPinHash string `gorm:"default:''" json:"-"`
 
 	BusinessName  string   `gorm:"not null" json:"business_name"`
 	BusinessTypes []string `gorm:"serializer:json;default:'[]'" json:"business_types"`

@@ -48,6 +48,8 @@ func CreateCredit(db *gorm.DB) gin.HandlerFunc {
 
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+		userID := middleware.GetUserID(c)
+		branchID := middleware.GetBranchID(c)
 
 		var req Request
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -57,6 +59,8 @@ func CreateCredit(db *gorm.DB) gin.HandlerFunc {
 
 		credit := models.CreditAccount{
 			TenantID:    tenantID,
+			CreatedBy:   userID,
+			BranchID:    branchID,
 			CustomerID:  req.CustomerID,
 			SaleID:      &req.SaleID,
 			TotalAmount: req.TotalAmount,
@@ -98,6 +102,8 @@ func CreatePayment(db *gorm.DB) gin.HandlerFunc {
 
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+		userID := middleware.GetUserID(c)
+		branchID := middleware.GetBranchID(c)
 		creditID := c.Param("id")
 
 		var req Request
@@ -107,7 +113,7 @@ func CreatePayment(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		svc := services.NewCreditService(db)
-		payment, err := svc.RegisterPayment(tenantID, creditID, req.Amount, req.PaymentMethod, req.Note)
+		payment, err := svc.RegisterPaymentWithActor(tenantID, creditID, userID, branchID, req.Amount, req.PaymentMethod, req.Note)
 		if err != nil {
 			if err == services.ErrCreditNotFound {
 				c.JSON(http.StatusNotFound, gin.H{"error": "crédito no encontrado"})
