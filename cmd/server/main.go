@@ -62,6 +62,14 @@ func main() {
 	imageReconciler := services.NewImageReconciler(db, cfg.SupabaseURL)
 	imageReconciler.StartDailyReconcile(context.Background())
 
+	// Daily bucket mirror: copies product-photos and logo buckets into
+	// matching *-backup buckets so accidental wipes stay recoverable for at
+	// least one cycle. No-op if Supabase creds are missing.
+	if cfg.SupabaseURL != "" && cfg.SupabaseServiceKey != "" {
+		backupSvc := services.NewBackupService(cfg.SupabaseURL, cfg.SupabaseServiceKey)
+		backupSvc.StartDailyBackup(context.Background())
+	}
+
 	itunesSvc := services.NewITunesService()
 
 	// ── Gin setup ───────────────────────────────────────────────────────────

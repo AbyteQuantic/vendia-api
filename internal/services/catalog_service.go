@@ -71,17 +71,29 @@ func (s *CatalogService) CountAcceptedImages(catalogProductID string) (int64, er
 	return count, err
 }
 
-// CreatePendingImage creates an unaccepted catalog image record.
+// CreatePendingImage is deprecated. Use CreateCatalogImage instead.
+// Kept for backward compatibility during the transition; behaves identically
+// to CreateCatalogImage (auto-accepted).
 func (s *CatalogService) CreatePendingImage(catalogProductID, tenantID, imageURL, storageKey string) (*models.CatalogImage, error) {
+	return s.CreateCatalogImage(catalogProductID, tenantID, imageURL, storageKey)
+}
+
+// CreateCatalogImage records a new catalog image as already accepted. We no
+// longer use a pending state — an image that is linked to a merchant's
+// product is always in use, and keeping a half-life "pending" state was the
+// root cause of the cleanup/deletion bug. Community moderation, if added
+// later, belongs on a separate workflow that operates on its own storage
+// prefix (see CleanupExpiredImages).
+func (s *CatalogService) CreateCatalogImage(catalogProductID, tenantID, imageURL, storageKey string) (*models.CatalogImage, error) {
 	img := models.CatalogImage{
 		CatalogProductID:  catalogProductID,
 		ImageURL:          imageURL,
 		StorageKey:        storageKey,
 		CreatedByTenantID: tenantID,
-		IsAccepted:        false,
+		IsAccepted:        true,
 	}
 	if err := s.db.Create(&img).Error; err != nil {
-		return nil, fmt.Errorf("failed to create catalog image: %w", err)
+		return nil, fmt.Errorf("create catalog image: %w", err)
 	}
 	return &img, nil
 }
@@ -220,10 +232,25 @@ func (s *CatalogService) PromoteInUseImages() (int64, error) {
 	return res.RowsAffected, nil
 }
 
+// catalogPendingPrefix is the ONLY storage prefix whose objects this service
+// is allowed to delete. Merchant-owned product photos live under "products/"
+// and must never be removed by a background job. This prefix is currently
+// unused (we no longer create pending rows), so CleanupExpiredImages is
+// effectively a no-op guard that stays wired in case a future community-
+// moderation workflow starts writing into "catalog-pending/".
+const catalogPendingPrefix = "catalog-pending/"
+
 // CleanupExpiredImages deletes catalog_images rows that expired without being
-// accepted. A row is only safe to delete when no product still references the
-// underlying bucket file — otherwise the file is live merchant data and must
-// never be removed.
+// accepted. It has three layers of guard:
+//  1. The row's storage_key must live under catalog-pending/. Anything else
+//     is merchant-owned and off-limits.
+//  2. No product row may still reference the image_url. If one does, the
+//     row is promoted to accepted and the bucket file is left alone.
+//  3. Only then do we delete the bucket file and the row.
+//
+// With current code paths no row is ever created with is_accepted=false, so
+// this function reports zero work on every run. The guards remain as hard
+// defense in depth for future changes.
 func (s *CatalogService) CleanupExpiredImages(ctx context.Context, maxAge time.Duration) error {
 	cutoff := time.Now().Add(-maxAge)
 
@@ -234,6 +261,7 @@ func (s *CatalogService) CleanupExpiredImages(ctx context.Context, maxAge time.D
 
 	promoted := 0
 	deleted := 0
+	refused := 0
 	for _, img := range images {
 		var inUse int64
 		if err := s.db.Model(&models.Product{}).
@@ -243,13 +271,19 @@ func (s *CatalogService) CleanupExpiredImages(ctx context.Context, maxAge time.D
 			continue
 		}
 		if inUse > 0 {
-			// Merchant's live product depends on this file. Promote the row so
-			// we skip it on future runs instead of re-checking every hour.
 			if err := s.db.Model(&img).Update("is_accepted", true).Error; err != nil {
 				log.Printf("[CATALOG] cleanup: failed to promote in-use image %s: %v", img.StorageKey, err)
 				continue
 			}
 			promoted++
+			continue
+		}
+		// Prefix guard: never delete bucket objects outside the catalog-pending
+		// namespace. If we ever see a row here with a merchant-owned key,
+		// refuse and log loudly so the mismatch shows up in observability.
+		if img.StorageKey != "" && !strings.HasPrefix(img.StorageKey, catalogPendingPrefix) {
+			log.Printf("[CATALOG] cleanup REFUSED: storage_key %q is outside %q — skipping delete", img.StorageKey, catalogPendingPrefix)
+			refused++
 			continue
 		}
 		if s.storage != nil && img.StorageKey != "" {
@@ -265,8 +299,8 @@ func (s *CatalogService) CleanupExpiredImages(ctx context.Context, maxAge time.D
 		deleted++
 	}
 
-	if promoted > 0 || deleted > 0 {
-		log.Printf("[CATALOG] cleanup: promoted %d in-use, deleted %d orphaned", promoted, deleted)
+	if promoted > 0 || deleted > 0 || refused > 0 {
+		log.Printf("[CATALOG] cleanup: promoted %d in-use, deleted %d catalog-pending, refused %d merchant-owned", promoted, deleted, refused)
 	}
 	return nil
 }
