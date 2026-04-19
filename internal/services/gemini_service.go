@@ -240,12 +240,19 @@ REGLAS ESTRICTAS (PROHIBIDO violarlas):
 3. PROHIBIDO inventar detalles que no existan en la foto original.
 4. Tu ÚNICA función es:
    a) Eliminar el fondo y reemplazarlo por BLANCO PURO sólido (#FFFFFF).
-   b) Centrar el producto completo en el encuadre.
+   b) Centrar el producto completo en el encuadre con margen seguro.
    c) Aplicar iluminación suave y uniforme tipo estudio fotográfico.
 5. Si el producto está recortado en los bordes, autocompleta el envase respetando la geometría y textura ORIGINAL.
 6. Sin texto adicional, sin logos extras, sin marcas de agua.
 
-Resultado esperado: Fotografía tipo catálogo Amazon — producto REAL sobre fondo blanco puro.`, description)
+ENCUADRE (REGLA CRÍTICA — no violar):
+- Formato cuadrado 1:1.
+- El producto NUNCA debe tocar los bordes de la imagen.
+- El producto debe ocupar como máximo el 75%% del área de la imagen.
+- Dejar un margen de "safe zone" BLANCO de al menos 12%% en los cuatro lados.
+- Si la foto original está recortada o acercada, ALÉJATE: reduce la escala del producto hasta que entre completo con margen. No uses zoom/close-up.
+
+Resultado esperado: Fotografía tipo catálogo Amazon — producto REAL sobre fondo blanco puro, centrado con aire alrededor.`, description)
 
 	b64 := base64.StdEncoding.EncodeToString(imageData)
 
@@ -330,9 +337,17 @@ Resultado esperado: Fotografía tipo catálogo Amazon — producto REAL sobre fo
 func (s *GeminiService) GenerateProductImage(ctx context.Context, productInfo string) ([]byte, error) {
 	prompt := fmt.Sprintf(`Genera una foto profesional de e-commerce del siguiente producto: %s
 
-Instrucciones estrictas:
+ENCUADRE (REGLA CRÍTICA — no violar):
+- Formato cuadrado 1:1.
+- El producto NUNCA debe tocar los bordes de la imagen.
+- El producto debe ocupar como máximo el 75%% del área de la imagen.
+- Dejar un margen de "safe zone" BLANCO de al menos 12%% en los cuatro lados.
+- Centrar el producto horizontal y verticalmente dentro de ese margen.
+- Prohibido acercamientos (close-up) que recorten el producto o hagan que roce los bordes.
+
+Estilo fotográfico:
 - Fondo BLANCO puro (#FFFFFF), limpio, sin sombras de fondo.
-- Mostrar el producto completo, centrado, sin recortar.
+- Producto completo y entero visible, sin recortar.
 - Iluminación suave y uniforme tipo estudio fotográfico.
 - Colores fieles al producto real, nítidos y vibrantes.
 - Sin texto, logos adicionales, ni marcas de agua.
