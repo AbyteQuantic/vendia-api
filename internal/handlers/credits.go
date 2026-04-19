@@ -93,6 +93,80 @@ func GetCredit(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// CloseCredit marks a credit account as settled even when a residual
+// balance remains — used when the tendero negotiates a discount or writes
+// off a small leftover. The residual is recorded as a CreditPayment with
+// method='write_off' so the books still balance and the timeline has an
+// auditable entry.
+func CloseCredit(db *gorm.DB) gin.HandlerFunc {
+	type Request struct {
+		Reason string `json:"reason"`
+	}
+
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		userID := middleware.GetUserID(c)
+		branchID := middleware.GetBranchID(c)
+		creditID := c.Param("id")
+
+		var req Request
+		_ = c.ShouldBindJSON(&req) // reason is optional; ignore binding errors
+
+		var credit models.CreditAccount
+		if err := db.Where("id = ? AND tenant_id = ?", creditID, tenantID).
+			First(&credit).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "crédito no encontrado"})
+			return
+		}
+
+		if credit.Status == "paid" {
+			c.JSON(http.StatusConflict, gin.H{"error": "la cuenta ya está cerrada"})
+			return
+		}
+
+		remaining := credit.TotalAmount - credit.PaidAmount
+		note := req.Reason
+		if note == "" {
+			note = "Saldo condonado al cerrar la cuenta"
+		}
+
+		err := db.Transaction(func(tx *gorm.DB) error {
+			if remaining > 0 {
+				writeOff := models.CreditPayment{
+					CreditAccountID: creditID,
+					CreatedBy:       userID,
+					BranchID:        branchID,
+					Amount:          remaining,
+					PaymentMethod:   "write_off",
+					Note:            note,
+				}
+				if err := tx.Create(&writeOff).Error; err != nil {
+					return err
+				}
+			}
+			return tx.Model(&credit).Updates(map[string]any{
+				"paid_amount": credit.TotalAmount,
+				"status":      "paid",
+			}).Error
+		})
+
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al cerrar la cuenta"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"data": gin.H{
+				"credit_id":     credit.ID,
+				"status":        "paid",
+				"written_off":   remaining,
+				"total_amount":  credit.TotalAmount,
+				"reason":        note,
+			},
+		})
+	}
+}
+
 func CreatePayment(db *gorm.DB) gin.HandlerFunc {
 	type Request struct {
 		Amount        int64  `json:"amount" binding:"required,gt=0"`

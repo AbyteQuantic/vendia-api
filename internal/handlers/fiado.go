@@ -301,11 +301,12 @@ func GetFiadoPublic(db *gorm.DB) gin.HandlerFunc {
 			Subtotal float64 `json:"subtotal"`
 		}
 		type TimelineEntry struct {
-			Type      string         `json:"type"` // "debt" or "payment"
-			Amount    int64          `json:"amount"`
-			Note      string         `json:"note"`
-			CreatedAt string         `json:"created_at"`
-			Items     []TimelineItem `json:"items,omitempty"`
+			Type          string         `json:"type"` // "debt" or "payment"
+			Amount        int64          `json:"amount"`
+			Note          string         `json:"note"`
+			CreatedAt     string         `json:"created_at"`
+			Items         []TimelineItem `json:"items,omitempty"`
+			PaymentMethod string         `json:"payment_method,omitempty"`
 		}
 		var timeline []TimelineEntry
 
@@ -345,10 +346,11 @@ func GetFiadoPublic(db *gorm.DB) gin.HandlerFunc {
 
 		for _, p := range payments {
 			timeline = append(timeline, TimelineEntry{
-				Type:      "payment",
-				Amount:    p.Amount,
-				Note:      p.Note,
-				CreatedAt: p.CreatedAt.Format("2006-01-02T15:04:05Z"),
+				Type:          "payment",
+				Amount:        p.Amount,
+				Note:          p.Note,
+				CreatedAt:     p.CreatedAt.Format("2006-01-02T15:04:05Z"),
+				PaymentMethod: p.PaymentMethod,
 			})
 		}
 

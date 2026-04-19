@@ -183,6 +183,8 @@ func main() {
 		v1.POST("/credits/:id/payments", handlers.CreatePayment(db))
 		// Append to an already-accepted open account (no handshake needed)
 		v1.POST("/credits/:id/append", handlers.AppendToFiado(db))
+		// Close a fiado manually — write off any residual balance
+		v1.POST("/credits/:id/close", handlers.CloseCredit(db))
 
 		// Fiado handshake (protected - init + check status)
 		v1.POST("/fiado/init", handlers.InitFiado(db))
