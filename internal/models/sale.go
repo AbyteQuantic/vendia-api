@@ -22,7 +22,11 @@ type Sale struct {
 	EmployeeName  string        `json:"employee_name,omitempty"`
 	ReceiptNumber int64         `gorm:"index" json:"receipt_number,omitempty"`
 	IsCredit      bool          `gorm:"default:false" json:"is_credit"`
-	Items         []SaleItem    `gorm:"foreignKey:SaleID" json:"items"`
+	// CreditAccountID links this sale to a specific open fiado so the public
+	// acceptance page can show itemized detail per debt entry. Nullable for
+	// cash/transfer/card sales.
+	CreditAccountID *string    `gorm:"type:uuid;index" json:"credit_account_id,omitempty"`
+	Items           []SaleItem `gorm:"foreignKey:SaleID" json:"items"`
 }
 
 type SaleItem struct {

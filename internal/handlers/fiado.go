@@ -280,22 +280,68 @@ func GetFiadoPublic(db *gorm.DB) gin.HandlerFunc {
 		var payments []models.CreditPayment
 		db.Where("credit_account_id = ?", credit.ID).Order("created_at ASC").Find(&payments)
 
-		// Build timeline
+		// Load all sales linked to this credit — both the original (if the
+		// credit has a sale_id) and every append (sales with credit_account_id
+		// set). Preload items so the customer can see what they bought.
+		var sales []models.Sale
+		saleQuery := db.Preload("Items").Where("tenant_id = ?", credit.TenantID)
+		conds := "credit_account_id = ?"
+		args := []any{credit.ID}
+		if credit.SaleID != nil && *credit.SaleID != "" {
+			conds = "credit_account_id = ? OR id = ?"
+			args = []any{credit.ID, *credit.SaleID}
+		}
+		saleQuery.Where(conds, args...).Order("created_at ASC").Find(&sales)
+
+		// Timeline entry — a single struct serves both "compra" and "abono".
+		type TimelineItem struct {
+			Name     string  `json:"name"`
+			Quantity int     `json:"quantity"`
+			Price    float64 `json:"price"`
+			Subtotal float64 `json:"subtotal"`
+		}
 		type TimelineEntry struct {
-			Type      string `json:"type"` // debt or payment
-			Amount    int64  `json:"amount"`
-			Note      string `json:"note"`
-			CreatedAt string `json:"created_at"`
+			Type      string         `json:"type"` // "debt" or "payment"
+			Amount    int64          `json:"amount"`
+			Note      string         `json:"note"`
+			CreatedAt string         `json:"created_at"`
+			Items     []TimelineItem `json:"items,omitempty"`
 		}
 		var timeline []TimelineEntry
 
-		// Initial debt
-		timeline = append(timeline, TimelineEntry{
-			Type:      "debt",
-			Amount:    credit.TotalAmount,
-			Note:      credit.Description,
-			CreatedAt: credit.CreatedAt.Format("2006-01-02T15:04:05Z"),
-		})
+		// One debt entry per linked sale (with items). If no sales are
+		// linked yet — e.g. legacy fiados opened via InitFiado before the
+		// sale-link feature — fall back to a single summary debt entry.
+		itemizedTotal := int64(0)
+		for _, s := range sales {
+			items := make([]TimelineItem, 0, len(s.Items))
+			for _, it := range s.Items {
+				items = append(items, TimelineItem{
+					Name:     it.Name,
+					Quantity: it.Quantity,
+					Price:    it.Price,
+					Subtotal: it.Subtotal,
+				})
+			}
+			timeline = append(timeline, TimelineEntry{
+				Type:      "debt",
+				Amount:    int64(s.Total),
+				Note:      "",
+				CreatedAt: s.CreatedAt.Format("2006-01-02T15:04:05Z"),
+				Items:     items,
+			})
+			itemizedTotal += int64(s.Total)
+		}
+		// Bridge legacy: if we have unexplained debt not covered by linked
+		// sales, render a single summary row so the numbers still add up.
+		if remainder := credit.TotalAmount - itemizedTotal; remainder > 0 {
+			timeline = append(timeline, TimelineEntry{
+				Type:      "debt",
+				Amount:    remainder,
+				Note:      credit.Description,
+				CreatedAt: credit.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			})
+		}
 
 		for _, p := range payments {
 			timeline = append(timeline, TimelineEntry{
@@ -306,23 +352,46 @@ func GetFiadoPublic(db *gorm.DB) gin.HandlerFunc {
 			})
 		}
 
+		// Tenant's digital wallets (Nequi, Daviplata, Bancolombia, etc.) so
+		// the customer can pay without visiting the store physically. Only
+		// active methods are exposed.
+		var methods []models.TenantPaymentMethod
+		db.Where("tenant_id = ? AND is_active = true", credit.TenantID).
+			Order("created_at ASC").
+			Find(&methods)
+		type PaymentOption struct {
+			ID      string `json:"id"`
+			Name    string `json:"name"`
+			Details string `json:"details"`
+		}
+		paymentOptions := make([]PaymentOption, 0, len(methods))
+		for _, m := range methods {
+			paymentOptions = append(paymentOptions, PaymentOption{
+				ID:      m.ID,
+				Name:    m.Name,
+				Details: m.AccountDetails,
+			})
+		}
+
 		balance := credit.TotalAmount - credit.PaidAmount
 
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{
-				"business_name":  tenant.BusinessName,
-				"business_logo":  tenant.LogoURL,
-				"customer_name":  credit.Customer.Name,
-				"customer_phone": credit.Customer.Phone,
-				"total_amount":   credit.TotalAmount,
-				"paid_amount":    credit.PaidAmount,
-				"balance":        balance,
-				"description":    credit.Description,
-				"fiado_status":   credit.FiadoStatus,
-				"status":         credit.Status,
-				"created_at":     credit.CreatedAt,
-				"accepted_at":    credit.AcceptedAt,
-				"timeline":       timeline,
+				"business_name":   tenant.BusinessName,
+				"business_logo":   tenant.LogoURL,
+				"business_phone":  tenant.Phone,
+				"customer_name":   credit.Customer.Name,
+				"customer_phone":  credit.Customer.Phone,
+				"total_amount":    credit.TotalAmount,
+				"paid_amount":     credit.PaidAmount,
+				"balance":         balance,
+				"description":     credit.Description,
+				"fiado_status":    credit.FiadoStatus,
+				"status":          credit.Status,
+				"created_at":      credit.CreatedAt,
+				"accepted_at":     credit.AcceptedAt,
+				"timeline":        timeline,
+				"payment_methods": paymentOptions,
 			},
 		})
 	}

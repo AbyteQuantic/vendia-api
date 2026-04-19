@@ -22,6 +22,10 @@ type CreateSaleRequest struct {
 	Items         []SaleItemRequest    `json:"items"          binding:"required,min=1"`
 	PaymentMethod models.PaymentMethod `json:"payment_method" binding:"required"`
 	CustomerID    *string              `json:"customer_id"`
+	// CreditAccountID links this sale to an already-open fiado — set by the
+	// client when the cashier picks "Agregar a cuenta existente" in checkout.
+	// When present we skip the auto-create-credit step and just link.
+	CreditAccountID *string `json:"credit_account_id"`
 }
 
 func CreateSale(db *gorm.DB) gin.HandlerFunc {
@@ -41,8 +45,12 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		if req.PaymentMethod == models.PaymentCredit && (req.CustomerID == nil || *req.CustomerID == "") {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "customer_id requerido para ventas a crédito"})
+		// Credit sales need either a customer (opens a new credit account) or
+		// an existing credit_account_id (appends to a pre-authorized fiado).
+		hasCustomer := req.CustomerID != nil && *req.CustomerID != ""
+		hasCreditAccount := req.CreditAccountID != nil && *req.CreditAccountID != ""
+		if req.PaymentMethod == models.PaymentCredit && !hasCustomer && !hasCreditAccount {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "customer_id o credit_account_id requerido para ventas a crédito"})
 			return
 		}
 
@@ -88,14 +96,15 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 			}
 
 			sale = models.Sale{
-				TenantID:      tenantID,
-				CreatedBy:     userID,
-				BranchID:      branchID,
-				Total:         total,
-				PaymentMethod: req.PaymentMethod,
-				CustomerID:    req.CustomerID,
-				IsCredit:      req.PaymentMethod == models.PaymentCredit,
-				Items:         items,
+				TenantID:        tenantID,
+				CreatedBy:       userID,
+				BranchID:        branchID,
+				Total:           total,
+				PaymentMethod:   req.PaymentMethod,
+				CustomerID:      req.CustomerID,
+				IsCredit:        req.PaymentMethod == models.PaymentCredit,
+				CreditAccountID: req.CreditAccountID,
+				Items:           items,
 			}
 			if req.ID != "" {
 				sale.ID = req.ID
@@ -105,7 +114,11 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 				return err
 			}
 
-			if sale.IsCredit && req.CustomerID != nil {
+			// Only create a new credit account when the caller did NOT pass
+			// an existing one. When credit_account_id is present the append
+			// is authoritative (InitFiado / AppendToFiado already bumped the
+			// total); we just link the sale so the statement can show items.
+			if sale.IsCredit && req.CustomerID != nil && !hasCreditAccount {
 				credit := models.CreditAccount{
 					TenantID:    tenantID,
 					CreatedBy:   userID,
