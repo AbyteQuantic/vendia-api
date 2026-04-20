@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -92,6 +93,8 @@ func InitFiado(db *gorm.DB) gin.HandlerFunc {
 				Email:    req.CustomerEmail,
 			}
 			if err := db.Create(&customer).Error; err != nil {
+				log.Printf("[init-fiado] create customer failed tenant=%s phone=%q email=%q: %v",
+					tenantID, req.CustomerPhone, req.CustomerEmail, err)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al crear cliente: %v", err)})
 				return
 			}
@@ -119,7 +122,9 @@ func InitFiado(db *gorm.DB) gin.HandlerFunc {
 		).First(&openAcct).Error; err == nil {
 			newTotal := openAcct.TotalAmount + req.TotalAmount
 			if err := db.Model(&openAcct).Update("total_amount", newTotal).Error; err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "error al actualizar fiado existente"})
+				log.Printf("[init-fiado] merge update failed credit=%s tenant=%s: %v",
+					openAcct.ID, tenantID, err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al actualizar fiado existente: %v", err)})
 				return
 			}
 			openAcct.TotalAmount = newTotal
@@ -149,6 +154,8 @@ func InitFiado(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		if err := db.Create(&credit).Error; err != nil {
+			log.Printf("[init-fiado] create credit failed tenant=%s customer=%s total=%d: %v",
+				tenantID, customer.ID, req.TotalAmount, err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al crear fiado: %v", err)})
 			return
 		}
