@@ -4,8 +4,8 @@ type Product struct {
 	BaseModel
 
 	TenantID          string  `gorm:"type:uuid;not null;index" json:"tenant_id"`
-	CreatedBy         string  `gorm:"type:uuid;index" json:"created_by,omitempty"`
-	BranchID          string  `gorm:"type:uuid;index" json:"branch_id,omitempty"`
+	CreatedBy         *string `gorm:"type:uuid;index" json:"created_by,omitempty"`
+	BranchID          *string `gorm:"type:uuid;index" json:"branch_id,omitempty"`
 	Name              string  `gorm:"not null" json:"name"`
 	Price             float64 `gorm:"not null" json:"price"`
 	PurchasePrice     float64 `gorm:"default:0" json:"purchase_price"`

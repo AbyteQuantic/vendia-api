@@ -13,8 +13,8 @@ type Sale struct {
 	BaseModel
 
 	TenantID      string        `gorm:"type:uuid;not null;index" json:"tenant_id"`
-	CreatedBy     string        `gorm:"type:uuid;index" json:"created_by,omitempty"`
-	BranchID      string        `gorm:"type:uuid;index" json:"branch_id,omitempty"`
+	CreatedBy     *string       `gorm:"type:uuid;index" json:"created_by,omitempty"`
+	BranchID      *string       `gorm:"type:uuid;index" json:"branch_id,omitempty"`
 	Total         float64       `gorm:"not null" json:"total"`
 	PaymentMethod PaymentMethod `gorm:"not null;default:'cash'" json:"payment_method"`
 	CustomerID    *string       `gorm:"type:uuid" json:"customer_id,omitempty"`

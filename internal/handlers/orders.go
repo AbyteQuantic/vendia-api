@@ -66,8 +66,8 @@ func CreateOrder(db *gorm.DB) gin.HandlerFunc {
 
 		order := models.OrderTicket{
 			TenantID:        tenantID,
-			CreatedBy:       userID,
-			BranchID:        branchID,
+			CreatedBy:       middleware.UUIDPtr(userID),
+			BranchID:        middleware.UUIDPtr(branchID),
 			Label:           req.Label,
 			CustomerName:    req.CustomerName,
 			EmployeeUUID:    req.EmployeeUUID,

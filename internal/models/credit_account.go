@@ -6,8 +6,8 @@ type CreditAccount struct {
 	BaseModel
 
 	TenantID    string     `gorm:"type:uuid;index;not null" json:"tenant_id"`
-	CreatedBy   string     `gorm:"type:uuid;index" json:"created_by,omitempty"`
-	BranchID    string     `gorm:"type:uuid;index" json:"branch_id,omitempty"`
+	CreatedBy   *string    `gorm:"type:uuid;index" json:"created_by,omitempty"`
+	BranchID    *string    `gorm:"type:uuid;index" json:"branch_id,omitempty"`
 	CustomerID  string     `gorm:"type:uuid;not null" json:"customer_id"`
 	SaleID      *string    `gorm:"type:uuid" json:"sale_id,omitempty"`
 	TotalAmount int64      `gorm:"not null" json:"total_amount"`

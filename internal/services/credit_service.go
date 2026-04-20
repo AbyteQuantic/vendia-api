@@ -2,6 +2,7 @@ package services
 
 import (
 	"errors"
+	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
 
 	"gorm.io/gorm"
@@ -52,8 +53,8 @@ func (s *CreditService) RegisterPaymentWithActor(tenantID, creditID, userID, bra
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		payment = models.CreditPayment{
 			CreditAccountID: creditID,
-			CreatedBy:       userID,
-			BranchID:        branchID,
+			CreatedBy:       middleware.UUIDPtr(userID),
+			BranchID:        middleware.UUIDPtr(branchID),
 			Amount:          amount,
 			PaymentMethod:   method,
 			Note:            note,

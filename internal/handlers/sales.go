@@ -111,8 +111,8 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 
 			sale = models.Sale{
 				TenantID:        tenantID,
-				CreatedBy:       userID,
-				BranchID:        branchID,
+				CreatedBy:       middleware.UUIDPtr(userID),
+				BranchID:        middleware.UUIDPtr(branchID),
 				Total:           total,
 				PaymentMethod:   req.PaymentMethod,
 				CustomerID:      req.CustomerID,
@@ -135,8 +135,8 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 			if sale.IsCredit && req.CustomerID != nil && !hasCreditAccount {
 				credit := models.CreditAccount{
 					TenantID:    tenantID,
-					CreatedBy:   userID,
-					BranchID:    branchID,
+					CreatedBy:   middleware.UUIDPtr(userID),
+					BranchID:    middleware.UUIDPtr(branchID),
 					CustomerID:  *req.CustomerID,
 					SaleID:      &sale.ID,
 					TotalAmount: int64(total),

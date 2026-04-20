@@ -66,8 +66,8 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 
 		product := models.Product{
 			TenantID:          tenantID,
-			CreatedBy:         userID,
-			BranchID:          branchID,
+			CreatedBy:         middleware.UUIDPtr(userID),
+			BranchID:          middleware.UUIDPtr(branchID),
 			Name:              req.Name,
 			Price:             req.Price,
 			Stock:             req.Stock,
