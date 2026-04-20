@@ -185,6 +185,8 @@ func main() {
 		v1.POST("/credits/:id/append", handlers.AppendToFiado(db))
 		// Close a fiado manually — write off any residual balance
 		v1.POST("/credits/:id/close", handlers.CloseCredit(db))
+		// Cancel a pending fiado — restores stock + voids linked sales
+		v1.POST("/credits/:id/cancel", handlers.CancelCredit(db))
 
 		// Fiado handshake (protected - init + check status)
 		v1.POST("/fiado/init", handlers.InitFiado(db))

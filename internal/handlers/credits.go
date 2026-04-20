@@ -95,6 +95,114 @@ func GetCredit(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// CancelCredit voids a pending (not yet accepted) fiado and reverses
+// every side effect: linked sales are soft-deleted, stock is returned
+// to the products, and the credit account flips to status='cancelled'.
+// Only callable while the customer hasn't signed — once accepted the
+// flow shifts to abono / write-off / refund semantics.
+func CancelCredit(db *gorm.DB) gin.HandlerFunc {
+	type Request struct {
+		Reason string `json:"reason"`
+	}
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		creditID := c.Param("id")
+
+		var req Request
+		_ = c.ShouldBindJSON(&req)
+
+		var credit models.CreditAccount
+		if err := db.Preload("Customer").
+			Where("id = ? AND tenant_id = ?", creditID, tenantID).
+			First(&credit).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "crédito no encontrado"})
+			return
+		}
+
+		// Only pending credits can be cancelled. An accepted account is
+		// a line of credit — reversing it requires a refund or write-off
+		// flow, which is a different UX contract.
+		if credit.Status != "pending" {
+			c.JSON(http.StatusConflict, gin.H{
+				"error": "solo se pueden cancelar fiados pendientes (no aceptados por el cliente)",
+			})
+			return
+		}
+
+		// Collect every sale that was wired to this credit account,
+		// including the original one (if CreditAccount.SaleID is set).
+		var sales []models.Sale
+		saleQuery := db.Preload("Items").Where("tenant_id = ?", tenantID)
+		conds := "credit_account_id = ?"
+		args := []any{credit.ID}
+		if credit.SaleID != nil && *credit.SaleID != "" {
+			conds = "credit_account_id = ? OR id = ?"
+			args = []any{credit.ID, *credit.SaleID}
+		}
+		saleQuery.Where(conds, args...).Find(&sales)
+
+		restoredItems := 0
+		err := db.Transaction(func(tx *gorm.DB) error {
+			for _, sale := range sales {
+				for _, item := range sale.Items {
+					// Container charges are virtual line items — no stock.
+					if item.IsContainerCharge {
+						continue
+					}
+					if err := tx.Model(&models.Product{}).
+						Where("id = ? AND tenant_id = ?", item.ProductID, tenantID).
+						UpdateColumn("stock", gorm.Expr("stock + ?", item.Quantity)).Error; err != nil {
+						return fmt.Errorf("restore stock product=%s: %w", item.ProductID, err)
+					}
+					restoredItems++
+				}
+				// Soft-delete the sale so analytics and receipts don't
+				// pick it up anymore. The row stays for audit via
+				// deleted_at.
+				if err := tx.Delete(&sale).Error; err != nil {
+					return fmt.Errorf("soft-delete sale=%s: %w", sale.ID, err)
+				}
+			}
+			return tx.Model(&credit).Updates(map[string]any{
+				"status":       "cancelled",
+				"fiado_status": "cancelled",
+			}).Error
+		})
+		if err != nil {
+			log.Printf("[cancel-credit] credit=%s tenant=%s: %v",
+				creditID, tenantID, err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": fmt.Sprintf("error al cancelar fiado: %v", err),
+			})
+			return
+		}
+
+		// Inform the tendero in the notifications feed.
+		go func(tenantID, customerName, reason string, amount int64) {
+			body := fmt.Sprintf("Stock restaurado. Monto cancelado: $%d.", amount)
+			if reason != "" {
+				body = body + " Motivo: " + reason
+			}
+			notif := models.Notification{
+				TenantID: tenantID,
+				Title:    fmt.Sprintf("Fiado cancelado — %s", customerName),
+				Body:     body,
+				Type:     "fiado_cancelled",
+			}
+			_ = db.Create(&notif).Error
+		}(credit.TenantID, credit.Customer.Name, req.Reason, credit.TotalAmount)
+
+		c.JSON(http.StatusOK, gin.H{
+			"data": gin.H{
+				"credit_id":      credit.ID,
+				"status":         "cancelled",
+				"sales_voided":   len(sales),
+				"items_restored": restoredItems,
+			},
+		})
+	}
+}
+
 // CloseCredit marks a credit account as settled. By default it refuses
 // to close an account that still has a positive balance — closing with
 // debt is a write-off (discount / forgiven leftover) and the caller must
