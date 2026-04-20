@@ -1,7 +1,10 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
+	"strings"
+	"time"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
 	"vendia-backend/internal/services"
@@ -9,6 +12,21 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+// normaliseExpiryDate validates an incoming expiry date string. Accepts
+// ISO-8601 dates ("2026-12-31") only. Empty or whitespace maps to nil
+// (no expiration). Any other input is rejected so the Postgres DATE
+// column never receives garbage.
+func normaliseExpiryDate(raw string) (*string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, nil
+	}
+	if _, err := time.Parse("2006-01-02", trimmed); err != nil {
+		return nil, fmt.Errorf("expiry_date debe tener formato YYYY-MM-DD")
+	}
+	return &trimmed, nil
+}
 
 func ListProducts(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -46,6 +64,7 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		CatalogImageID    string  `json:"catalog_image_id"`
 		Presentation      string  `json:"presentation"`
 		Content           string  `json:"content"`
+		ExpiryDate        string  `json:"expiry_date"`
 	}
 
 	return func(c *gin.Context) {
@@ -64,6 +83,12 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			return
 		}
 
+		expiry, err := normaliseExpiryDate(req.ExpiryDate)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
 		product := models.Product{
 			TenantID:          tenantID,
 			CreatedBy:         middleware.UUIDPtr(userID),
@@ -78,6 +103,7 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			ContainerPrice:    req.ContainerPrice,
 			Presentation:      req.Presentation,
 			Content:           req.Content,
+			ExpiryDate:        expiry,
 		}
 		if req.ID != "" {
 			product.ID = req.ID
@@ -109,6 +135,7 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		ImageURL          *string  `json:"image_url"`
 		Presentation      *string  `json:"presentation"`
 		Content           *string  `json:"content"`
+		ExpiryDate        *string  `json:"expiry_date"`
 	}
 
 	return func(c *gin.Context) {
@@ -155,6 +182,15 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		}
 		if req.Content != nil {
 			updates["content"] = *req.Content
+		}
+		if req.ExpiryDate != nil {
+			expiry, err := normaliseExpiryDate(*req.ExpiryDate)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+			// nil means "clear the expiry" — store NULL.
+			updates["expiry_date"] = expiry
 		}
 
 		if err := db.Model(&product).Updates(updates).Error; err != nil {

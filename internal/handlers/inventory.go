@@ -56,7 +56,7 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 		if err != nil {
 			// Return 422 for AI/parsing errors (not a server crash)
 			c.JSON(http.StatusUnprocessableEntity, gin.H{
-				"error": "No se pudieron leer los productos de la factura. Intente tomar la foto con mejor iluminación.",
+				"error":  "No se pudieron leer los productos de la factura. Intente tomar la foto con mejor iluminación.",
 				"detail": err.Error(),
 			})
 			return
@@ -76,18 +76,29 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 			TotalPrice float64 `json:"total_price"`
 			Barcode    string  `json:"barcode,omitempty"`
 			ImageURL   string  `json:"image_url,omitempty"`
+			ExpiryDate string  `json:"expiry_date,omitempty"`
 			Confidence float64 `json:"confidence"`
 			Status     string  `json:"status"`
 		}
 
 		var products []ProductResult
 		for _, p := range result.Products {
+			// Validate the expiry_date that Gemini extracted. Bad formats
+			// are dropped so they never reach the DB; the shopkeeper can
+			// add or correct the date later on the review screen.
+			expiryForDB, _ := normaliseExpiryDate(p.ExpiryDate)
+			expiryForResponse := ""
+			if expiryForDB != nil {
+				expiryForResponse = *expiryForDB
+			}
+
 			pr := ProductResult{
 				Name:       p.Name,
 				Quantity:   p.Quantity,
 				UnitPrice:  p.UnitPrice,
 				TotalPrice: p.TotalPrice,
 				Barcode:    p.Barcode,
+				ExpiryDate: expiryForResponse,
 				Confidence: p.Confidence,
 				Status:     "precio_pendiente",
 			}
@@ -110,6 +121,7 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 				Stock:           pr.Quantity,
 				Barcode:         pr.Barcode,
 				ImageURL:        pr.ImageURL,
+				ExpiryDate:      expiryForDB,
 				IsAvailable:     true,
 				IngestionMethod: "ia_factura",
 				PriceStatus:     "pending",
@@ -119,10 +131,17 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 			if pr.Barcode != "" {
 				if err := db.Where("barcode = ? AND tenant_id = ?", pr.Barcode, tenantID).
 					First(&existing).Error; err == nil {
-					db.Model(&existing).Updates(map[string]any{
+					merchUpdates := map[string]any{
 						"stock":          gorm.Expr("stock + ?", pr.Quantity),
 						"purchase_price": pr.UnitPrice,
-					})
+					}
+					if expiryForDB != nil {
+						// Preserve the most recent expiration for restocked SKUs —
+						// FEFO still needs to pick the oldest lot, but at the
+						// product level the write-path is "last wins".
+						merchUpdates["expiry_date"] = *expiryForDB
+					}
+					db.Model(&existing).Updates(merchUpdates)
 					pr.Status = "actualizado"
 					products = append(products, pr)
 					continue

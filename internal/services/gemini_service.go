@@ -130,6 +130,10 @@ type InvoiceProduct struct {
 	UnitPrice  float64 `json:"unit_price"`
 	TotalPrice float64 `json:"total_price"`
 	Barcode    string  `json:"barcode,omitempty"`
+	// ExpiryDate is the best-before/expiration date printed next to the
+	// line item, if any. Normalised to ISO-8601 (YYYY-MM-DD) by the
+	// model. Empty when absent, unreadable, or uncertain.
+	ExpiryDate string  `json:"expiry_date,omitempty"`
 	Confidence float64 `json:"confidence"`
 }
 
@@ -151,8 +155,15 @@ REGLAS CRÍTICAS (violarlas es inaceptable):
 6. Si ves un nombre de proveedor en el encabezado, extráelo. Si no, pon "Desconocido".
 7. El campo "confidence" debe reflejar tu certeza real (0.0 a 1.0). Si dudas de una lectura, pon confidence < 0.7.
 
+REGLA DE FECHA DE VENCIMIENTO ("expiry_date"):
+- Busca explícitamente etiquetas como "VENCE", "VENCIMIENTO", "CADUCIDAD", "FECHA VTO", "EXP", "BEST BEFORE", "CONSUMIR ANTES DE", "F.V.", "FV", "VTO" cerca de cada ítem.
+- Si encuentras una fecha asociada a la línea, NORMALÍZALA a formato ISO "YYYY-MM-DD" sin importar cómo esté escrita en la factura (DD/MM/YYYY, MM-YY, etc.). Para formatos de solo mes/año (ej. "12/26"), asume el último día del mes (ej. "2026-12-31").
+- Si NO hay fecha visible para esa línea, deja "expiry_date" como cadena vacía "". NO inventes fechas.
+- Si hay una única fecha de vencimiento global para toda la factura (común en mayoristas), aplícala a TODAS las líneas.
+- Si la fecha está borrosa o dudas de la lectura, deja "" — es preferible vacío que incorrecto.
+
 Retorna JSON estricto sin markdown:
-{"provider":"nombre del proveedor","products":[{"name":"texto exacto de factura","quantity":0,"unit_price":0,"total_price":0,"barcode":"","confidence":0.95}],"invoice_total":0}
+{"provider":"nombre del proveedor","products":[{"name":"texto exacto de factura","quantity":0,"unit_price":0,"total_price":0,"barcode":"","expiry_date":"YYYY-MM-DD","confidence":0.95}],"invoice_total":0}
 
 Si la imagen NO es una factura o no contiene productos, retorna: {"provider":"","products":[],"invoice_total":0}
 
