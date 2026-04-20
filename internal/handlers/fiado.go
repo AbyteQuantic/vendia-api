@@ -114,29 +114,32 @@ func InitFiado(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		// ── One-Open-Account rule: if this customer already has an
-		// accepted (open) fiado, bump its total and return the SAME
-		// credit_id + fiado_token (no new handshake needed).
-		// Only accepted accounts are merged — pending/link_sent are not.
+		// accepted (open) fiado, DON'T auto-merge. Return a 409-style
+		// payload so the client can show the cashier a confirmation
+		// dialog: "Viviana ya tiene cuenta abierta por $X — ¿sumar $Y?".
+		// On confirmation the client calls /credits/:id/append, which
+		// is the explicit, non-silent path for adding to a pre-authorized
+		// line of credit. This preserves the "one-open-account" invariant
+		// (we never create a duplicate account silently) while giving the
+		// cashier full visibility into what's happening.
 		var openAcct models.CreditAccount
 		if err := db.Where(
 			"tenant_id = ? AND customer_id = ? AND status = ? AND fiado_status = ?",
 			tenantID, customer.ID, "open", FiadoAccepted,
 		).First(&openAcct).Error; err == nil {
-			newTotal := openAcct.TotalAmount + req.TotalAmount
-			if err := db.Model(&openAcct).Update("total_amount", newTotal).Error; err != nil {
-				log.Printf("[init-fiado] merge update failed credit=%s tenant=%s: %v",
-					openAcct.ID, tenantID, err)
-				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al actualizar fiado existente: %v", err)})
-				return
-			}
-			openAcct.TotalAmount = newTotal
-			resp := buildFiadoResponse(db, openAcct, tenantID)
-			// Mark as merged so the client knows to skip the WhatsApp handshake.
-			if data, ok := resp["data"].(gin.H); ok {
-				data["merged"] = true
-				data["added_amount"] = req.TotalAmount
-			}
-			c.JSON(http.StatusOK, resp)
+			c.JSON(http.StatusOK, gin.H{
+				"data": gin.H{
+					"needs_confirmation":   true,
+					"existing_credit_id":   openAcct.ID,
+					"existing_total":       openAcct.TotalAmount,
+					"existing_paid":        openAcct.PaidAmount,
+					"existing_balance":     openAcct.TotalAmount - openAcct.PaidAmount,
+					"customer_name":        customer.Name,
+					"customer_phone":       customer.Phone,
+					"requested_amount":     req.TotalAmount,
+					"projected_new_total":  openAcct.TotalAmount + req.TotalAmount,
+				},
+			})
 			return
 		}
 
