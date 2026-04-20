@@ -467,6 +467,25 @@ func AcceptFiado(db *gorm.DB) gin.HandlerFunc {
 			"accepted_ip":  c.ClientIP(),
 		})
 
+		// Drop a notification for the tendero so they can finish the
+		// dispatch flow: "Viviana aceptó el fiado de $X — ya puedes
+		// entregar sus productos". The bell icon badge in the POS header
+		// picks this up on the next refresh tick.
+		go func(tenantID, customerName string, amount int64) {
+			notif := models.Notification{
+				TenantID: tenantID,
+				Title:    fmt.Sprintf("%s aceptó el fiado", customerName),
+				Body: fmt.Sprintf(
+					"Ya puedes entregar sus productos. Monto: $%d.",
+					amount),
+				Type: "fiado_accepted",
+			}
+			if err := db.Create(&notif).Error; err != nil {
+				log.Printf("[fiado-accept] notification create failed tenant=%s: %v",
+					tenantID, err)
+			}
+		}(credit.TenantID, credit.Customer.Name, credit.TotalAmount)
+
 		c.JSON(http.StatusOK, gin.H{
 			"message": "fiado aceptado",
 			"data":    gin.H{"fiado_status": FiadoAccepted, "accepted_at": now},
