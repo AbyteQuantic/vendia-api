@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"fmt"
+	"log"
 	"net/http"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
@@ -130,17 +132,33 @@ func CloseCredit(db *gorm.DB) gin.HandlerFunc {
 			note = "Saldo condonado al cerrar la cuenta"
 		}
 
+		// CreditPayment has nullable UUID columns (created_by, branch_id);
+		// Postgres rejects empty-string inserts on UUID cols. Legacy tokens
+		// without user/branch claims would crash here — use pointers so
+		// GORM emits SQL NULL.
+		var userPtr, branchPtr *string
+		if userID != "" {
+			userPtr = &userID
+		}
+		if branchID != "" {
+			branchPtr = &branchID
+		}
+
 		err := db.Transaction(func(tx *gorm.DB) error {
 			if remaining > 0 {
-				writeOff := models.CreditPayment{
-					CreditAccountID: creditID,
-					CreatedBy:       userID,
-					BranchID:        branchID,
-					Amount:          remaining,
-					PaymentMethod:   "write_off",
-					Note:            note,
+				writeOff := map[string]any{
+					"credit_account_id": creditID,
+					"amount":            remaining,
+					"payment_method":    "write_off",
+					"note":              note,
 				}
-				if err := tx.Create(&writeOff).Error; err != nil {
+				if userPtr != nil {
+					writeOff["created_by"] = *userPtr
+				}
+				if branchPtr != nil {
+					writeOff["branch_id"] = *branchPtr
+				}
+				if err := tx.Model(&models.CreditPayment{}).Create(writeOff).Error; err != nil {
 					return err
 				}
 			}
@@ -151,7 +169,12 @@ func CloseCredit(db *gorm.DB) gin.HandlerFunc {
 		})
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al cerrar la cuenta"})
+			// Surface the DB error so the caller can see what actually broke.
+			log.Printf("[close-credit] credit_id=%s tenant_id=%s error: %v",
+				creditID, tenantID, err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": fmt.Sprintf("error al cerrar la cuenta: %v", err),
+			})
 			return
 		}
 
