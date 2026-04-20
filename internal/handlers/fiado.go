@@ -36,6 +36,8 @@ func InitFiado(db *gorm.DB) gin.HandlerFunc {
 
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+		userID := middleware.GetUserID(c)
+		branchID := middleware.GetBranchID(c)
 
 		var req Request
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -144,19 +146,38 @@ func InitFiado(db *gorm.DB) gin.HandlerFunc {
 			token = uuid.NewString()
 		}
 
-		credit := models.CreditAccount{
-			TenantID:    tenantID,
-			CustomerID:  customer.ID,
-			TotalAmount: req.TotalAmount,
-			Status:      "pending",
-			FiadoToken:  token,
-			FiadoStatus: FiadoLinkSent,
+		// Use a map-based insert so we omit created_by / branch_id when the
+		// JWT claims are empty (legacy tokens). Postgres rejects empty
+		// strings on UUID columns; omitting the field lets it default to
+		// NULL. Returning the full struct afterwards requires a refetch,
+		// which is still cheaper than a failed insert.
+		row := map[string]any{
+			"id":           uuid.NewString(),
+			"tenant_id":    tenantID,
+			"customer_id":  customer.ID,
+			"total_amount": req.TotalAmount,
+			"status":       "pending",
+			"fiado_token":  token,
+			"fiado_status": FiadoLinkSent,
 		}
-
-		if err := db.Create(&credit).Error; err != nil {
+		if userID != "" {
+			row["created_by"] = userID
+		}
+		if branchID != "" {
+			row["branch_id"] = branchID
+		}
+		if err := db.Model(&models.CreditAccount{}).Create(row).Error; err != nil {
 			log.Printf("[init-fiado] create credit failed tenant=%s customer=%s total=%d: %v",
 				tenantID, customer.ID, req.TotalAmount, err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al crear fiado: %v", err)})
+			return
+		}
+
+		// Refetch so we hand the response builder a fully-populated struct.
+		var credit models.CreditAccount
+		if err := db.Where("id = ?", row["id"]).First(&credit).Error; err != nil {
+			log.Printf("[init-fiado] refetch failed id=%s: %v", row["id"], err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al leer fiado recién creado"})
 			return
 		}
 
