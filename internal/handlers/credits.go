@@ -95,14 +95,16 @@ func GetCredit(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-// CloseCredit marks a credit account as settled even when a residual
-// balance remains — used when the tendero negotiates a discount or writes
-// off a small leftover. The residual is recorded as a CreditPayment with
-// method='write_off' so the books still balance and the timeline has an
-// auditable entry.
+// CloseCredit marks a credit account as settled. By default it refuses
+// to close an account that still has a positive balance — closing with
+// debt is a write-off (discount / forgiven leftover) and the caller must
+// opt in explicitly with {"force":true}. The residual is recorded as a
+// CreditPayment with method='write_off' so the books stay balanced and
+// the timeline has an auditable entry.
 func CloseCredit(db *gorm.DB) gin.HandlerFunc {
 	type Request struct {
 		Reason string `json:"reason"`
+		Force  bool   `json:"force"`
 	}
 
 	return func(c *gin.Context) {
@@ -127,6 +129,17 @@ func CloseCredit(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		remaining := credit.TotalAmount - credit.PaidAmount
+		// Safety rule — refuse to close with debt unless the caller opts
+		// in to a write-off via force=true. Protects against accidental
+		// "Cerrar cuenta" taps that would erase a real balance.
+		if remaining > 0 && !req.Force {
+			c.JSON(http.StatusConflict, gin.H{
+				"error":     "la cuenta aún tiene saldo pendiente",
+				"balance":   remaining,
+				"hint":      "registre abonos hasta saldar, o use force=true para condonar el saldo",
+			})
+			return
+		}
 		note := req.Reason
 		if note == "" {
 			note = "Saldo condonado al cerrar la cuenta"
