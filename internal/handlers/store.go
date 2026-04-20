@@ -3,6 +3,7 @@ package handlers
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
 
@@ -101,6 +102,68 @@ func UpdateStoreConfig(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, gin.H{"message": "configuración actualizada"})
+	}
+}
+
+// UpdatePaymentConfig — express setup of the tenant's primary digital
+// payment method (Nequi/Daviplata/Bancolombia/Efectivo). Writes the
+// three tenant fields the public fiado portal reads.
+//
+// PATCH /api/v1/store/payment-config
+// body: {payment_method_name, payment_account_number, payment_account_holder}
+func UpdatePaymentConfig(db *gorm.DB) gin.HandlerFunc {
+	type Request struct {
+		PaymentMethodName    *string `json:"payment_method_name"`
+		PaymentAccountNumber *string `json:"payment_account_number"`
+		PaymentAccountHolder *string `json:"payment_account_holder"`
+	}
+
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+
+		var req Request
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		updates := map[string]any{}
+		if req.PaymentMethodName != nil {
+			updates["payment_method_name"] = strings.TrimSpace(*req.PaymentMethodName)
+		}
+		if req.PaymentAccountNumber != nil {
+			updates["payment_account_number"] =
+				strings.TrimSpace(*req.PaymentAccountNumber)
+		}
+		if req.PaymentAccountHolder != nil {
+			updates["payment_account_holder"] =
+				strings.TrimSpace(*req.PaymentAccountHolder)
+		}
+		if len(updates) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "no hay campos para actualizar"})
+			return
+		}
+
+		if err := db.Model(&models.Tenant{}).Where("id = ?", tenantID).
+			Updates(updates).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "error al guardar configuración de pago",
+			})
+			return
+		}
+
+		// Return the fresh values so the client can reflect them immediately.
+		var tenant models.Tenant
+		db.Select("id, payment_method_name, payment_account_number, payment_account_holder").
+			Where("id = ?", tenantID).First(&tenant)
+
+		c.JSON(http.StatusOK, gin.H{
+			"data": gin.H{
+				"payment_method_name":    tenant.PaymentMethodName,
+				"payment_account_number": tenant.PaymentAccountNumber,
+				"payment_account_holder": tenant.PaymentAccountHolder,
+			},
+		})
 	}
 }
 

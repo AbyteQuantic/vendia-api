@@ -46,6 +46,14 @@ type Tenant struct {
 	NequiPhone     *string `gorm:"size:15" json:"nequi_phone"`
 	DaviplataPhone *string `gorm:"size:15" json:"daviplata_phone"`
 
+	// Express payment config (2026-04-20 pivot: Nequi rejected our
+	// QR deep link, so the public fiado portal now shows account info
+	// with copy buttons). Stored on the tenant row for zero-join
+	// reads from the public endpoint. Empty strings mean not configured.
+	PaymentMethodName    string `gorm:"type:varchar(32);not null;default:''" json:"payment_method_name"`
+	PaymentAccountNumber string `gorm:"type:varchar(64);not null;default:''" json:"payment_account_number"`
+	PaymentAccountHolder string `gorm:"type:varchar(128);not null;default:''" json:"payment_account_holder"`
+
 	LastSyncAt     *time.Time `json:"last_sync_at"`
 	PendingSyncOps int        `gorm:"default:0" json:"pending_sync_ops"`
 

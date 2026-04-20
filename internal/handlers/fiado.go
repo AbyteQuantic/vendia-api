@@ -408,6 +408,13 @@ func GetFiadoPublic(db *gorm.DB) gin.HandlerFunc {
 				"accepted_at":     credit.AcceptedAt,
 				"timeline":        timeline,
 				"payment_methods": paymentOptions,
+				// Express (primary) payment method from the tenant row —
+				// populated via /store/payment-config. When empty the
+				// portal falls back to payment_methods[] above, and
+				// when both are empty shows "Contacta al tendero".
+				"payment_method_name":    tenant.PaymentMethodName,
+				"payment_account_number": tenant.PaymentAccountNumber,
+				"payment_account_holder": tenant.PaymentAccountHolder,
 			},
 		})
 	}

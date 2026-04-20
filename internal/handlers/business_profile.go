@@ -24,16 +24,19 @@ func GetBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{
-				"business_name":  tenant.BusinessName,
-				"business_types": tenant.BusinessTypes,
-				"nit":            tenant.NIT,
-				"razon_social":   tenant.RazonSocial,
-				"address":        tenant.Address,
-				"latitude":       tenant.Latitude,
-				"longitude":      tenant.Longitude,
-				"logo_url":       tenant.LogoURL,
-				"owner_name":     tenant.OwnerName,
-				"phone":          tenant.Phone,
+				"business_name":          tenant.BusinessName,
+				"business_types":         tenant.BusinessTypes,
+				"nit":                    tenant.NIT,
+				"razon_social":           tenant.RazonSocial,
+				"address":                tenant.Address,
+				"latitude":               tenant.Latitude,
+				"longitude":              tenant.Longitude,
+				"logo_url":               tenant.LogoURL,
+				"owner_name":             tenant.OwnerName,
+				"phone":                  tenant.Phone,
+				"payment_method_name":    tenant.PaymentMethodName,
+				"payment_account_number": tenant.PaymentAccountNumber,
+				"payment_account_holder": tenant.PaymentAccountHolder,
 			},
 		})
 	}

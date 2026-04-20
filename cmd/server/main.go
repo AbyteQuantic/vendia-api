@@ -211,6 +211,10 @@ func main() {
 		v1.PATCH("/online-orders/:id", handlers.UpdateOnlineOrderStatus(db))
 
 		// Panic button
+		// Express payment configuration (primary method shown on
+		// public debtor portal with copy buttons).
+		v1.PATCH("/store/payment-config", handlers.UpdatePaymentConfig(db))
+
 		v1.GET("/store/panic-config", handlers.GetPanicConfig(db))
 		v1.PATCH("/store/panic-config", handlers.UpdatePanicMessage(db))
 		v1.POST("/store/panic-config/contacts", handlers.CreateEmergencyContact(db))
