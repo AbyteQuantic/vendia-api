@@ -25,8 +25,17 @@ type Sale struct {
 	// CreditAccountID links this sale to a specific open fiado so the public
 	// acceptance page can show itemized detail per debt entry. Nullable for
 	// cash/transfer/card sales.
-	CreditAccountID *string    `gorm:"type:uuid;index" json:"credit_account_id,omitempty"`
-	Items           []SaleItem `gorm:"foreignKey:SaleID" json:"items"`
+	CreditAccountID *string `gorm:"type:uuid;index" json:"credit_account_id,omitempty"`
+	// PaymentStatus supports the zero-fee dynamic-QR flow: COMPLETED is
+	// the default for cash + credit sales, transfer-with-QR sales go
+	// through PENDING until the cashier manually confirms receipt of the
+	// Nequi/Daviplata/Bancolombia transfer.
+	PaymentStatus string `gorm:"type:varchar(32);not null;default:'COMPLETED';index" json:"payment_status"`
+	// DynamicQRPayload is the raw QR string shown to the customer for
+	// transfer sales (e.g. "nequi://pay?phone=300…&amount=12500"). Kept
+	// for audit + later reconciliation when Webhooks land.
+	DynamicQRPayload *string    `gorm:"type:text" json:"dynamic_qr_payload,omitempty"`
+	Items            []SaleItem `gorm:"foreignKey:SaleID" json:"items"`
 }
 
 type SaleItem struct {

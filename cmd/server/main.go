@@ -188,6 +188,9 @@ func main() {
 		// Cancel a pending fiado — restores stock + voids linked sales
 		v1.POST("/credits/:id/cancel", handlers.CancelCredit(db))
 
+		// Dynamic QR for zero-fee Nequi/Daviplata/Bancolombia transfers
+		v1.POST("/payments/generate-dynamic-qr", handlers.GenerateDynamicQR(db))
+
 		// Fiado handshake (protected - init + check status)
 		v1.POST("/fiado/init", handlers.InitFiado(db))
 		v1.GET("/fiado/:token/status", handlers.CheckFiadoStatus(db))

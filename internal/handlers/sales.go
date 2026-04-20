@@ -26,6 +26,11 @@ type CreateSaleRequest struct {
 	// client when the cashier picks "Agregar a cuenta existente" in checkout.
 	// When present we skip the auto-create-credit step and just link.
 	CreditAccountID *string `json:"credit_account_id"`
+	// PaymentStatus / DynamicQRPayload — present only for the zero-fee
+	// dynamic QR flow (Nequi/Daviplata/Bancolombia transfers). Cash sales
+	// leave them nil and default to 'COMPLETED'.
+	PaymentStatus    string  `json:"payment_status"`
+	DynamicQRPayload *string `json:"dynamic_qr_payload"`
 }
 
 func CreateSale(db *gorm.DB) gin.HandlerFunc {
@@ -109,16 +114,22 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 				}
 			}
 
+			paymentStatus := req.PaymentStatus
+			if paymentStatus == "" {
+				paymentStatus = "COMPLETED"
+			}
 			sale = models.Sale{
-				TenantID:        tenantID,
-				CreatedBy:       middleware.UUIDPtr(userID),
-				BranchID:        middleware.UUIDPtr(branchID),
-				Total:           total,
-				PaymentMethod:   req.PaymentMethod,
-				CustomerID:      req.CustomerID,
-				IsCredit:        req.PaymentMethod == models.PaymentCredit,
-				CreditAccountID: req.CreditAccountID,
-				Items:           items,
+				TenantID:         tenantID,
+				CreatedBy:        middleware.UUIDPtr(userID),
+				BranchID:         middleware.UUIDPtr(branchID),
+				Total:            total,
+				PaymentMethod:    req.PaymentMethod,
+				CustomerID:       req.CustomerID,
+				IsCredit:         req.PaymentMethod == models.PaymentCredit,
+				CreditAccountID:  req.CreditAccountID,
+				PaymentStatus:    paymentStatus,
+				DynamicQRPayload: req.DynamicQRPayload,
+				Items:            items,
 			}
 			if req.ID != "" {
 				sale.ID = req.ID
