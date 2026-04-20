@@ -70,7 +70,7 @@ func CreateOrder(db *gorm.DB) gin.HandlerFunc {
 			BranchID:        middleware.UUIDPtr(branchID),
 			Label:           req.Label,
 			CustomerName:    req.CustomerName,
-			EmployeeUUID:    req.EmployeeUUID,
+			EmployeeUUID:    middleware.UUIDPtr(req.EmployeeUUID),
 			EmployeeName:    req.EmployeeName,
 			Status:          models.OrderStatusNuevo,
 			Type:            req.Type,

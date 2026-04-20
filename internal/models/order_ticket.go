@@ -27,7 +27,7 @@ type OrderTicket struct {
 	BranchID        *string     `gorm:"type:uuid;index" json:"branch_id,omitempty"`
 	Label           string      `gorm:"not null" json:"label"`
 	CustomerName    string      `json:"customer_name,omitempty"`
-	EmployeeUUID    string      `gorm:"type:uuid" json:"employee_uuid,omitempty"`
+	EmployeeUUID    *string     `gorm:"type:uuid" json:"employee_uuid,omitempty"`
 	EmployeeName    string      `json:"employee_name,omitempty"`
 	Status          OrderStatus `gorm:"not null;default:'nuevo'" json:"status"`
 	Type            OrderType   `gorm:"not null;default:'mesa'" json:"type"`

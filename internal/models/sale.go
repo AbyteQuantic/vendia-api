@@ -18,7 +18,7 @@ type Sale struct {
 	Total         float64       `gorm:"not null" json:"total"`
 	PaymentMethod PaymentMethod `gorm:"not null;default:'cash'" json:"payment_method"`
 	CustomerID    *string       `gorm:"type:uuid" json:"customer_id,omitempty"`
-	EmployeeUUID  string        `gorm:"type:uuid" json:"employee_uuid,omitempty"`
+	EmployeeUUID  *string       `gorm:"type:uuid" json:"employee_uuid,omitempty"`
 	EmployeeName  string        `json:"employee_name,omitempty"`
 	ReceiptNumber int64         `gorm:"index" json:"receipt_number,omitempty"`
 	IsCredit      bool          `gorm:"default:false" json:"is_credit"`
