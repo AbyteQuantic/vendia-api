@@ -201,6 +201,11 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 			PhotoURL string  `json:"photo_url"`
 			Emoji    string  `json:"emoji"`
 			Category string  `json:"category"`
+			// Stock is exposed so the public catalog can display
+			// availability ("X disponibles" / "Agotado") and disable
+			// add-to-cart on zero stock — same source of truth as the
+			// POS app, no separate "current_stock" column.
+			Stock int `json:"stock"`
 		}
 
 		var catalog []CatalogProduct
@@ -216,6 +221,7 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 				PhotoURL: photo,
 				Emoji:    p.Emoji,
 				Category: p.Category,
+				Stock:    p.Stock,
 			})
 		}
 
