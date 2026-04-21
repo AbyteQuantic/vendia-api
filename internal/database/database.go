@@ -76,6 +76,7 @@ func Migrate(db *gorm.DB) error {
 		&models.Recipe{},
 		&models.RecipeIngredient{},
 		&models.Promotion{},
+		&models.PromotionItem{},
 		&models.RockolaSuggestion{},
 		&models.CatalogProduct{},
 		&models.CatalogImage{},

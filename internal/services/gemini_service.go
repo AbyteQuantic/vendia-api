@@ -344,6 +344,85 @@ Resultado esperado: Fotografía tipo catálogo Amazon — producto REAL sobre fo
 	return nil, fmt.Errorf("no image returned from Gemini (candidates=%d)", len(geminiResp.Candidates))
 }
 
+// GeneratePromoBanner produces a retail-advertising banner image
+// (typically square 1:1) from a fully-formed prompt. The caller is
+// responsible for prompt assembly — this function just drives the
+// Gemini image model and returns the decoded PNG/JPEG bytes.
+//
+// Rationale for a dedicated method (vs reusing GenerateProductImage):
+// banners have different generation params — higher guidance, no
+// "product isolated on white" safeguards, room for embedded copy —
+// and tracing the two use cases separately in logs is a must.
+func (s *GeminiService) GeneratePromoBanner(ctx context.Context, prompt string) ([]byte, error) {
+	payload := map[string]any{
+		"contents": []map[string]any{
+			{
+				"parts": []map[string]any{
+					{"text": prompt},
+				},
+			},
+		},
+		"generationConfig": map[string]any{
+			"responseModalities": []string{"TEXT", "IMAGE"},
+			// Mid-range temperature: we want creative composition but
+			// consistent typography. Higher values produced unreadable
+			// text in pilots; lower values produced repetitive layouts.
+			"temperature": 0.55,
+		},
+	}
+
+	body, _ := json.Marshal(payload)
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", s.imageModel, s.apiKey)
+
+	reqCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+
+	req, _ := http.NewRequestWithContext(reqCtx, "POST", url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("gemini banner request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read banner response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("gemini API returned %d: %s", resp.StatusCode, string(respBody[:min(len(respBody), 200)]))
+	}
+
+	var geminiResp geminiResponse
+	if err := json.Unmarshal(respBody, &geminiResp); err != nil {
+		return nil, fmt.Errorf("failed to parse banner response: %w", err)
+	}
+
+	if geminiResp.Error != nil {
+		return nil, fmt.Errorf("gemini error %d: %s", geminiResp.Error.Code, geminiResp.Error.Message)
+	}
+
+	for _, candidate := range geminiResp.Candidates {
+		for _, part := range candidate.Content.Parts {
+			if part.InlineData.Data == "" {
+				continue
+			}
+			decoded, err := base64.StdEncoding.DecodeString(part.InlineData.Data)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decode banner image: %w", err)
+			}
+			if len(decoded) < 1024 {
+				return nil, fmt.Errorf("banner image suspiciously small (%d bytes)", len(decoded))
+			}
+			return decoded, nil
+		}
+	}
+
+	return nil, fmt.Errorf("no image returned from Gemini for promo banner")
+}
+
 // GenerateProductImage creates a product image from just a text description (no source photo needed).
 func (s *GeminiService) GenerateProductImage(ctx context.Context, productInfo string) ([]byte, error) {
 	prompt := fmt.Sprintf(`Genera una foto profesional de e-commerce del siguiente producto: %s

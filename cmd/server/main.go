@@ -257,6 +257,9 @@ func main() {
 		v1.GET("/promotions/suggestions", handlers.PromotionSuggestions(db))
 		v1.POST("/promotions/apply-to-pos", handlers.ApplyPromoToPOS(db))
 
+		// Marketing — AI banner generator (auth'd, rate-limited via global middleware)
+		v1.POST("/marketing/generate-banner", handlers.GenerateMarketingBanner(geminiSvc, storageSvc))
+
 		// Store config
 		v1.GET("/store/config", handlers.GetStoreConfig(db))
 		v1.PATCH("/store/config", handlers.UpdateStoreConfig(db))

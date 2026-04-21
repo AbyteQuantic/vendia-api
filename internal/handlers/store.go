@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
 
@@ -23,12 +24,12 @@ func GetStoreConfig(db *gorm.DB) gin.HandlerFunc {
 
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{
-				"store_slug":       tenant.StoreSlug,
-				"is_delivery_open": tenant.IsDeliveryOpen,
-				"delivery_cost":    tenant.DeliveryCost,
-				"min_order_amount": tenant.MinOrderAmount,
-				"logo_url":         tenant.LogoURL,
-				"business_name":    tenant.BusinessName,
+				"store_slug":          tenant.StoreSlug,
+				"is_delivery_open":    tenant.IsDeliveryOpen,
+				"delivery_cost":       tenant.DeliveryCost,
+				"min_order_amount":    tenant.MinOrderAmount,
+				"logo_url":            tenant.LogoURL,
+				"business_name":       tenant.BusinessName,
 				"enable_fiados":       tenant.EnableFiados,
 				"default_margin":      tenant.DefaultMargin,
 				"receipt_header":      tenant.ReceiptHeader,
@@ -41,10 +42,10 @@ func GetStoreConfig(db *gorm.DB) gin.HandlerFunc {
 
 func UpdateStoreConfig(db *gorm.DB) gin.HandlerFunc {
 	type Request struct {
-		StoreSlug      *string  `json:"store_slug"`
-		IsDeliveryOpen *bool    `json:"is_delivery_open"`
-		DeliveryCost   *float64 `json:"delivery_cost"`
-		MinOrderAmount *float64 `json:"min_order_amount"`
+		StoreSlug         *string  `json:"store_slug"`
+		IsDeliveryOpen    *bool    `json:"is_delivery_open"`
+		DeliveryCost      *float64 `json:"delivery_cost"`
+		MinOrderAmount    *float64 `json:"min_order_amount"`
 		EnableFiados      *bool    `json:"enable_fiados"`
 		DefaultMargin     *float64 `json:"default_margin"`
 		ReceiptHeader     *string  `json:"receipt_header"`
@@ -218,14 +219,84 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 			})
 		}
 
+		// Active promos (combo mode only — legacy single-product promos
+		// don't have a banner and aren't a great carousel experience).
+		// Filter to start_date <= now < end_date (or end_date NULL) and
+		// include items so the web cart can pre-fill the combo lines.
+		now := time.Now()
+		var promos []models.Promotion
+		db.Preload("Items").
+			Where(`tenant_id = ? AND is_active = true
+			       AND (start_date IS NULL OR start_date <= ?)
+			       AND (end_date IS NULL OR end_date >= ?)
+			       AND name <> ''`,
+				tenant.ID, now, now).
+			Order("start_date DESC NULLS LAST").
+			Find(&promos)
+
+		type PromoItemOut struct {
+			ProductID  string  `json:"product_id"`
+			Name       string  `json:"name"`
+			Quantity   int     `json:"quantity"`
+			PromoPrice float64 `json:"promo_price"`
+			PhotoURL   string  `json:"photo_url,omitempty"`
+		}
+		type PromoOut struct {
+			ID             string         `json:"id"`
+			Name           string         `json:"name"`
+			Description    string         `json:"description,omitempty"`
+			BannerImageURL string         `json:"banner_image_url,omitempty"`
+			Items          []PromoItemOut `json:"items"`
+			TotalPrice     float64        `json:"total_price"`
+			TotalRegular   float64        `json:"total_regular"`
+		}
+
+		// Build a product lookup so we can decorate items with names + photos.
+		productByID := make(map[string]models.Product, len(products))
+		for _, p := range products {
+			productByID[p.ID] = p
+		}
+
+		promosOut := make([]PromoOut, 0, len(promos))
+		for _, pr := range promos {
+			items := make([]PromoItemOut, 0, len(pr.Items))
+			var total, regular float64
+			for _, it := range pr.Items {
+				p := productByID[it.ProductID]
+				photo := p.PhotoURL
+				if photo == "" {
+					photo = p.ImageURL
+				}
+				items = append(items, PromoItemOut{
+					ProductID:  it.ProductID,
+					Name:       p.Name,
+					Quantity:   it.Quantity,
+					PromoPrice: it.PromoPrice,
+					PhotoURL:   photo,
+				})
+				total += it.PromoPrice * float64(it.Quantity)
+				regular += p.Price * float64(it.Quantity)
+			}
+			promosOut = append(promosOut, PromoOut{
+				ID:             pr.ID,
+				Name:           pr.Name,
+				Description:    pr.Description,
+				BannerImageURL: pr.BannerImageURL,
+				Items:          items,
+				TotalPrice:     total,
+				TotalRegular:   regular,
+			})
+		}
+
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{
-				"business_name":   tenant.BusinessName,
-				"logo_url":        tenant.LogoURL,
-				"is_open":         true,
-				"delivery_cost":   tenant.DeliveryCost,
+				"business_name":    tenant.BusinessName,
+				"logo_url":         tenant.LogoURL,
+				"is_open":          true,
+				"delivery_cost":    tenant.DeliveryCost,
 				"min_order_amount": tenant.MinOrderAmount,
-				"products":        catalog,
+				"products":         catalog,
+				"promotions":       promosOut,
 			},
 		})
 	}
@@ -256,12 +327,12 @@ func PublicProductDetail(db *gorm.DB) gin.HandlerFunc {
 
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{
-				"uuid":     product.ID,
-				"name":     product.Name,
-				"price":    product.Price,
+				"uuid":      product.ID,
+				"name":      product.Name,
+				"price":     product.Price,
 				"photo_url": photo,
-				"emoji":    product.Emoji,
-				"category": product.Category,
+				"emoji":     product.Emoji,
+				"category":  product.Category,
 			},
 		})
 	}
@@ -269,8 +340,8 @@ func PublicProductDetail(db *gorm.DB) gin.HandlerFunc {
 
 func CreateWebOrder(db *gorm.DB) gin.HandlerFunc {
 	type ItemReq struct {
-		ProductUUID string  `json:"product_uuid" binding:"required"`
-		Quantity    int     `json:"quantity"      binding:"required,min=1"`
+		ProductUUID string `json:"product_uuid" binding:"required"`
+		Quantity    int    `json:"quantity"      binding:"required,min=1"`
 	}
 
 	type Request struct {
