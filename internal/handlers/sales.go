@@ -11,10 +11,22 @@ import (
 	"gorm.io/gorm"
 )
 
+// SaleItemRequest represents either a product line or an ad-hoc service
+// line. Validation is performed in CreateSale since `binding:"required"`
+// can't express the XOR between product_id and (is_service + custom_*).
 type SaleItemRequest struct {
-	ProductID    string `json:"product_id" binding:"required"`
+	// ProductID is required for physical inventory lines. Leave empty for
+	// service/custom lines (then IsService must be true).
+	ProductID    string `json:"product_id"`
 	Quantity     int    `json:"quantity"   binding:"required,min=1"`
 	HasContainer *bool  `json:"has_container"`
+
+	// Service billing (migration 020). When IsService=true, the backend
+	// skips the products lookup and bills CustomDescription +
+	// CustomUnitPrice ad-hoc — no stock deduction, no product FK.
+	IsService         bool    `json:"is_service"`
+	CustomDescription string  `json:"custom_description"`
+	CustomUnitPrice   float64 `json:"custom_unit_price"`
 }
 
 type CreateSaleRequest struct {
@@ -31,6 +43,12 @@ type CreateSaleRequest struct {
 	// leave them nil and default to 'COMPLETED'.
 	PaymentStatus    string  `json:"payment_status"`
 	DynamicQRPayload *string `json:"dynamic_qr_payload"`
+
+	// TaxAmount / TipAmount are added on top of the item subtotals. Kept
+	// nullable so callers that don't compute them (legacy cashier flow)
+	// can send zero. Stored on the Sale row directly for reporting.
+	TaxAmount float64 `json:"tax_amount"`
+	TipAmount float64 `json:"tip_amount"`
 }
 
 func CreateSale(db *gorm.DB) gin.HandlerFunc {
@@ -73,12 +91,51 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 
+		// Validate item shape up-front so we never begin a transaction
+		// with a guaranteed-to-fail line (keeps DB connection usage down
+		// on obvious client bugs).
+		for i, item := range req.Items {
+			if err := validateSaleItemRequest(item); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("item %d: %s", i+1, err.Error())})
+				return
+			}
+		}
+
+		// Snapshot customer identity BEFORE the transaction so reprinting
+		// an old receipt doesn't depend on the Customer row still matching.
+		customerNameSnap, customerPhoneSnap := "", ""
+		if req.CustomerID != nil && *req.CustomerID != "" {
+			var customer models.Customer
+			if err := db.Select("name", "phone").
+				Where("id = ? AND tenant_id = ?", *req.CustomerID, tenantID).
+				First(&customer).Error; err == nil {
+				customerNameSnap = customer.Name
+				customerPhoneSnap = customer.Phone
+			}
+		}
+
 		var sale models.Sale
 		err := db.Transaction(func(tx *gorm.DB) error {
 			var items []models.SaleItem
 			var total float64
 
 			for _, item := range req.Items {
+				if item.IsService {
+					subtotal := item.CustomUnitPrice * float64(item.Quantity)
+					total += subtotal
+					items = append(items, models.SaleItem{
+						ProductID:         nil,
+						Name:              item.CustomDescription,
+						Price:             item.CustomUnitPrice,
+						Quantity:          item.Quantity,
+						Subtotal:          subtotal,
+						IsService:         true,
+						CustomDescription: item.CustomDescription,
+						CustomUnitPrice:   item.CustomUnitPrice,
+					})
+					continue
+				}
+
 				var product models.Product
 				if err := tx.Where("id = ? AND tenant_id = ? AND is_available = true", item.ProductID, tenantID).
 					First(&product).Error; err != nil {
@@ -88,8 +145,9 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 				subtotal := product.Price * float64(item.Quantity)
 				total += subtotal
 
+				productID := product.ID
 				items = append(items, models.SaleItem{
-					ProductID: product.ID,
+					ProductID: &productID,
 					Name:      product.Name,
 					Price:     product.Price,
 					Quantity:  item.Quantity,
@@ -100,7 +158,7 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 					containerSubtotal := float64(product.ContainerPrice) * float64(item.Quantity)
 					total += containerSubtotal
 					items = append(items, models.SaleItem{
-						ProductID:         product.ID,
+						ProductID:         &productID,
 						Name:              product.Name + " — Envase",
 						Price:             float64(product.ContainerPrice),
 						Quantity:          item.Quantity,
@@ -114,22 +172,30 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 				}
 			}
 
+			// Tax and tip ride on top of the item total. Keep them
+			// separate on the row so reports can strip them out.
+			total += req.TaxAmount + req.TipAmount
+
 			paymentStatus := req.PaymentStatus
 			if paymentStatus == "" {
 				paymentStatus = "COMPLETED"
 			}
 			sale = models.Sale{
-				TenantID:         tenantID,
-				CreatedBy:        middleware.UUIDPtr(userID),
-				BranchID:         middleware.UUIDPtr(branchID),
-				Total:            total,
-				PaymentMethod:    req.PaymentMethod,
-				CustomerID:       req.CustomerID,
-				IsCredit:         req.PaymentMethod == models.PaymentCredit,
-				CreditAccountID:  req.CreditAccountID,
-				PaymentStatus:    paymentStatus,
-				DynamicQRPayload: req.DynamicQRPayload,
-				Items:            items,
+				TenantID:              tenantID,
+				CreatedBy:             middleware.UUIDPtr(userID),
+				BranchID:              middleware.UUIDPtr(branchID),
+				Total:                 total,
+				TaxAmount:             req.TaxAmount,
+				TipAmount:             req.TipAmount,
+				PaymentMethod:         req.PaymentMethod,
+				CustomerID:            req.CustomerID,
+				CustomerNameSnapshot:  customerNameSnap,
+				CustomerPhoneSnapshot: customerPhoneSnap,
+				IsCredit:              req.PaymentMethod == models.PaymentCredit,
+				CreditAccountID:       req.CreditAccountID,
+				PaymentStatus:         paymentStatus,
+				DynamicQRPayload:      req.DynamicQRPayload,
+				Items:                 items,
 			}
 			if req.ID != "" {
 				sale.ID = req.ID
@@ -263,3 +329,28 @@ func (e *productNotFoundError) Error() string {
 }
 
 func errProductNotFound(id string) error { return &productNotFoundError{id: id} }
+
+// validateSaleItemRequest enforces the service/product XOR that migration
+// 020's CHECK constraint enforces at the DB layer. Surfacing the error
+// here means the client sees a Spanish message instead of a 500.
+func validateSaleItemRequest(item SaleItemRequest) error {
+	if item.IsService {
+		if item.ProductID != "" {
+			return fmt.Errorf("un ítem de servicio no puede tener product_id")
+		}
+		if item.CustomDescription == "" {
+			return fmt.Errorf("descripción requerida para ítem de servicio")
+		}
+		if item.CustomUnitPrice <= 0 {
+			return fmt.Errorf("precio del servicio debe ser mayor a 0")
+		}
+		return nil
+	}
+	if item.ProductID == "" {
+		return fmt.Errorf("product_id requerido")
+	}
+	if !models.IsValidUUID(item.ProductID) {
+		return fmt.Errorf("product_id debe ser un UUID v4")
+	}
+	return nil
+}

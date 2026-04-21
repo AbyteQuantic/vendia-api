@@ -145,14 +145,16 @@ func CancelCredit(db *gorm.DB) gin.HandlerFunc {
 		err := db.Transaction(func(tx *gorm.DB) error {
 			for _, sale := range sales {
 				for _, item := range sale.Items {
-					// Container charges are virtual line items — no stock.
-					if item.IsContainerCharge {
+					// Container charges and service lines are virtual —
+					// no inventory row to restore.
+					if item.IsContainerCharge || item.IsService || item.ProductID == nil {
 						continue
 					}
+					pid := *item.ProductID
 					if err := tx.Model(&models.Product{}).
-						Where("id = ? AND tenant_id = ?", item.ProductID, tenantID).
+						Where("id = ? AND tenant_id = ?", pid, tenantID).
 						UpdateColumn("stock", gorm.Expr("stock + ?", item.Quantity)).Error; err != nil {
-						return fmt.Errorf("restore stock product=%s: %w", item.ProductID, err)
+						return fmt.Errorf("restore stock product=%s: %w", pid, err)
 					}
 					restoredItems++
 				}

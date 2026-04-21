@@ -12,11 +12,13 @@ import (
 )
 
 type AuthResponse struct {
-	Token        string `json:"token"`
-	RefreshToken string `json:"refresh_token,omitempty"`
-	TenantID     string `json:"tenant_id"`
-	OwnerName    string `json:"owner_name"`
-	BusinessName string `json:"business_name"`
+	Token         string              `json:"token"`
+	RefreshToken  string              `json:"refresh_token,omitempty"`
+	TenantID      string              `json:"tenant_id"`
+	OwnerName     string              `json:"owner_name"`
+	BusinessName  string              `json:"business_name"`
+	BusinessTypes []string            `json:"business_types"`
+	FeatureFlags  models.FeatureFlags `json:"feature_flags"`
 }
 
 func createTokenPair(db *gorm.DB, tenant models.Tenant, jwtSecret string) (*AuthResponse, error) {
@@ -40,11 +42,13 @@ func createTokenPair(db *gorm.DB, tenant models.Tenant, jwtSecret string) (*Auth
 	}
 
 	return &AuthResponse{
-		Token:        accessToken,
-		RefreshToken: refreshStr,
-		TenantID:     tenant.ID,
-		OwnerName:    tenant.OwnerName,
-		BusinessName: tenant.BusinessName,
+		Token:         accessToken,
+		RefreshToken:  refreshStr,
+		TenantID:      tenant.ID,
+		OwnerName:     tenant.OwnerName,
+		BusinessName:  tenant.BusinessName,
+		BusinessTypes: tenant.BusinessTypes,
+		FeatureFlags:  tenant.FeatureFlags,
 	}, nil
 }
 

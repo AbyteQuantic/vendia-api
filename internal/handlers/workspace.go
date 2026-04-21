@@ -12,6 +12,9 @@ import (
 )
 
 // createWorkspaceTokenPair generates JWT + refresh token for a specific workspace.
+// The tenant row is re-read so the response always carries the latest
+// feature_flags — even if the workspace preload was built from a stale
+// join. A miss on the tenant is non-fatal: flags default to all-off.
 func createWorkspaceTokenPair(db *gorm.DB, user models.User, tenantID, branchID, businessName, role, jwtSecret string) (*AuthResponse, error) {
 	accessToken, err := auth.GenerateWorkspaceToken(
 		user.ID, tenantID, branchID, user.Phone, businessName, role, jwtSecret,
@@ -35,12 +38,18 @@ func createWorkspaceTokenPair(db *gorm.DB, user models.User, tenantID, branchID,
 		return nil, err
 	}
 
+	var tenant models.Tenant
+	_ = db.Select("id", "business_types", "feature_flags").
+		First(&tenant, "id = ?", tenantID).Error
+
 	return &AuthResponse{
-		Token:        accessToken,
-		RefreshToken: refreshStr,
-		TenantID:     tenantID,
-		OwnerName:    user.Name,
-		BusinessName: businessName,
+		Token:         accessToken,
+		RefreshToken:  refreshStr,
+		TenantID:      tenantID,
+		OwnerName:     user.Name,
+		BusinessName:  businessName,
+		BusinessTypes: tenant.BusinessTypes,
+		FeatureFlags:  tenant.FeatureFlags,
 	}, nil
 }
 

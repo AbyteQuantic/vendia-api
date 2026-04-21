@@ -251,8 +251,9 @@ func CloseOrder(db *gorm.DB) gin.HandlerFunc {
 
 			var saleItems []models.SaleItem
 			for _, item := range order.Items {
+				pid := item.ProductUUID
 				saleItems = append(saleItems, models.SaleItem{
-					ProductID: item.ProductUUID,
+					ProductID: &pid,
 					Name:      item.ProductName,
 					Price:     item.UnitPrice,
 					Quantity:  item.Quantity,

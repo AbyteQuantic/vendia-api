@@ -2,17 +2,78 @@ package models
 
 import "time"
 
-// Valid business type values.
+// Unified business-type taxonomy (see migration 020).
+// The DB enforces the same whitelist via validate_business_types().
+// Keep this list in sync with DefaultFeatureFlags and with the Flutter
+// StepConfig options — changes MUST land as a migration.
 const (
-	BusinessTypeTiendaBarrio = "tienda_barrio"
-	BusinessTypeMinimercado  = "minimercado"
-	BusinessTypeBar          = "bar"
-	BusinessTypeMiscelanea   = "miscelanea"
-	BusinessTypeMuebles      = "muebles"
-	BusinessTypeManufactura  = "manufactura"
-	BusinessTypeReparacion   = "reparacion"
-	BusinessTypeComidas      = "comidas_rapidas"
+	BusinessTypeTiendaBarrio         = "tienda_barrio"
+	BusinessTypeMinimercado          = "minimercado"
+	BusinessTypeDepositoConstruccion = "deposito_construccion"
+	BusinessTypeRestaurante          = "restaurante"
+	BusinessTypeComidasRapidas       = "comidas_rapidas"
+	BusinessTypeBar                  = "bar"
+	BusinessTypeManufactura          = "manufactura"
+	BusinessTypeReparacionMuebles    = "reparacion_muebles"
+	BusinessTypeEmprendimientoGen    = "emprendimiento_general"
 )
+
+// ValidBusinessTypes is the canonical whitelist. The register handler
+// rejects anything outside it (defense in depth — the DB CHECK would
+// reject it too, but surfacing the error at the app layer gives a
+// Spanish message instead of a 500).
+var ValidBusinessTypes = map[string]struct{}{
+	BusinessTypeTiendaBarrio:         {},
+	BusinessTypeMinimercado:          {},
+	BusinessTypeDepositoConstruccion: {},
+	BusinessTypeRestaurante:          {},
+	BusinessTypeComidasRapidas:       {},
+	BusinessTypeBar:                  {},
+	BusinessTypeManufactura:          {},
+	BusinessTypeReparacionMuebles:    {},
+	BusinessTypeEmprendimientoGen:    {},
+}
+
+// FeatureFlags are per-tenant module toggles derived from business_types.
+// The frontend reads this blob at login and hides modules accordingly.
+// Storing the booleans explicitly (vs. re-deriving them client-side) lets
+// us ship admin overrides without an app release — see migration 021.
+type FeatureFlags struct {
+	EnableTables          bool `json:"enable_tables"`
+	EnableKDS             bool `json:"enable_kds"`
+	EnableTips            bool `json:"enable_tips"`
+	EnableServices        bool `json:"enable_services"`
+	EnableCustomBilling   bool `json:"enable_custom_billing"`
+	EnableFractionalUnits bool `json:"enable_fractional_units"`
+}
+
+// DefaultFeatureFlags computes the feature flag matrix from a list of
+// business types. Keep this in sync with the SQL backfill in
+// migration 021 — they must produce identical output.
+func DefaultFeatureFlags(types []string, hasTables bool) FeatureFlags {
+	has := func(needles ...string) bool {
+		for _, n := range needles {
+			for _, t := range types {
+				if t == n {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	food := has(BusinessTypeRestaurante, BusinessTypeComidasRapidas, BusinessTypeBar)
+	services := has(BusinessTypeReparacionMuebles, BusinessTypeManufactura, BusinessTypeEmprendimientoGen)
+
+	return FeatureFlags{
+		EnableTables:          food || hasTables,
+		EnableKDS:             food,
+		EnableTips:            food,
+		EnableServices:        services,
+		EnableCustomBilling:   services,
+		EnableFractionalUnits: has(BusinessTypeDepositoConstruccion),
+	}
+}
 
 type Tenant struct {
 	BaseModel
@@ -26,6 +87,11 @@ type Tenant struct {
 
 	BusinessName  string   `gorm:"not null" json:"business_name"`
 	BusinessTypes []string `gorm:"serializer:json;default:'[]'" json:"business_types"`
+	// FeatureFlags is the derived per-tenant module toggle blob. Backend
+	// computes it on register via DefaultFeatureFlags; frontend reads it
+	// at login to decide which modules to render. Stored as JSONB (see
+	// migration 021) but GORM only needs the serializer directive.
+	FeatureFlags FeatureFlags `gorm:"serializer:json;type:jsonb;not null;default:'{}'" json:"feature_flags"`
 	RazonSocial  string       `gorm:"not null;default:''" json:"razon_social"`
 	NIT          string       `gorm:"not null;default:''" json:"nit"`
 	Address      string       `gorm:"not null;default:''" json:"address"`

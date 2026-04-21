@@ -150,8 +150,9 @@ func CloseTab(db *gorm.DB) gin.HandlerFunc {
 			for _, item := range tabItems {
 				subtotal := item.Price * float64(item.Quantity)
 				total += subtotal
+				pid := item.ProductID
 				saleItems = append(saleItems, models.SaleItem{
-					ProductID: item.ProductID,
+					ProductID: &pid,
 					Name:      item.Name,
 					Price:     item.Price,
 					Quantity:  item.Quantity,

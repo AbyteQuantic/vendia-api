@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"vendia-backend/internal/models"
 
@@ -63,11 +64,19 @@ func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 			return
 		}
 
+		businessTypes, validationErr := validateBusinessTypes(resolveBusinessTypes(req.Business))
+		if validationErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": validationErr.Error()})
+			return
+		}
+
 		ownerHash, err := bcrypt.GenerateFromPassword([]byte(req.Owner.Password), 12)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al procesar contraseña"})
 			return
 		}
+
+		flags := models.DefaultFeatureFlags(businessTypes, req.Config.HasTables)
 
 		var tenant models.Tenant
 		var user models.User
@@ -89,13 +98,14 @@ func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 				Phone:         req.Owner.Phone,
 				PasswordHash:  string(ownerHash),
 				BusinessName:  req.Business.Name,
-				BusinessTypes: resolveBusinessTypes(req.Business),
+				BusinessTypes: businessTypes,
+				FeatureFlags:  flags,
 				RazonSocial:   req.Business.RazonSocial,
 				NIT:           req.Business.NIT,
 				Address:       req.Business.Address,
 				SaleTypes:     req.Config.SaleTypes,
 				HasShowcases:  req.Config.HasShowcases,
-				HasTables:     req.Config.HasTables,
+				HasTables:     req.Config.HasTables || flags.EnableTables,
 			}
 			if err := tx.Create(&tenant).Error; err != nil {
 				return err
@@ -185,4 +195,34 @@ func resolveBusinessTypes(b BusinessInput) []string {
 		return []string{b.Type}
 	}
 	return []string{}
+}
+
+// validateBusinessTypes remaps legacy values to the unified taxonomy and
+// rejects anything outside the whitelist. The DB CHECK would catch the
+// bad value too but we want a Spanish-language error at the app layer.
+// Legacy → unified mapping mirrors migration 020's UPDATE statement so
+// both the startup backfill and a fresh register land on the same values.
+func validateBusinessTypes(raw []string) ([]string, error) {
+	legacyMap := map[string]string{
+		"muebles":    models.BusinessTypeReparacionMuebles,
+		"miscelanea": models.BusinessTypeEmprendimientoGen,
+		"reparacion": models.BusinessTypeReparacionMuebles,
+	}
+
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(raw))
+	for _, t := range raw {
+		if mapped, ok := legacyMap[t]; ok {
+			t = mapped
+		}
+		if _, ok := models.ValidBusinessTypes[t]; !ok {
+			return nil, fmt.Errorf("tipo de negocio no válido: %q", t)
+		}
+		if _, dup := seen[t]; dup {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	return out, nil
 }

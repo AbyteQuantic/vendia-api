@@ -10,7 +10,10 @@ func TestBusinessType_Constants(t *testing.T) {
 	assert.Equal(t, "tienda_barrio", BusinessTypeTiendaBarrio)
 	assert.Equal(t, "minimercado", BusinessTypeMinimercado)
 	assert.Equal(t, "bar", BusinessTypeBar)
-	assert.Equal(t, "miscelanea", BusinessTypeMiscelanea)
+	assert.Equal(t, "reparacion_muebles", BusinessTypeReparacionMuebles)
+	assert.Equal(t, "emprendimiento_general", BusinessTypeEmprendimientoGen)
+	assert.Equal(t, "restaurante", BusinessTypeRestaurante)
+	assert.Equal(t, "deposito_construccion", BusinessTypeDepositoConstruccion)
 }
 
 func TestTenant_StoreFields(t *testing.T) {
