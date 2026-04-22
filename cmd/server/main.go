@@ -360,6 +360,13 @@ func main() {
 		// Phase 3 — Support hub (super-admin side)
 		admin.GET("/support/tickets", handlers.AdminListSupportTickets(db))
 		admin.PATCH("/support/tickets/:id", handlers.AdminUpdateSupportTicket(db))
+
+		// Catalog CMS & Template Engine
+		admin.GET("/catalogs/templates", handlers.AdminListCatalogTemplates(db))
+		admin.POST("/catalogs/templates", handlers.AdminCreateCatalogTemplate(db))
+		admin.PATCH("/catalogs/templates/:id", handlers.AdminUpdateCatalogTemplate(db))
+		admin.DELETE("/catalogs/templates/:id", handlers.AdminDeleteCatalogTemplate(db))
+		admin.GET("/catalogs/analytics", handlers.AdminGetCatalogAnalytics(db))
 	}
 
 	log.Printf("VendIA backend running on :%s (env=%s)", cfg.Port, cfg.Env)

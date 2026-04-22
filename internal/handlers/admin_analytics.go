@@ -175,21 +175,50 @@ func AdminUpdateSubscription(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		valid := map[string]bool{"trial": true, "active": true, "suspended": true, "cancelled": true}
-		if !valid[req.Status] {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "status inválido"})
+		// Map input status to Pro status if applicable, but better use the constants
+		// ValidStatuses: TRIAL, FREE, PRO_ACTIVE, PRO_PAST_DUE
+		// The request might be sending legacy strings: trial, active, suspended, cancelled
+		statusMap := map[string]string{
+			"trial":     models.SubscriptionStatusTrial,
+			"active":    models.SubscriptionStatusProActive,
+			"suspended": models.SubscriptionStatusProPastDue,
+			"cancelled": models.SubscriptionStatusFree,
+		}
+
+		newStatus, ok := statusMap[req.Status]
+		if !ok {
+			// Try direct match if already using new constants
+			if _, valid := models.ValidSubscriptionStatuses[req.Status]; valid {
+				newStatus = req.Status
+			} else {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "status inválido"})
+				return
+			}
+		}
+
+		updates := map[string]any{"status": newStatus}
+		if req.EndsAt != nil && newStatus == models.SubscriptionStatusTrial {
+			updates["trial_ends_at"] = *req.EndsAt
+		}
+
+		result := db.Model(&models.TenantSubscription{}).Where("tenant_id = ?", tenantID).Updates(updates)
+		if result.Error != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al actualizar suscripción"})
 			return
 		}
-
-		updates := map[string]any{"subscription_status": req.Status}
-		if req.EndsAt != nil {
-			updates["subscription_ends_at"] = *req.EndsAt
-		}
-
-		result := db.Model(&models.Tenant{}).Where("id = ?", tenantID).Updates(updates)
 		if result.RowsAffected == 0 {
-			c.JSON(http.StatusNotFound, gin.H{"error": "tenant no encontrado"})
-			return
+			// If not found, try to bootstrap it
+			sub := models.TenantSubscription{
+				TenantID: tenantID,
+				Status:   newStatus,
+			}
+			if req.EndsAt != nil && newStatus == models.SubscriptionStatusTrial {
+				sub.TrialEndsAt = req.EndsAt
+			}
+			if err := db.Create(&sub).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "error al crear suscripción"})
+				return
+			}
 		}
 
 		c.JSON(http.StatusOK, gin.H{"message": "suscripción actualizada"})
