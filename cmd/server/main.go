@@ -278,6 +278,13 @@ func main() {
 		v1.GET("/store/config", handlers.GetStoreConfig(db))
 		v1.PATCH("/store/config", handlers.UpdateStoreConfig(db))
 
+		// Store slug — dedicated read/edit endpoint for the Marketing
+		// Hub. GET auto-provisions a slug from the business name on
+		// first call; PATCH validates URL-safe format and returns 409
+		// when the requested slug is already taken by another tenant.
+		v1.GET("/store/slug", handlers.GetStoreSlug(db))
+		v1.PATCH("/store/slug", handlers.UpdateStoreSlug(db))
+
 		// Business profile
 		v1.GET("/store/profile", handlers.GetBusinessProfile(db))
 		v1.PATCH("/store/profile", handlers.UpdateBusinessProfile(db))
