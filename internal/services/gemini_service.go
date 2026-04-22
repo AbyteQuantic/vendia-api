@@ -54,14 +54,14 @@ func (s *GeminiService) discoverModels() (string, string) {
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		log.Printf("[GEMINI] Failed to list models: %v — using hardcoded fallbacks", err)
-		return "gemini-1.5-flash-latest", "gemini-2.0-flash-exp"
+		return "gemini-2.0-flash", "gemini-2.5-flash-image"
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("[GEMINI] ListModels HTTP %d: %.200s — using fallbacks", resp.StatusCode, string(body))
-		return "gemini-1.5-flash-latest", "gemini-2.0-flash-exp"
+		return "gemini-2.0-flash", "gemini-2.5-flash-image"
 	}
 
 	var listResp struct {
@@ -72,7 +72,7 @@ func (s *GeminiService) discoverModels() (string, string) {
 	}
 	if err := json.Unmarshal(body, &listResp); err != nil {
 		log.Printf("[GEMINI] Failed to parse models list: %v", err)
-		return "gemini-1.5-flash-latest", "gemini-2.0-flash-exp"
+		return "gemini-2.0-flash", "gemini-2.5-flash-image"
 	}
 
 	var textModel, imageModel string
@@ -114,10 +114,10 @@ func (s *GeminiService) discoverModels() (string, string) {
 	}
 
 	if textModel == "" {
-		textModel = "gemini-1.5-flash-latest"
+		textModel = "gemini-2.0-flash"
 	}
 	if imageModel == "" {
-		imageModel = "gemini-2.0-flash-exp"
+		imageModel = "gemini-2.5-flash-image"
 	}
 
 	log.Printf("[GEMINI] Discovered %d models. Selected text=%s, image=%s", len(listResp.Models), textModel, imageModel)
