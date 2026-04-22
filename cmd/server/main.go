@@ -316,6 +316,10 @@ func main() {
 		admin.GET("/tenants", handlers.AdminListTenants(db))
 		admin.GET("/tenants/:id", handlers.AdminGetTenant(db))
 		admin.PATCH("/tenants/:id/subscription", handlers.AdminUpdateSubscription(db))
+
+		// Phase 2 — Ecosystem analyzer
+		admin.GET("/ecosystem/cross-identities", handlers.AdminCrossIdentities(db))
+		admin.GET("/ecosystem/metrics", handlers.AdminEcosystemMetrics(db))
 	}
 
 	log.Printf("VendIA backend running on :%s (env=%s)", cfg.Port, cfg.Env)
