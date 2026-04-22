@@ -25,6 +25,15 @@ type Config struct {
 	RedisURL          string
 	SupabaseURL       string
 	SupabaseServiceKey string
+
+	// Super-admin seed — optional. When both are set, the server
+	// upserts a row in admin_users on boot so the /admin/login
+	// endpoint has a credential to match against. Missing values
+	// skip the seed silently; rotation is explicitly NOT handled
+	// here (see internal/database/bootstrap.go).
+	SeedAdminEmail    string
+	SeedAdminPassword string
+	SeedAdminName     string
 }
 
 func Load() *Config {
@@ -97,6 +106,10 @@ func Load() *Config {
 		RedisURL:          os.Getenv("REDIS_URL"),
 		SupabaseURL:       os.Getenv("SUPABASE_URL"),
 		SupabaseServiceKey: os.Getenv("SUPABASE_SERVICE_KEY"),
+
+		SeedAdminEmail:    os.Getenv("SEED_ADMIN_EMAIL"),
+		SeedAdminPassword: os.Getenv("SEED_ADMIN_PASSWORD"),
+		SeedAdminName:     os.Getenv("SEED_ADMIN_NAME"),
 	}
 }
 

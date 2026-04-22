@@ -26,6 +26,16 @@ func main() {
 		log.Fatalf("failed to run migrations: %v", err)
 	}
 
+	// Seed the super-admin row from env vars (no-op when unset).
+	// Must run AFTER migrations so admin_users exists.
+	if err := database.BootstrapSuperAdmin(db, database.BootstrapSuperAdminConfig{
+		Email:    cfg.SeedAdminEmail,
+		Password: cfg.SeedAdminPassword,
+		Name:     cfg.SeedAdminName,
+	}); err != nil {
+		log.Printf("[BOOTSTRAP] super-admin seed failed: %v", err)
+	}
+
 	// ── Initialize external services (optional, nil-safe) ───────────────────
 	var geminiSvc *services.GeminiService
 	if cfg.GeminiAPIKey != "" {
@@ -93,6 +103,10 @@ func main() {
 	// ── Public routes ────────────────────────────────────────────────────────
 	r.GET("/ping", handlers.Ping)
 	r.POST("/login", loginLimiter, handlers.Login(db, cfg.JWTSecret))
+	// Admin login lives on its own path so the tenant login rate
+	// limiter, credentials table, and claim shape stay separate.
+	r.POST("/api/v1/admin/login",
+		loginLimiter, handlers.AdminLogin(db, cfg.JWTSecret))
 	r.POST("/api/v1/tenant/register", handlers.TenantRegister(db, cfg.JWTSecret))
 	r.POST("/api/v1/auth/refresh", handlers.RefreshToken(db, cfg.JWTSecret))
 	r.POST("/api/v1/auth/select-workspace", middleware.Auth(cfg.JWTSecret), handlers.SelectWorkspace(db, cfg.JWTSecret))
