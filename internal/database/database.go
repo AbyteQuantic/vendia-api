@@ -88,6 +88,7 @@ func Migrate(db *gorm.DB) error {
 		&models.UserWorkspace{},
 		&models.Branch{},
 		&models.TenantSubscription{},
+		&models.SupportTicket{},
 	)
 	if err != nil {
 		return err

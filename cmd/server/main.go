@@ -304,6 +304,9 @@ func main() {
 
 		// OCR (legacy endpoint)
 		v1.POST("/ocr/invoice", handlers.OCRInvoice(cfg.GeminiAPIKey))
+
+		// Phase 3 — Support hub (tenant side)
+		v1.POST("/support", handlers.CreateSupportTicket(db))
 	}
 
 	// ── Admin routes (super_admin only) ──────────────────────────────────────
@@ -320,6 +323,10 @@ func main() {
 		// Phase 2 — Ecosystem analyzer
 		admin.GET("/ecosystem/cross-identities", handlers.AdminCrossIdentities(db))
 		admin.GET("/ecosystem/metrics", handlers.AdminEcosystemMetrics(db))
+
+		// Phase 3 — Support hub (super-admin side)
+		admin.GET("/support/tickets", handlers.AdminListSupportTickets(db))
+		admin.PATCH("/support/tickets/:id", handlers.AdminUpdateSupportTicket(db))
 	}
 
 	log.Printf("VendIA backend running on :%s (env=%s)", cfg.Port, cfg.Env)
