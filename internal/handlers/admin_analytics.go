@@ -9,9 +9,30 @@ import (
 	"gorm.io/gorm"
 )
 
+// adminOverviewResponse is the exact contract the admin-web
+// OverviewPage reads via types/admin.AdminOverview. Naming mismatches
+// (e.g. offline_now vs. offline_tenants) caused React crashes in
+// production so we lock the shape here and keep a JSON tag per field.
+type adminOverviewResponse struct {
+	TotalTenants      int64                     `json:"total_tenants"`
+	ActiveToday       int64                     `json:"active_today"`
+	OfflineNow        int64                     `json:"offline_now"`
+	TotalSalesToday   float64                   `json:"total_sales_today"`
+	TotalSalesAllTime float64                   `json:"total_sales_all_time"`
+	SyncQueuePending  int64                     `json:"sync_queue_pending"`
+	TenantsByType     map[string]int64          `json:"tenants_by_type"`
+	SalesTrend7d      []adminOverviewSalesPoint `json:"sales_trend_7d"`
+}
+
+type adminOverviewSalesPoint struct {
+	Date  string  `json:"date"`
+	Total float64 `json:"total"`
+}
+
 func AdminOverview(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		startOfDay := time.Now().Truncate(24 * time.Hour)
+		now := time.Now()
+		startOfDay := now.Truncate(24 * time.Hour)
 
 		var totalTenants int64
 		db.Model(&models.Tenant{}).Count(&totalTenants)
@@ -23,7 +44,7 @@ func AdminOverview(db *gorm.DB) gin.HandlerFunc {
 			Count(&activeTodayCount)
 
 		var offlineCount int64
-		oneHourAgo := time.Now().Add(-1 * time.Hour)
+		oneHourAgo := now.Add(-1 * time.Hour)
 		db.Model(&models.Tenant{}).
 			Where("last_sync_at IS NOT NULL AND last_sync_at < ?", oneHourAgo).
 			Count(&offlineCount)
@@ -40,12 +61,72 @@ func AdminOverview(db *gorm.DB) gin.HandlerFunc {
 			Select("COALESCE(SUM(total), 0)").
 			Scan(&totalSalesAllTime)
 
-		c.JSON(http.StatusOK, gin.H{
-			"total_tenants":       totalTenants,
-			"active_today":        activeTodayCount,
-			"offline_tenants":     offlineCount,
-			"total_sales_today":   totalSalesToday,
-			"total_sales_all_time": totalSalesAllTime,
+		// sync_queue_pending — aggregate of tenants.pending_sync_ops.
+		// Already a cached int on every tenant row since migration
+		// 010, so a SUM is O(1) per tenant count.
+		var syncQueuePending int64
+		db.Model(&models.Tenant{}).
+			Select("COALESCE(SUM(pending_sync_ops), 0)").
+			Scan(&syncQueuePending)
+
+		// tenants_by_type — primary business_type bucket (the first
+		// element of the business_types array, kept JSON-encoded in
+		// the column since migration 020). Bucketing in Go rather
+		// than in SQL keeps the query portable and avoids a fragile
+		// substr/json-parse dance that doesn't translate cleanly
+		// across dialects.
+		var tenantRows []models.Tenant
+		db.Model(&models.Tenant{}).
+			Select("business_types").
+			Where("deleted_at IS NULL").
+			Find(&tenantRows)
+		tenantsByType := map[string]int64{}
+		for _, t := range tenantRows {
+			key := "desconocido"
+			if len(t.BusinessTypes) > 0 && t.BusinessTypes[0] != "" {
+				key = t.BusinessTypes[0]
+			}
+			tenantsByType[key]++
+		}
+
+		// sales_trend_7d — one row per day for the last 7 days,
+		// zero-filled for days with no sales so the LineChart
+		// renders a continuous axis instead of dropping gaps.
+		trendRows := []struct {
+			Day   time.Time
+			Total float64
+		}{}
+		db.Model(&models.Sale{}).
+			Select(`DATE_TRUNC('day', created_at) AS day,
+			        COALESCE(SUM(total), 0) AS total`).
+			Where("created_at >= ? AND deleted_at IS NULL",
+				startOfDay.Add(-6*24*time.Hour)).
+			Group("day").
+			Order("day ASC").
+			Scan(&trendRows)
+		byDay := make(map[string]float64, len(trendRows))
+		for _, r := range trendRows {
+			byDay[r.Day.Format("2006-01-02")] = r.Total
+		}
+		trend := make([]adminOverviewSalesPoint, 0, 7)
+		for i := 6; i >= 0; i-- {
+			d := startOfDay.Add(-time.Duration(i) * 24 * time.Hour).
+				Format("2006-01-02")
+			trend = append(trend, adminOverviewSalesPoint{
+				Date:  d,
+				Total: byDay[d],
+			})
+		}
+
+		c.JSON(http.StatusOK, adminOverviewResponse{
+			TotalTenants:      totalTenants,
+			ActiveToday:       activeTodayCount,
+			OfflineNow:        offlineCount,
+			TotalSalesToday:   totalSalesToday,
+			TotalSalesAllTime: totalSalesAllTime,
+			SyncQueuePending:  syncQueuePending,
+			TenantsByType:     tenantsByType,
+			SalesTrend7d:      trend,
 		})
 	}
 }
