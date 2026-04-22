@@ -309,6 +309,18 @@ func main() {
 		v1.POST("/support", handlers.CreateSupportTicket(db))
 	}
 
+	// ── Premium routes (JWT + PremiumAuth: TRIAL activo o PRO_ACTIVE) ────────
+	// Phase 4 — AI Voice-to-Catalog. The endpoint hits Gemini multimodal
+	// and is the first gated feature on the SaaS roadmap; mounting here
+	// puts the soft-paywall rail in production for real traffic.
+	premium := r.Group("/api/v1")
+	premium.Use(globalLimiter)
+	premium.Use(middleware.Auth(cfg.JWTSecret))
+	premium.Use(middleware.PremiumAuth(db))
+	{
+		premium.POST("/ai/voice-inventory", handlers.VoiceInventory(geminiSvc))
+	}
+
 	// ── Admin routes (super_admin only) ──────────────────────────────────────
 	admin := r.Group("/api/v1/admin")
 	admin.Use(globalLimiter)
