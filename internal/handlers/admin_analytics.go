@@ -50,26 +50,9 @@ func AdminOverview(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-func AdminListTenants(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		p := parsePagination(c)
-
-		var total int64
-		db.Model(&models.Tenant{}).Count(&total)
-
-		var tenants []models.Tenant
-		if err := db.Select("id, created_at, owner_name, phone, business_name, business_types, subscription_status, subscription_ends_at, last_sync_at, pending_sync_ops").
-			Order("created_at DESC").
-			Offset((p.Page - 1) * p.PerPage).
-			Limit(p.PerPage).
-			Find(&tenants).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al obtener tenants"})
-			return
-		}
-
-		c.JSON(http.StatusOK, newPaginatedResponse(tenants, total, p))
-	}
-}
+// AdminListTenants moved to admin_tenants.go — the Phase 1 god-mode
+// endpoint replaces the paginated variant. If pagination is needed
+// later it belongs on the new shape, not a parallel handler.
 
 func AdminGetTenant(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
