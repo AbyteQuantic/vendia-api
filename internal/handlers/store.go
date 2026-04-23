@@ -178,17 +178,6 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		if !tenant.IsDeliveryOpen {
-			c.JSON(http.StatusOK, gin.H{
-				"data": gin.H{
-					"business_name": tenant.BusinessName,
-					"is_open":       false,
-					"products":      []any{},
-				},
-			})
-			return
-		}
-
 		var products []models.Product
 		db.Where("tenant_id = ? AND is_available = true AND price > 0", tenant.ID).
 			Order("name ASC").
@@ -298,7 +287,7 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 			"data": gin.H{
 				"business_name":    tenant.BusinessName,
 				"logo_url":         tenant.LogoURL,
-				"is_open":          true,
+				"is_open":          tenant.IsDeliveryOpen,
 				"delivery_cost":    tenant.DeliveryCost,
 				"min_order_amount": tenant.MinOrderAmount,
 				"products":         catalog,

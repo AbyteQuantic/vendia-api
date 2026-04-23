@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS catalog_templates (
     default_banner_url TEXT,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS tenant_catalog_configs (
@@ -29,7 +30,8 @@ CREATE TABLE IF NOT EXISTS catalog_analytics (
     orders_generated INT NOT NULL DEFAULT 0,
     last_viewed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_catalog_analytics_views ON catalog_analytics(views_count DESC);
