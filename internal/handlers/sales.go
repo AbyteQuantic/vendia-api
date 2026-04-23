@@ -49,18 +49,58 @@ type CreateSaleRequest struct {
 	// can send zero. Stored on the Sale row directly for reporting.
 	TaxAmount float64 `json:"tax_amount"`
 	TipAmount float64 `json:"tip_amount"`
+
+	// BranchID (Phase 6) — the sede the sale is registered against.
+	// When provided the handler scopes product lookup + stock
+	// decrement to this branch's inventory. Optional for
+	// backward-compat with mono-sede tenants whose POS never knew
+	// about sedes; in that case we fall back to the JWT's branch
+	// claim, and if that's empty too, to the global-scope lookup
+	// that existed before the isolation refactor.
+	BranchID string `json:"branch_id"`
 }
 
 func CreateSale(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
 		userID := middleware.GetUserID(c)
-		branchID := middleware.GetBranchID(c)
+		jwtBranchID := middleware.GetBranchID(c)
 
 		var req CreateSaleRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
+		}
+
+		// Resolve the branch this sale is scoped to. Priority:
+		// payload > JWT claim > none. Empty string signals "no
+		// scope" — mono-sede tenants who send neither keep the
+		// global product lookup so stock isn't hidden from them.
+		branchID := jwtBranchID
+		if req.BranchID != "" {
+			if !models.IsValidUUID(req.BranchID) {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"error": "branch_id debe ser un UUID válido",
+				})
+				return
+			}
+			// Ownership check — a crafted payload could try to point
+			// at another tenant's sede. The BranchScopeResolution
+			// helper used by list endpoints reads from the query
+			// string; here we re-run the same ownership check on
+			// the body value.
+			var ownedCount int64
+			db.Model(&models.Branch{}).
+				Where("id = ? AND tenant_id = ?", req.BranchID, tenantID).
+				Count(&ownedCount)
+			if ownedCount == 0 {
+				c.JSON(http.StatusForbidden, gin.H{
+					"error":      "la sucursal no pertenece al negocio",
+					"error_code": "branch_not_owned",
+				})
+				return
+			}
+			branchID = req.BranchID
 		}
 
 		if req.ID != "" && !models.IsValidUUID(req.ID) {
@@ -137,8 +177,20 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 				}
 
 				var product models.Product
-				if err := tx.Where("id = ? AND tenant_id = ? AND is_available = true", item.ProductID, tenantID).
-					First(&product).Error; err != nil {
+				// Scope the product lookup to the selected sede when
+				// one is set. Same product UUID can exist in two
+				// sedes with independent stock counters — filtering
+				// by branch_id here is what makes Phase-6 isolation
+				// real instead of advisory. When branchID is empty
+				// (mono-sede tenants) we keep the tenant-wide query
+				// for backward-compat.
+				q := tx.Where(
+					"id = ? AND tenant_id = ? AND is_available = true",
+					item.ProductID, tenantID)
+				if branchID != "" {
+					q = q.Where("branch_id = ?", branchID)
+				}
+				if err := q.First(&product).Error; err != nil {
 					return &gin.Error{Err: errProductNotFound(item.ProductID), Type: gin.ErrorTypePublic}
 				}
 
@@ -303,13 +355,25 @@ func ListSales(db *gorm.DB) gin.HandlerFunc {
 		tenantID := middleware.GetTenantID(c)
 		p := parsePagination(c)
 
-		var total int64
+		scope := ResolveBranchScope(c, db)
+		if scope.NotOwned {
+			c.JSON(http.StatusForbidden, gin.H{
+				"error":      "la sucursal no pertenece al negocio",
+				"error_code": "branch_not_owned",
+			})
+			return
+		}
+
 		query := db.Model(&models.Sale{}).Where("tenant_id = ?", tenantID)
+		query = ApplyBranchScope(query, scope)
+
+		var total int64
 		query.Count(&total)
 
 		var sales []models.Sale
-		if err := db.Preload("Items").
-			Where("tenant_id = ?", tenantID).
+		listQuery := db.Preload("Items").Where("tenant_id = ?", tenantID)
+		listQuery = ApplyBranchScope(listQuery, scope)
+		if err := listQuery.
 			Order("created_at DESC").
 			Offset((p.Page - 1) * p.PerPage).
 			Limit(p.PerPage).

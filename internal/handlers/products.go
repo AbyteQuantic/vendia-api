@@ -33,8 +33,25 @@ func ListProducts(db *gorm.DB) gin.HandlerFunc {
 		tenantID := middleware.GetTenantID(c)
 		p := parsePagination(c)
 
+		// Phase-6 branch isolation: when the caller passes
+		// ?branch_id= (or carries one in the JWT workspace claim),
+		// the inventory listing filters to that sede only. Callers
+		// without any branch context get the legacy global view —
+		// mono-sede tenants keep working unchanged.
+		scope := ResolveBranchScope(c, db)
+		if scope.NotOwned {
+			c.JSON(http.StatusForbidden, gin.H{
+				"error":      "la sucursal no pertenece al negocio",
+				"error_code": "branch_not_owned",
+			})
+			return
+		}
+
+		query := db.Model(&models.Product{}).
+			Where("tenant_id = ? AND is_available = true", tenantID)
+		query = ApplyBranchScope(query, scope)
+
 		var total int64
-		query := db.Model(&models.Product{}).Where("tenant_id = ? AND is_available = true", tenantID)
 		query.Count(&total)
 
 		var products []models.Product

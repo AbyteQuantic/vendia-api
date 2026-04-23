@@ -18,10 +18,20 @@ func ListCredits(db *gorm.DB) gin.HandlerFunc {
 		p := parsePagination(c)
 		status := c.Query("status")
 
+		scope := ResolveBranchScope(c, db)
+		if scope.NotOwned {
+			c.JSON(http.StatusForbidden, gin.H{
+				"error":      "la sucursal no pertenece al negocio",
+				"error_code": "branch_not_owned",
+			})
+			return
+		}
+
 		query := db.Model(&models.CreditAccount{}).Where("tenant_id = ?", tenantID)
 		if status != "" {
 			query = query.Where("status = ?", status)
 		}
+		query = ApplyBranchScope(query, scope)
 
 		var total int64
 		query.Count(&total)
