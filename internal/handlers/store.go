@@ -312,9 +312,15 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 			tenant.LogoURL = themeConfig.CustomLogoURL
 		}
 
+		businessType := ""
+		if len(tenant.BusinessTypes) > 0 {
+			businessType = tenant.BusinessTypes[0]
+		}
+
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{
 				"business_name":    tenant.BusinessName,
+				"business_type":    businessType,
 				"logo_url":         tenant.LogoURL,
 				"is_open":          tenant.IsDeliveryOpen,
 				"delivery_cost":    tenant.DeliveryCost,
