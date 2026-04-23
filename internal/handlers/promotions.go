@@ -242,12 +242,30 @@ func CreatePromotion(db *gorm.DB) gin.HandlerFunc {
 // readable embedded copy — Gemini's image model is inconsistent with
 // typography, so we give it a simple, well-structured instruction and
 // let the shopkeeper accept or regenerate.
+//
+// 2026-04-23: prompt V2 injects full value-proposition (precio normal
+// tachado, precio promo gigante, ahorro, % OFF, nombre del negocio).
+// Feedback del PO: los banners V1 se veían como "fotos de menú" porque
+// el prompt sólo recibía un DiscountText suelto — ahora le damos al
+// modelo la estructura financiera completa con jerarquía tipográfica
+// explícita y anti-patrones listados.
 func GenerateMarketingBanner(geminiSvc *services.GeminiService, storageSvc services.FileStorage) gin.HandlerFunc {
 	type Request struct {
+		// Legacy (V1) — aún requeridos para compatibilidad del cliente.
 		PromoName    string   `json:"promo_name"    binding:"required"`
 		Products     []string `json:"products"      binding:"required,min=1"`
 		DiscountText string   `json:"discount_text"`
 		Tone         string   `json:"tone"` // "vibrante" | "elegante" | "urgente" | ""
+
+		// V2 — value-proposition injection. Todos opcionales: si no
+		// llegan caemos al prompt V1. Esto permite que un cliente Flutter
+		// viejo no se rompa mientras se despliega la nueva versión.
+		TenantName     string `json:"tenant_name"`
+		ComboTitle     string `json:"combo_title"`
+		NormalPriceStr string `json:"normal_price_str"`
+		PromoPriceStr  string `json:"promo_price_str"`
+		DiscountStr    string `json:"discount_str"`
+		SavingsStr     string `json:"savings_str"`
 	}
 
 	return func(c *gin.Context) {
@@ -263,36 +281,18 @@ func GenerateMarketingBanner(geminiSvc *services.GeminiService, storageSvc servi
 			return
 		}
 
-		tone := strings.TrimSpace(req.Tone)
-		if tone == "" {
-			tone = "vibrante"
-		}
-		productsStr := strings.Join(req.Products, ", ")
-		discount := strings.TrimSpace(req.DiscountText)
-		if discount == "" {
-			discount = "¡PROMO ESPECIAL!"
-		}
-
-		prompt := fmt.Sprintf(
-			`Eres un DIRECTOR DE ARTE publicitario para retail colombiano. Tu única tarea es generar UN banner publicitario cuadrado 1:1 de ALTA CALIDAD para esta promoción.
-
-PROMOCIÓN: %s
-PRODUCTOS INCLUIDOS: %s
-TEXTO DE DESCUENTO PRINCIPAL: %s
-TONO VISUAL: %s
-
-REGLAS ESTRICTAS DE COMPOSICIÓN (no violarlas):
-1. Formato CUADRADO 1:1 con margen mínimo de 10%% a los 4 lados.
-2. TIPOGRAFÍA embebida: el texto "%s" debe ser el elemento más grande y leerse a la perfección a 320×320 px. Usa fuentes sans-serif bold con altísimo contraste (texto blanco sobre fondo oscuro o viceversa).
-3. El nombre de la promoción "%s" debe aparecer como subtítulo, más pequeño pero legible.
-4. Estilo VISUAL: fotografía publicitaria realista o ilustración vectorial limpia — NUNCA estilo cartoon infantil. Paleta vibrante pero coherente (naranjas/rojos para urgencia, verdes/azules para frescura).
-5. PROHIBIDO inventar texto adicional, logos falsos, mezclar idiomas, o escribir en inglés.
-6. Los productos deben aparecer representados visualmente (fotografía o ilustración fiel) sin deformaciones.
-7. Compuesto para redes sociales colombianas: legible en un scroll rápido de Instagram/WhatsApp Status.
-
-Resultado: un banner listo para publicar, nivel agencia creativa.`,
-			req.PromoName, productsStr, discount, tone, discount, req.PromoName,
-		)
+		prompt := BuildPromoBannerPrompt(PromoBannerPromptInput{
+			PromoName:      req.PromoName,
+			Products:       req.Products,
+			DiscountText:   req.DiscountText,
+			Tone:           req.Tone,
+			TenantName:     req.TenantName,
+			ComboTitle:     req.ComboTitle,
+			NormalPriceStr: req.NormalPriceStr,
+			PromoPriceStr:  req.PromoPriceStr,
+			DiscountStr:    req.DiscountStr,
+			SavingsStr:     req.SavingsStr,
+		})
 
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 45*time.Second)
 		defer cancel()
@@ -511,3 +511,175 @@ func ApplyPromoToPOS(db *gorm.DB) gin.HandlerFunc {
 		})
 	}
 }
+
+// PromoBannerPromptInput gathers every piece of commercial context
+// the AI image model needs to render a READABLE promo banner. Lives
+// in its own struct so the handler can validate it, the prompt
+// builder can assemble it deterministically, and unit tests can
+// exercise it without HTTP.
+type PromoBannerPromptInput struct {
+	// Legacy inputs (V1). Still used as fallbacks when V2 is missing.
+	PromoName    string
+	Products     []string
+	DiscountText string
+	Tone         string
+
+	// V2 — value-proposition injection. See BuildPromoBannerPrompt.
+	TenantName     string
+	ComboTitle     string
+	NormalPriceStr string
+	PromoPriceStr  string
+	DiscountStr    string
+	SavingsStr     string
+}
+
+// BuildPromoBannerPrompt assembles the imperative, typographically
+// strict system prompt we feed to Gemini's image model.
+//
+// Why a dedicated builder:
+//  1. Retail banner generation is THE product differentiator of the
+//     Marketing Hub — if the prompt regresses, the feature dies.
+//  2. Gemini image models tend to render decorative text as gibberish
+//     unless the prompt pins down EXACT glyph strings, hierarchy and
+//     size ratios. The builder enforces that contract.
+//  3. Keeping prompt assembly pure lets us unit-test that every
+//     commercial string (price, savings, brand) is in the prompt
+//     verbatim and no inputs get silently dropped.
+//
+// If V2 inputs are missing we gracefully fall back to a V1-compatible
+// prompt (less rich but still better than nothing) — that way a
+// rolling deploy of an old Flutter client does not break generation.
+func BuildPromoBannerPrompt(in PromoBannerPromptInput) string {
+	tone := strings.TrimSpace(in.Tone)
+	if tone == "" {
+		tone = "vibrante"
+	}
+	productsStr := strings.Join(in.Products, ", ")
+	discountText := strings.TrimSpace(in.DiscountText)
+	if discountText == "" {
+		discountText = "¡PROMO ESPECIAL!"
+	}
+
+	promoName := firstNonEmpty(in.ComboTitle, in.PromoName, "Promoción especial")
+	tenant := strings.TrimSpace(in.TenantName)
+	normalPrice := strings.TrimSpace(in.NormalPriceStr)
+	promoPrice := strings.TrimSpace(in.PromoPriceStr)
+	discountLabel := firstNonEmpty(in.DiscountStr, discountText)
+	savings := strings.TrimSpace(in.SavingsStr)
+
+	// If no V2 financial data arrived, produce a V1-equivalent prompt
+	// so clients on the previous payload shape keep working. This
+	// branch will disappear once the Flutter rollout is at 100 %.
+	if normalPrice == "" && promoPrice == "" && savings == "" {
+		return fmt.Sprintf(
+			`Eres un DIRECTOR DE ARTE publicitario para retail colombiano. Tu única tarea es generar UN banner publicitario cuadrado 1:1 de ALTA CALIDAD para esta promoción.
+
+PROMOCIÓN: %s
+PRODUCTOS INCLUIDOS: %s
+TEXTO DE DESCUENTO PRINCIPAL: %s
+TONO VISUAL: %s
+
+REGLAS ESTRICTAS DE COMPOSICIÓN (no violarlas):
+1. Formato CUADRADO 1:1 con margen mínimo de 10%% a los 4 lados.
+2. TIPOGRAFÍA embebida: el texto "%s" debe ser el elemento más grande y leerse a la perfección a 320×320 px. Usa fuentes sans-serif bold con altísimo contraste (texto blanco sobre fondo oscuro o viceversa).
+3. El nombre de la promoción "%s" debe aparecer como subtítulo, más pequeño pero legible.
+4. Estilo VISUAL: fotografía publicitaria realista o ilustración vectorial limpia — NUNCA estilo cartoon infantil. Paleta vibrante pero coherente (naranjas/rojos para urgencia, verdes/azules para frescura).
+5. PROHIBIDO inventar texto adicional, logos falsos, mezclar idiomas, o escribir en inglés.
+6. Los productos deben aparecer representados visualmente (fotografía o ilustración fiel) sin deformaciones.
+7. Compuesto para redes sociales colombianas: legible en un scroll rápido de Instagram/WhatsApp Status.
+
+Resultado: un banner listo para publicar, nivel agencia creativa.`,
+			promoName, productsStr, discountText, tone,
+			discountText, promoName,
+		)
+	}
+
+	// V2 prompt: imperative, with explicit typographic hierarchy and
+	// an anti-pattern list. Empty fields are omitted from the
+	// hierarchy so the model doesn't invent values for them.
+	var hierarchy strings.Builder
+	rank := 1
+	addLine := func(role, value, note string) {
+		if strings.TrimSpace(value) == "" {
+			return
+		}
+		fmt.Fprintf(&hierarchy,
+			"%d. %s — TEXTO LITERAL: \"%s\". %s\n",
+			rank, role, value, note)
+		rank++
+	}
+	addLine(
+		"PRECIO PROMO (elemento MÁS grande — ocupa ±35% del alto del banner)",
+		promoPrice,
+		"Fuente sans-serif ULTRA BOLD, numeral enorme, color de alto contraste. Es el héroe visual.")
+	addLine(
+		"PRECIO NORMAL TACHADO (2º tamaño)",
+		normalPrice,
+		"Debe aparecer TACHADO con una línea diagonal gruesa. Color gris medio o rojo apagado. Más pequeño que el precio promo, claramente subordinado.")
+	addLine(
+		"ETIQUETA DE DESCUENTO (sello circular o cinta)",
+		discountLabel,
+		"Colócala como un 'sticker' circular o diagonal cinta en esquina superior derecha. Font-weight bold extremo. Esta etiqueta grita la urgencia.")
+	addLine(
+		"AHORRO EXPLÍCITO",
+		savings,
+		"Texto pequeño pero destacado cerca del precio promo. Indica la plata concreta que ahorra el cliente.")
+	addLine(
+		"TÍTULO DEL COMBO",
+		promoName,
+		"Subtítulo legible, 3º en jerarquía. Centrado encima o debajo del bloque de precios.")
+	addLine(
+		"NOMBRE DEL NEGOCIO",
+		tenant,
+		"Aparece pequeño, tipo firma, en esquina inferior. NO debe competir con los precios.")
+
+	return fmt.Sprintf(
+		`Eres un DIRECTOR DE ARTE publicitario senior para retail colombiano. Tu ÚNICA tarea es generar UN banner promocional cuadrado 1:1 de alta calidad, estilo GÓNDOLA DE SUPERMERCADO / PUBLICIDAD DE VOLANTE, que comunique una oferta comercial específica con NÚMEROS LEGIBLES.
+
+══════════════════════════════════════════════════════════════════
+CONTEXTO COMERCIAL (usa estos datos EXACTOS, no inventes otros):
+• Negocio:            %s
+• Combo:              %s
+• Productos incluidos: %s
+• Tono visual:        %s
+══════════════════════════════════════════════════════════════════
+
+JERARQUÍA TIPOGRÁFICA OBLIGATORIA (de MÁS grande a menos grande):
+%s
+══════════════════════════════════════════════════════════════════
+
+REGLAS DE RENDER TIPOGRÁFICO (CRÍTICAS — violarlas = banner rechazado):
+A. Los valores de precio se renderizan EXACTAMENTE como están escritos arriba, INCLUYENDO el símbolo "$", el punto de miles y cualquier sufijo. No cambies "$8.100" por "$8100" ni lo traduzcas.
+B. La tipografía DEBE ser sans-serif geométrica bold (estilo Inter/Montserrat/Poppins), con kerning limpio y SIN deformar los caracteres. Los números deben verse tan legibles como en una publicidad de Éxito o D1.
+C. Contraste mínimo 7:1 entre texto de precio y su fondo. Si el fondo es claro, el texto es oscuro; si el fondo es oscuro, el texto es blanco.
+D. El precio normal tachado DEBE tener una línea diagonal VISIBLE que lo cruce, señal universal de "antes/después".
+E. El sello de descuento debe leerse como etiqueta comercial real (círculo, explosión o cinta), no como texto libre.
+
+REGLAS DE COMPOSICIÓN:
+1. Formato CUADRADO 1:1 con safe-zone de 8%% en los 4 lados (no recortar el texto).
+2. Fotografía publicitaria realista de los productos O ilustración vectorial limpia — ocupa máximo 45%% del área, el resto es copy y fondo. PROHIBIDO estilo cartoon infantil, estilo IA surrealista o collage desordenado.
+3. Paleta coherente con el tono "%s": vibrante (naranjas/rojos saturados), elegante (negro+dorado), urgente (amarillo+negro contraste). Fondo sólido o gradiente suave — NO fondos ruidosos que compitan con el texto.
+4. Todos los textos en ESPAÑOL colombiano. No mezclar inglés. No inventar textos adicionales (ni "limited time", ni "sale", ni "SALE %%", ni URLs falsas, ni QRs).
+5. Los productos deben aparecer reconocibles y sin deformaciones — fotografía de empaque real.
+
+ANTI-PATRONES EXPLÍCITOS (si el banner cae en uno → es un FALLO):
+✗ Parecer una "foto de menú" de restaurante con productos flotando sin precios grandes.
+✗ Omitir el precio promo o renderizarlo más pequeño que el nombre del producto.
+✗ Escribir precios en formato internacional ($8,100.00 USD) en vez del formato local (%s).
+✗ Inventar descuentos distintos a "%s" o precios distintos a los dados.
+✗ Tipografía script/serif decorativa ilegible en scroll rápido de WhatsApp.
+✗ Composición simétrica aburrida estilo flyer corporativo.
+
+OBJETIVO FINAL: Un banner que a 320×320 px en un scroll de WhatsApp Status haga que el cliente LEA el precio promo en menos de 1 segundo y entienda CUÁNTO se ahorra. Nivel agencia creativa colombiana.`,
+		firstNonEmpty(tenant, "Tienda"),
+		promoName,
+		productsStr,
+		tone,
+		hierarchy.String(),
+		tone,
+		firstNonEmpty(promoPrice, normalPrice, "$0"),
+		discountLabel,
+	)
+}
+
+// firstNonEmpty helper lives in payments.go and is reused here.

@@ -321,6 +321,7 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 			"data": gin.H{
 				"business_name":    tenant.BusinessName,
 				"business_type":    businessType,
+				"phone":            tenant.Phone,
 				"logo_url":         tenant.LogoURL,
 				"is_open":          tenant.IsDeliveryOpen,
 				"delivery_cost":    tenant.DeliveryCost,
