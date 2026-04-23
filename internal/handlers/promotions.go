@@ -172,8 +172,13 @@ func CreatePromotion(db *gorm.DB) gin.HandlerFunc {
 				promo.ID = req.ID
 			}
 
+			// We tag which step blew up so when the UI shows the
+			// detail the tendero (or Ops) can tell "promotion row"
+			// apart from "item row" failures without digging logs.
+			var failedStep string
 			txErr := db.Transaction(func(tx *gorm.DB) error {
 				if err := tx.Create(&promo).Error; err != nil {
+					failedStep = "promotion"
 					return err
 				}
 				for _, it := range req.Items {
@@ -185,6 +190,7 @@ func CreatePromotion(db *gorm.DB) gin.HandlerFunc {
 						PromoPrice:  it.PromoPrice,
 					}
 					if err := tx.Create(&item).Error; err != nil {
+						failedStep = "promotion_item"
 						return err
 					}
 					promo.Items = append(promo.Items, item)
@@ -192,7 +198,19 @@ func CreatePromotion(db *gorm.DB) gin.HandlerFunc {
 				return nil
 			})
 			if txErr != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "error al crear promoción combo"})
+				// Surface the real driver error to the client just
+				// like we already do in admin_catalogs.go — masking
+				// it as "error al crear promoción combo" locked the
+				// tendero out of the wizard with nothing to act on.
+				// The user-facing "error" string stays unchanged so
+				// existing toast copy keeps working.
+				log.Printf("[PROMO] create combo failed (step=%s, tenant=%s, items=%d, banner_len=%d): %v",
+					failedStep, tenantID, len(req.Items), len(req.BannerImageURL), txErr)
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error":  "error al crear promoción combo",
+					"detail": txErr.Error(),
+					"step":   failedStep,
+				})
 				return
 			}
 
@@ -229,7 +247,12 @@ func CreatePromotion(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		if err := db.Create(&promo).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al crear promoción"})
+			log.Printf("[PROMO] create single failed (tenant=%s, product=%s): %v",
+				tenantID, req.ProductUUID, err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":  "error al crear promoción",
+				"detail": err.Error(),
+			})
 			return
 		}
 
