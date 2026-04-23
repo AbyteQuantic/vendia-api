@@ -295,6 +295,23 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 			})
 		}
 
+		// Fetch theme config
+		var themeConfig models.TenantCatalogConfig
+		db.Preload("Template").Where("tenant_id = ?", tenant.ID).First(&themeConfig)
+
+		themeOut := gin.H{
+			"primary_color": "#6366f1", // Default indigo
+			"banner_url":    "",
+		}
+		if themeConfig.Template != nil {
+			themeOut["primary_color"] = themeConfig.Template.PrimaryColorHex
+			themeOut["banner_url"] = themeConfig.Template.DefaultBannerURL
+		}
+		if themeConfig.CustomLogoURL != "" {
+			// Override logo if provided in theme config
+			tenant.LogoURL = themeConfig.CustomLogoURL
+		}
+
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{
 				"business_name":    tenant.BusinessName,
@@ -304,6 +321,7 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 				"min_order_amount": tenant.MinOrderAmount,
 				"products":         catalog,
 				"promotions":       promosOut,
+				"theme":            themeOut,
 			},
 		})
 	}

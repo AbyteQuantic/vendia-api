@@ -61,6 +61,7 @@ func TestPublicCatalog_AlwaysShowsProducts(t *testing.T) {
 		Data struct {
 			IsOpen   bool `json:"is_open"`
 			Products []any `json:"products"`
+			Theme    map[string]any `json:"theme"`
 		} `json:"data"`
 	}
 	err := json.Unmarshal(w.Body.Bytes(), &res)
@@ -70,6 +71,7 @@ func TestPublicCatalog_AlwaysShowsProducts(t *testing.T) {
 	assert.False(t, res.Data.IsOpen)
 	assert.NotEmpty(t, res.Data.Products)
 	assert.Equal(t, 1, len(res.Data.Products))
+	assert.NotEmpty(t, res.Data.Theme["primary_color"])
 }
 
 // Regression guard for the empty-catalog bug reported by the Product
