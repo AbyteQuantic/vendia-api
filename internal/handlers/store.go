@@ -112,6 +112,26 @@ func UpdateStoreConfig(db *gorm.DB) gin.HandlerFunc {
 //
 // PATCH /api/v1/store/payment-config
 // body: {payment_method_name, payment_account_number, payment_account_holder}
+func GetStoreConfig(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		var tenant models.Tenant
+		if err := db.Where("id = ?", tenantID).First(&tenant).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "negocio no encontrado"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"data": gin.H{
+				"is_delivery_open": tenant.IsDeliveryOpen,
+				"delivery_cost":    tenant.DeliveryCost,
+				"min_order_amount": tenant.MinOrderAmount,
+				"logo_url":         tenant.LogoURL,
+			},
+		})
+	}
+}
+
 func UpdateStoreStatus(db *gorm.DB) gin.HandlerFunc {
 	type Request struct {
 		IsOpen bool `json:"is_open"`
