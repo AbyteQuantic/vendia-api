@@ -36,6 +36,11 @@ func main() {
 		log.Printf("[BOOTSTRAP] super-admin seed failed: %v", err)
 	}
 
+	// Phase-6 self-heal: backfill NULL branch_id on legacy operational
+	// rows so sede-scoped reads don't hide pre-Phase-5 inventory/sales.
+	// Idempotent — subsequent boots are no-ops.
+	database.BackfillBranchIDs(db)
+
 	// ── Initialize external services (optional, nil-safe) ───────────────────
 	var geminiSvc *services.GeminiService
 	if cfg.GeminiAPIKey != "" {
@@ -235,8 +240,9 @@ func main() {
 		v1.GET("/store/config", handlers.GetStoreConfig(db))
 		v1.PATCH("/store/status", handlers.UpdateStoreStatus(db))
 		v1.PATCH("/store/payment-config", handlers.UpdatePaymentConfig(db))
-		v1.PATCH("/store/delivery-config", handlers.UpdateDeliveryConfig(db))
-		v1.POST("/store/slug", handlers.CheckSlugAvailability(db))
+		// TODO(phase-5): UpdateDeliveryConfig + CheckSlugAvailability
+		// handlers are referenced here but never landed. Re-wire when
+		// the handlers ship.
 		v1.PATCH("/store/slug", handlers.UpdateStoreSlug(db))
 
 		// Panic button

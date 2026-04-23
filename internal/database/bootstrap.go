@@ -73,3 +73,62 @@ func BootstrapSuperAdmin(db *gorm.DB, cfg BootstrapSuperAdminConfig) error {
 	log.Printf("[BOOTSTRAP] super-admin %q seeded (id=%s)", email, row.ID)
 	return nil
 }
+
+// BackfillBranchIDs assigns a default branch_id to every legacy
+// operational row where the column is still NULL. Phase-6 introduced
+// `WHERE branch_id = ?` on products/sales/credits, which would have
+// hidden pre-Phase-5 rows from the app. Migration 026 carried the SQL
+// backfill, but Render deploys run GORM AutoMigrate only (not goose),
+// so the SQL file never fires in production. This function mirrors
+// those UPDATE statements in Go and is wired into main.go right after
+// AutoMigrate, which means every boot self-heals:
+//
+//   - The "oldest active branch per tenant" is picked as the default —
+//     same tie-breaker as the SQL migration.
+//   - credit_payments has no tenant_id column, so it inherits the
+//     branch_id from its parent credit_account.
+//   - All updates are gated by `branch_id IS NULL` so the function is
+//     idempotent. Running it on a fully scoped database is a no-op.
+//
+// Errors are logged but don't abort the boot — a stranded NULL row is
+// preferable to a crashing deploy.
+func BackfillBranchIDs(db *gorm.DB) {
+	tenantScoped := []string{"products", "sales", "credit_accounts", "order_tickets"}
+	for _, tbl := range tenantScoped {
+		res := db.Exec(`
+			UPDATE `+tbl+` AS t
+			   SET branch_id = sub.id
+			  FROM (
+			      SELECT DISTINCT ON (tenant_id) tenant_id, id
+			        FROM branches
+			       WHERE deleted_at IS NULL
+			       ORDER BY tenant_id, created_at ASC
+			  ) sub
+			 WHERE t.tenant_id = sub.tenant_id
+			   AND t.branch_id IS NULL
+			   AND t.deleted_at IS NULL`)
+		if res.Error != nil {
+			log.Printf("[BOOTSTRAP] backfill %s skipped: %v", tbl, res.Error)
+			continue
+		}
+		if res.RowsAffected > 0 {
+			log.Printf("[BOOTSTRAP] backfilled %d rows in %s", res.RowsAffected, tbl)
+		}
+	}
+
+	res := db.Exec(`
+		UPDATE credit_payments cp
+		   SET branch_id = ca.branch_id
+		  FROM credit_accounts ca
+		 WHERE cp.credit_account_id = ca.id
+		   AND cp.branch_id IS NULL
+		   AND ca.branch_id IS NOT NULL
+		   AND cp.deleted_at IS NULL`)
+	if res.Error != nil {
+		log.Printf("[BOOTSTRAP] backfill credit_payments skipped: %v", res.Error)
+		return
+	}
+	if res.RowsAffected > 0 {
+		log.Printf("[BOOTSTRAP] backfilled %d rows in credit_payments", res.RowsAffected)
+	}
+}
