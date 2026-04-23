@@ -112,6 +112,30 @@ func UpdateStoreConfig(db *gorm.DB) gin.HandlerFunc {
 //
 // PATCH /api/v1/store/payment-config
 // body: {payment_method_name, payment_account_number, payment_account_holder}
+func UpdateStoreStatus(db *gorm.DB) gin.HandlerFunc {
+	type Request struct {
+		IsOpen bool `json:"is_open"`
+	}
+
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+
+		var req Request
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		if err := db.Model(&models.Tenant{}).Where("id = ?", tenantID).
+			Update("is_delivery_open", req.IsOpen).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al actualizar estado"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "estado actualizado", "is_open": req.IsOpen})
+	}
+}
+
 func UpdatePaymentConfig(db *gorm.DB) gin.HandlerFunc {
 	type Request struct {
 		PaymentMethodName    *string `json:"payment_method_name"`

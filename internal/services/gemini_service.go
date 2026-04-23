@@ -344,6 +344,15 @@ Resultado esperado: Fotografía tipo catálogo Amazon — producto REAL sobre fo
 	return nil, fmt.Errorf("no image returned from Gemini (candidates=%d)", len(geminiResp.Candidates))
 }
 
+// ReferenceImage is a product photo from the tenant's catalogue that
+// Gemini should use as visual anchor when composing the banner —
+// instead of hallucinating a generic image of "empanada". The model
+// is told in the prompt that these are the REAL products to render.
+type ReferenceImage struct {
+	MimeType string // "image/jpeg", "image/png", "image/webp"
+	Data     []byte // raw bytes (we base64-encode internally)
+}
+
 // GeneratePromoBanner produces a retail-advertising banner image
 // (typically square 1:1) from a fully-formed prompt. The caller is
 // responsible for prompt assembly — this function just drives the
@@ -353,14 +362,34 @@ Resultado esperado: Fotografía tipo catálogo Amazon — producto REAL sobre fo
 // banners have different generation params — higher guidance, no
 // "product isolated on white" safeguards, room for embedded copy —
 // and tracing the two use cases separately in logs is a must.
-func (s *GeminiService) GeneratePromoBanner(ctx context.Context, prompt string) ([]byte, error) {
+//
+// refImages (may be nil/empty): product photos from the tenant's own
+// catalogue. When present, the request becomes multimodal: Gemini
+// receives the images as inlineData parts BEFORE the prompt text,
+// which gives it a concrete visual anchor for each product instead
+// of generating a generic render. Empty → text-only generation.
+func (s *GeminiService) GeneratePromoBanner(ctx context.Context, prompt string, refImages []ReferenceImage) ([]byte, error) {
+	parts := make([]map[string]any, 0, len(refImages)+1)
+	for _, img := range refImages {
+		if len(img.Data) == 0 {
+			continue
+		}
+		mime := img.MimeType
+		if mime == "" {
+			mime = "image/jpeg"
+		}
+		parts = append(parts, map[string]any{
+			"inlineData": map[string]any{
+				"mimeType": mime,
+				"data":     base64.StdEncoding.EncodeToString(img.Data),
+			},
+		})
+	}
+	parts = append(parts, map[string]any{"text": prompt})
+
 	payload := map[string]any{
 		"contents": []map[string]any{
-			{
-				"parts": []map[string]any{
-					{"text": prompt},
-				},
-			},
+			{"parts": parts},
 		},
 		"generationConfig": map[string]any{
 			"responseModalities": []string{"TEXT", "IMAGE"},

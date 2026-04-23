@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
+	"log"
 	"math"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
@@ -249,6 +252,24 @@ func CreatePromotion(db *gorm.DB) gin.HandlerFunc {
 // el prompt sólo recibía un DiscountText suelto — ahora le damos al
 // modelo la estructura financiera completa con jerarquía tipográfica
 // explícita y anti-patrones listados.
+// ImageSourceType — indica de dónde salen los "anclajes visuales"
+// que Gemini usará para renderizar los productos en el banner.
+const (
+	ImageSourceCatalog     = "CATALOG_PHOTOS" // usa las fotos reales del catálogo del tenant
+	ImageSourceAIGenerated = "AI_GENERATED"   // Gemini los genera desde cero (default)
+)
+
+// maxCatalogRefImages limits how many product photos we fetch per
+// banner request. Gemini image models get confused beyond ~4
+// references — and each image adds ~200–500 KB to the payload.
+const maxCatalogRefImages = 4
+
+// catalogFetchTimeout bounds the TOTAL time we'll spend pulling
+// catalogue photos across the network before starting the Gemini
+// call. If a tenant's CDN is slow we'd rather fall back to text-only
+// generation than time the whole request out.
+const catalogFetchTimeout = 8 * time.Second
+
 func GenerateMarketingBanner(geminiSvc *services.GeminiService, storageSvc services.FileStorage) gin.HandlerFunc {
 	type Request struct {
 		// Legacy (V1) — aún requeridos para compatibilidad del cliente.
@@ -266,6 +287,12 @@ func GenerateMarketingBanner(geminiSvc *services.GeminiService, storageSvc servi
 		PromoPriceStr  string `json:"promo_price_str"`
 		DiscountStr    string `json:"discount_str"`
 		SavingsStr     string `json:"savings_str"`
+
+		// V3 — image sourcing. Le permite al tendero escoger entre
+		// "usa mis fotos reales" (CATALOG_PHOTOS) o "genera unas
+		// fotos apetitosas" (AI_GENERATED). Default = AI_GENERATED.
+		ImageSourceType  string   `json:"image_source_type"`
+		CatalogImageURLs []string `json:"catalog_image_urls"`
 	}
 
 	return func(c *gin.Context) {
@@ -281,23 +308,52 @@ func GenerateMarketingBanner(geminiSvc *services.GeminiService, storageSvc servi
 			return
 		}
 
+		// Normalise image sourcing. If CATALOG_PHOTOS is requested but
+		// no URLs arrive, degrade silently to AI_GENERATED so the
+		// request still succeeds — the PO prefers any banner over a
+		// 400 error the tendero has to debug.
+		source := strings.ToUpper(strings.TrimSpace(req.ImageSourceType))
+		if source != ImageSourceCatalog && source != ImageSourceAIGenerated {
+			source = ImageSourceAIGenerated
+		}
+		var refImages []services.ReferenceImage
+		if source == ImageSourceCatalog {
+			urls := req.CatalogImageURLs
+			if len(urls) > maxCatalogRefImages {
+				urls = urls[:maxCatalogRefImages]
+			}
+			fetchCtx, cancelFetch := context.WithTimeout(
+				c.Request.Context(), catalogFetchTimeout)
+			refImages = fetchCatalogReferenceImages(fetchCtx, urls)
+			cancelFetch()
+			if len(refImages) == 0 {
+				// Usuario pidió CATALOG_PHOTOS pero ninguna URL se pudo
+				// descargar — caemos a AI_GENERATED y logeamos para
+				// diagnóstico.
+				log.Printf("[BANNER] CATALOG_PHOTOS requested but 0 of %d URLs fetched — falling back to AI_GENERATED", len(urls))
+				source = ImageSourceAIGenerated
+			}
+		}
+
 		prompt := BuildPromoBannerPrompt(PromoBannerPromptInput{
-			PromoName:      req.PromoName,
-			Products:       req.Products,
-			DiscountText:   req.DiscountText,
-			Tone:           req.Tone,
-			TenantName:     req.TenantName,
-			ComboTitle:     req.ComboTitle,
-			NormalPriceStr: req.NormalPriceStr,
-			PromoPriceStr:  req.PromoPriceStr,
-			DiscountStr:    req.DiscountStr,
-			SavingsStr:     req.SavingsStr,
+			PromoName:       req.PromoName,
+			Products:        req.Products,
+			DiscountText:    req.DiscountText,
+			Tone:            req.Tone,
+			TenantName:      req.TenantName,
+			ComboTitle:      req.ComboTitle,
+			NormalPriceStr:  req.NormalPriceStr,
+			PromoPriceStr:   req.PromoPriceStr,
+			DiscountStr:     req.DiscountStr,
+			SavingsStr:      req.SavingsStr,
+			ImageSourceType: source,
+			NumRefImages:    len(refImages),
 		})
 
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 45*time.Second)
 		defer cancel()
 
-		imageBytes, err := geminiSvc.GeneratePromoBanner(ctx, prompt)
+		imageBytes, err := geminiSvc.GeneratePromoBanner(ctx, prompt, refImages)
 		if err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": "no se pudo generar el banner con IA", "detail": err.Error()})
 			return
@@ -531,6 +587,14 @@ type PromoBannerPromptInput struct {
 	PromoPriceStr  string
 	DiscountStr    string
 	SavingsStr     string
+
+	// V3 — image sourcing. Tells the prompt whether the model should
+	// invent the product visuals (AI_GENERATED) or treat the N images
+	// passed alongside this prompt as the SOURCE OF TRUTH for the
+	// products (CATALOG_PHOTOS). NumRefImages is how many images
+	// actually made it through the fetch step.
+	ImageSourceType string
+	NumRefImages    int
 }
 
 // BuildPromoBannerPrompt assembles the imperative, typographically
@@ -633,6 +697,35 @@ Resultado: un banner listo para publicar, nivel agencia creativa.`,
 		tenant,
 		"Aparece pequeño, tipo firma, en esquina inferior. NO debe competir con los precios.")
 
+	// Image-sourcing block. The prompt tone changes dramatically
+	// depending on whether we passed real catalogue photos as
+	// reference or we're asking Gemini to render the products from
+	// scratch. Keeping this in its own block makes it easy to tweak
+	// each branch without disturbing the typographic rules.
+	var imagingBlock string
+	switch {
+	case in.ImageSourceType == "CATALOG_PHOTOS" && in.NumRefImages > 0:
+		imagingBlock = fmt.Sprintf(`
+══════════════════════════════════════════════════════════════════
+FUENTE DE IMÁGENES — MODO FOTOS REALES DEL CATÁLOGO:
+Las %d imágenes adjuntas a este mensaje son las FOTOS REALES de los productos de este negocio. Son la FUENTE DE VERDAD visual — NO las reemplaces, NO las reinterpretes, NO generes "versiones mejoradas".
+
+REGLAS:
+• Recorta cada producto de su foto adjunta (ignora el fondo original) y COMPONLOS juntos dentro del banner, respetando colores, forma de empaque, etiquetas y marcas visibles. La empanada de la foto 1 es LA empanada del banner, no otra.
+• Si una foto tiene baja calidad, mejórala con iluminación de estudio PERO preserva la identidad del producto (color, logo, forma).
+• Agrupa los productos de forma composicionalmente atractiva (flat-lay o bodegón), dejando espacio para el bloque de precios y el sello de descuento.
+• PROHIBIDO generar productos genéricos ("una empanada cualquiera"), PROHIBIDO añadir productos que no estén en las fotos adjuntas.
+══════════════════════════════════════════════════════════════════
+`, in.NumRefImages)
+	default:
+		imagingBlock = `
+══════════════════════════════════════════════════════════════════
+FUENTE DE IMÁGENES — MODO FOTOS APETITOSAS GENERADAS:
+No hay fotos reales adjuntas. Genera cada producto desde cero como FOTOGRAFÍA PUBLICITARIA DE ALTA CALIDAD: iluminación cálida tipo foodie-photography, textura real del producto (crujiente, dorado, fresco), enfoque nítido en primer plano. Estilo "Uber Eats / Rappi hero banner". PROHIBIDO ilustración cartoon, render 3D plástico, o pseudo-realismo gomoso.
+══════════════════════════════════════════════════════════════════
+`
+	}
+
 	return fmt.Sprintf(
 		`Eres un DIRECTOR DE ARTE publicitario senior para retail colombiano. Tu ÚNICA tarea es generar UN banner promocional cuadrado 1:1 de alta calidad, estilo GÓNDOLA DE SUPERMERCADO / PUBLICIDAD DE VOLANTE, que comunique una oferta comercial específica con NÚMEROS LEGIBLES.
 
@@ -643,7 +736,7 @@ CONTEXTO COMERCIAL (usa estos datos EXACTOS, no inventes otros):
 • Productos incluidos: %s
 • Tono visual:        %s
 ══════════════════════════════════════════════════════════════════
-
+%s
 JERARQUÍA TIPOGRÁFICA OBLIGATORIA (de MÁS grande a menos grande):
 %s
 ══════════════════════════════════════════════════════════════════
@@ -675,11 +768,87 @@ OBJETIVO FINAL: Un banner que a 320×320 px en un scroll de WhatsApp Status haga
 		promoName,
 		productsStr,
 		tone,
+		imagingBlock,
 		hierarchy.String(),
 		tone,
 		firstNonEmpty(promoPrice, normalPrice, "$0"),
 		discountLabel,
 	)
+}
+
+// fetchCatalogReferenceImages pulls up to N product photos from the
+// tenant's catalogue in parallel and hands them back as Gemini
+// reference images. Failures are tolerated silently (best-effort) —
+// the banner can still be generated with fewer refs, or fall back
+// to AI-only mode upstream.
+//
+// We cap each download at 3 seconds because banner generation is
+// already latency-sensitive (the tendero is staring at a spinner),
+// and a single slow CDN shouldn't block the whole pipeline. Images
+// that exceed the Gemini inline limit (~7 MB hard / 4 MB soft) are
+// dropped so we never build a payload Google will reject.
+func fetchCatalogReferenceImages(ctx context.Context, urls []string) []services.ReferenceImage {
+	if len(urls) == 0 {
+		return nil
+	}
+	const perImageTimeout = 3 * time.Second
+	const maxBytesPerImage = 4 * 1024 * 1024
+
+	results := make([]services.ReferenceImage, len(urls))
+	var wg sync.WaitGroup
+	for i, u := range urls {
+		if strings.TrimSpace(u) == "" {
+			continue
+		}
+		wg.Add(1)
+		go func(idx int, url string) {
+			defer wg.Done()
+			imgCtx, cancel := context.WithTimeout(ctx, perImageTimeout)
+			defer cancel()
+			req, err := http.NewRequestWithContext(imgCtx, "GET", url, nil)
+			if err != nil {
+				log.Printf("[BANNER] build catalog request failed (%s): %v", url, err)
+				return
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				log.Printf("[BANNER] catalog fetch failed (%s): %v", url, err)
+				return
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				log.Printf("[BANNER] catalog fetch %s -> HTTP %d", url, resp.StatusCode)
+				return
+			}
+			data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytesPerImage+1))
+			if err != nil {
+				log.Printf("[BANNER] catalog read failed (%s): %v", url, err)
+				return
+			}
+			if len(data) == 0 || len(data) > maxBytesPerImage {
+				log.Printf("[BANNER] catalog image rejected (%s): size=%d", url, len(data))
+				return
+			}
+			mime := resp.Header.Get("Content-Type")
+			if !strings.HasPrefix(mime, "image/") {
+				// Some CDNs return octet-stream even for images; use
+				// a safe default. Gemini accepts jpeg/png/webp here.
+				mime = "image/jpeg"
+			}
+			results[idx] = services.ReferenceImage{MimeType: mime, Data: data}
+		}(i, u)
+	}
+	wg.Wait()
+
+	// Compact the slice dropping empties (failed fetches or skipped
+	// blank URLs) so the caller can just range over what worked.
+	compact := make([]services.ReferenceImage, 0, len(results))
+	for _, r := range results {
+		if len(r.Data) > 0 {
+			compact = append(compact, r)
+		}
+	}
+	return compact
 }
 
 // firstNonEmpty helper lives in payments.go and is reused here.

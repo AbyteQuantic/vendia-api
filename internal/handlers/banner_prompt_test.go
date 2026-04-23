@@ -106,6 +106,80 @@ func TestBuildPromoBannerPrompt_ToneDefaultsToVibrante(t *testing.T) {
 	}
 }
 
+func TestBuildPromoBannerPrompt_V3_CatalogPhotosModeInstructsModelToUseRefs(t *testing.T) {
+	// Cuando el tendero eligió "usar mis fotos del catálogo" y al
+	// menos 1 foto se descargó OK, el prompt debe DECIRLE a Gemini
+	// que las imágenes adjuntas son la fuente de verdad — si no, el
+	// modelo las ignora y regenera productos genéricos.
+	got := BuildPromoBannerPrompt(PromoBannerPromptInput{
+		ComboTitle:      "Pan + Leche",
+		Products:        []string{"Pan Bimbo", "Leche Alquería"},
+		PromoPriceStr:   "$5.000",
+		NormalPriceStr:  "$6.200",
+		DiscountStr:     "19% OFF",
+		ImageSourceType: "CATALOG_PHOTOS",
+		NumRefImages:    2,
+	})
+	for _, s := range []string{
+		"MODO FOTOS REALES DEL CATÁLOGO",
+		"Las 2 imágenes adjuntas",
+		"FUENTE DE VERDAD",
+		"PROHIBIDO generar productos genéricos",
+	} {
+		if !strings.Contains(got, s) {
+			t.Errorf("CATALOG_PHOTOS prompt missing %q", s)
+		}
+	}
+	// El branch alterno NO debe aparecer.
+	if strings.Contains(got, "MODO FOTOS APETITOSAS GENERADAS") {
+		t.Errorf("both imaging modes leaked into CATALOG_PHOTOS prompt")
+	}
+}
+
+func TestBuildPromoBannerPrompt_V3_AIGeneratedModeInstructsModelToRenderFromScratch(t *testing.T) {
+	got := BuildPromoBannerPrompt(PromoBannerPromptInput{
+		ComboTitle:      "Empanada & Coca-Cola",
+		Products:        []string{"Empanada", "Coca-Cola"},
+		PromoPriceStr:   "$8.100",
+		NormalPriceStr:  "$9.500",
+		DiscountStr:     "14% OFF",
+		ImageSourceType: "AI_GENERATED",
+	})
+	for _, s := range []string{
+		"MODO FOTOS APETITOSAS GENERADAS",
+		"FOTOGRAFÍA PUBLICITARIA DE ALTA CALIDAD",
+		"foodie-photography",
+	} {
+		if !strings.Contains(got, s) {
+			t.Errorf("AI_GENERATED prompt missing %q", s)
+		}
+	}
+	if strings.Contains(got, "MODO FOTOS REALES DEL CATÁLOGO") {
+		t.Errorf("CATALOG_PHOTOS branch leaked into AI_GENERATED prompt")
+	}
+}
+
+func TestBuildPromoBannerPrompt_V3_CatalogSourceWithZeroRefsFallsBackToAIBranch(t *testing.T) {
+	// Caso límite: el caller pidió CATALOG_PHOTOS pero TODAS las
+	// descargas fallaron (NumRefImages=0). No podemos enviar
+	// instrucciones "usa las imágenes adjuntas" porque NO hay
+	// imágenes — el prompt DEBE caer al modo AI_GENERATED silencioso.
+	got := BuildPromoBannerPrompt(PromoBannerPromptInput{
+		ComboTitle:      "x",
+		Products:        []string{"y"},
+		PromoPriceStr:   "$1.000",
+		NormalPriceStr:  "$2.000",
+		ImageSourceType: "CATALOG_PHOTOS",
+		NumRefImages:    0,
+	})
+	if strings.Contains(got, "MODO FOTOS REALES DEL CATÁLOGO") {
+		t.Errorf("prompt claimed catalog photos but zero were attached")
+	}
+	if !strings.Contains(got, "MODO FOTOS APETITOSAS GENERADAS") {
+		t.Errorf("expected silent fallback to AI_GENERATED branch")
+	}
+}
+
 func TestBuildPromoBannerPrompt_NeverInventsPrices(t *testing.T) {
 	// Regresión: si el caller pasa productos pero cero info financiera,
 	// el prompt V1 NO debe mencionar precios específicos. El modelo no
