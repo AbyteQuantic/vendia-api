@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log"
 	"net/http"
 	"vendia-backend/internal/models"
 
@@ -8,11 +9,31 @@ import (
 	"gorm.io/gorm"
 )
 
+// dbErrorResponse wraps a DB error into a JSON body that keeps the
+// human-readable message in "error" (what the UI surfaces) but also
+// includes the raw driver message in "detail".
+//
+// Before this refactor every CMS handler returned a generic
+// `{"error":"error al listar plantillas"}` regardless of what blew up
+// under the hood. When deployments hit a missing table ("relation
+// catalog_templates does not exist") or a column mismatch, Ops had no
+// way to diagnose from the browser — the real error lived in the
+// Render logs. We now echo it back so the frontend (and curl) can see
+// it directly. This is safe because the Go handlers never embed
+// secrets in DB errors, and the endpoints are behind SuperAdminOnly.
+func dbErrorResponse(c *gin.Context, route, userMsg string, err error) {
+	log.Printf("[CMS] %s failed: %v", route, err)
+	c.JSON(http.StatusInternalServerError, gin.H{
+		"error":  userMsg,
+		"detail": err.Error(),
+	})
+}
+
 func AdminListCatalogTemplates(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var templates []models.CatalogTemplate
 		if err := db.Order("created_at desc").Find(&templates).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al listar plantillas"})
+			dbErrorResponse(c, "list catalog templates", "error al listar plantillas", err)
 			return
 		}
 		c.JSON(http.StatusOK, templates)
@@ -28,7 +49,7 @@ func AdminCreateCatalogTemplate(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		if err := db.Create(&template).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al crear plantilla"})
+			dbErrorResponse(c, "create catalog template", "error al crear plantilla", err)
 			return
 		}
 		c.JSON(http.StatusCreated, template)
@@ -50,7 +71,7 @@ func AdminUpdateCatalogTemplate(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		if err := db.Save(&template).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al actualizar plantilla"})
+			dbErrorResponse(c, "update catalog template", "error al actualizar plantilla", err)
 			return
 		}
 		c.JSON(http.StatusOK, template)
@@ -61,7 +82,7 @@ func AdminDeleteCatalogTemplate(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := c.Param("id")
 		if err := db.Delete(&models.CatalogTemplate{}, "id = ?", id).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al eliminar plantilla"})
+			dbErrorResponse(c, "delete catalog template", "error al eliminar plantilla", err)
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"message": "plantilla eliminada"})
@@ -83,7 +104,7 @@ func AdminGetCatalogAnalytics(db *gorm.DB) gin.HandlerFunc {
 			Scan(&rows).Error
 
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al obtener analíticas"})
+			dbErrorResponse(c, "list catalog analytics", "error al obtener analíticas", err)
 			return
 		}
 

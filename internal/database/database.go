@@ -89,6 +89,13 @@ func Migrate(db *gorm.DB) error {
 		&models.Branch{},
 		&models.TenantSubscription{},
 		&models.SupportTicket{},
+		// Catalog CMS (migration 024). Registered here so a zero-state
+		// deploy doesn't 500 on GET /admin/catalogs/templates. The SQL
+		// migration file stays as canonical reference but Render runs
+		// AutoMigrate, not goose, so the structs are the source of truth.
+		&models.CatalogTemplate{},
+		&models.TenantCatalogConfig{},
+		&models.CatalogAnalytics{},
 	)
 	if err != nil {
 		return err

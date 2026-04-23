@@ -178,8 +178,20 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// Fetch every product of the tenant. We intentionally do NOT
+		// filter by `is_available` or `price > 0` here:
+		//   * `is_available` is POS-side metadata ("show in the quick
+		//     grid") and gets flipped off by mistake more often than
+		//     not — historically this wiped the entire public
+		//     catalog for freshly-seeded tenants with test data.
+		//   * `price = 0` is a legitimate state for products pending
+		//     price entry and shouldn't hide them from the online
+		//     catalog either (better to render them with "Precio por
+		//     definir" than to ghost the store).
+		// Stock/availability is still surfaced per-product so the
+		// web can show "Agotado" or disable add-to-cart client-side.
 		var products []models.Product
-		db.Where("tenant_id = ? AND is_available = true AND price > 0", tenant.ID).
+		db.Where("tenant_id = ?", tenant.ID).
 			Order("name ASC").
 			Find(&products)
 

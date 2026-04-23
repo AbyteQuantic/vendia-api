@@ -96,3 +96,51 @@ func TestAdminGetCatalogAnalyticsZeroViews(t *testing.T) {
 	assert.Equal(t, "Zero View Shop", results[0].BusinessName)
 	assert.Equal(t, 0.0, results[0].ConversionRate)
 }
+
+// Regression guard for the "teléfono roto" bug: when the CMS migration
+// had not run in production, `GET /admin/catalogs/templates` 500'd
+// with a generic `{"error":"error al listar plantillas"}` and the
+// operator had no way to tell that the underlying failure was
+// `no such table: catalog_templates`. The handler now echoes the raw
+// driver message in a `detail` field while keeping the friendly
+// `error` string intact.
+func TestAdminListCatalogTemplates_ErrorIsTransparent(t *testing.T) {
+	// Fresh DB WITHOUT the catalog_templates table migrated — mimics
+	// the exact prod state that caused the original 500.
+	db, _ := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	gin.SetMode(gin.TestMode)
+
+	r := gin.New()
+	r.GET("/templates", AdminListCatalogTemplates(db))
+
+	req, _ := http.NewRequest(http.MethodGet, "/templates", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+
+	var body map[string]string
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, "error al listar plantillas", body["error"])
+	// The important part: the driver-level reason MUST be surfaced.
+	assert.NotEmpty(t, body["detail"], "handler must surface the raw DB error in detail")
+	assert.Contains(t, body["detail"], "catalog_templates")
+}
+
+// Happy path after AutoMigrate: with the models registered the query
+// succeeds and returns an empty list (not a 500).
+func TestAdminListCatalogTemplates_EmptyOK(t *testing.T) {
+	db, _ := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	assert.NoError(t, db.AutoMigrate(&models.CatalogTemplate{}))
+	gin.SetMode(gin.TestMode)
+
+	r := gin.New()
+	r.GET("/templates", AdminListCatalogTemplates(db))
+
+	req, _ := http.NewRequest(http.MethodGet, "/templates", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "[]", w.Body.String())
+}
