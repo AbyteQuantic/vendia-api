@@ -280,6 +280,8 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 			Items          []PromoItemOut `json:"items"`
 			TotalPrice     float64        `json:"total_price"`
 			TotalRegular   float64        `json:"total_regular"`
+			EndDate        *time.Time     `json:"end_date,omitempty"`
+			StockLimit     *int           `json:"stock_limit,omitempty"`
 		}
 
 		// Build a product lookup so we can decorate items with names + photos.
@@ -316,6 +318,8 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 				Items:          items,
 				TotalPrice:     total,
 				TotalRegular:   regular,
+				EndDate:        pr.EndDate,
+				StockLimit:     pr.StockLimit,
 			})
 		}
 
