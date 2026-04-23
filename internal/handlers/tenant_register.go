@@ -134,10 +134,15 @@ func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 				return err
 			}
 
-			// 5. Create Employee(s)
+			// 5. Create Employee(s) — each one is scoped to the
+			//    "Sede Principal" we just created. Multi-branch
+			//    tenants (PRO) reassign employees later through the
+			//    /api/v1/store/employees PATCH endpoint.
+			branchIDPtr := &branch.ID
 			if len(req.Employees) == 0 {
 				defaultCashier := models.Employee{
 					TenantID:     tenant.ID,
+					BranchID:     branchIDPtr,
 					Name:         req.Owner.Name,
 					Phone:        req.Owner.Phone,
 					Role:         models.RoleCashier,
@@ -155,6 +160,7 @@ func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 				}
 				employee := models.Employee{
 					TenantID:     tenant.ID,
+					BranchID:     branchIDPtr,
 					Name:         emp.Name,
 					Phone:        emp.Phone,
 					Role:         emp.Role,

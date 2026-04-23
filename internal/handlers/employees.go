@@ -29,11 +29,16 @@ func ListEmployees(db *gorm.DB) gin.HandlerFunc {
 func CreateEmployee(db *gorm.DB) gin.HandlerFunc {
 	type Request struct {
 		ID       string              `json:"id"`
-		Name     string              `json:"name"     binding:"required"`
+		Name     string              `json:"name"      binding:"required"`
 		Phone    string              `json:"phone"`
-		Pin      string              `json:"pin"      binding:"required,len=4"`
-		Role     models.EmployeeRole `json:"role"     binding:"required"`
-		Password string              `json:"password" binding:"required,min=4"`
+		Pin      string              `json:"pin"       binding:"required,len=4"`
+		Role     models.EmployeeRole `json:"role"      binding:"required"`
+		Password string              `json:"password"  binding:"required,min=4"`
+		// BranchID is mandatory in Phase 5 — every employee must
+		// belong to a sede so inventory / sales reads can filter by
+		// it. See migration 025 for the DB-side backfill of legacy
+		// rows; new creates have no excuse to skip it.
+		BranchID string `json:"branch_id" binding:"required"`
 	}
 
 	return func(c *gin.Context) {
@@ -55,6 +60,28 @@ func CreateEmployee(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		if !models.IsValidUUID(req.BranchID) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "branch_id debe ser un UUID válido",
+			})
+			return
+		}
+
+		// Verify the branch belongs to this tenant. Cross-tenant
+		// branch assignment would let a crafted request attach an
+		// employee to another tenant's sede.
+		var ownedCount int64
+		db.Model(&models.Branch{}).
+			Where("id = ? AND tenant_id = ?", req.BranchID, tenantID).
+			Count(&ownedCount)
+		if ownedCount == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":      "la sucursal no pertenece al negocio",
+				"error_code": "branch_not_owned",
+			})
+			return
+		}
+
 		passHash, err := bcrypt.GenerateFromPassword([]byte(req.Password), 12)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al procesar contraseña"})
@@ -67,8 +94,10 @@ func CreateEmployee(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		branchID := req.BranchID
 		employee := models.Employee{
 			TenantID:     tenantID,
+			BranchID:     &branchID,
 			Name:         req.Name,
 			Phone:        req.Phone,
 			Pin:          string(pinHash),

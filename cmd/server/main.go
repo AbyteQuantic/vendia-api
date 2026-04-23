@@ -152,6 +152,13 @@ func main() {
 		v1.DELETE("/employees/:uuid", handlers.DeleteEmployee(db))
 		v1.POST("/employees/verify-pin", handlers.VerifyPin(db))
 
+		// Branches (Phase 5 — multi-sede). List + read endpoints sit
+		// here under tenant auth; CREATE lives in the premium group
+		// below so a second sede requires PRO / TRIAL.
+		v1.GET("/store/branches", handlers.ListBranches(db))
+		v1.PATCH("/store/branches/:id", handlers.UpdateBranch(db))
+		v1.DELETE("/store/branches/:id", handlers.DeleteBranch(db))
+
 		// Products
 		v1.GET("/products", handlers.ListProducts(db))
 		v1.POST("/products", handlers.CreateProduct(db, catalogSvc))
@@ -340,6 +347,9 @@ func main() {
 	premium.Use(middleware.PremiumAuth(db))
 	{
 		premium.POST("/ai/voice-inventory", handlers.VoiceInventory(geminiSvc))
+		// Creating a second sede is PRO-gated — FREE/PAST_DUE get the
+		// same soft-paywall 403 the Flutter client already handles.
+		premium.POST("/store/branches", handlers.CreateBranch(db))
 	}
 
 	// ── Admin routes (super_admin only) ──────────────────────────────────────
