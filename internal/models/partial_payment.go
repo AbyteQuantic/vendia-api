@@ -61,6 +61,14 @@ type PartialPayment struct {
 	// the abono via the POS. Null when the abono was self-filed
 	// by the customer through the public live-tab page.
 	CreatedByEmployee *string `gorm:"type:uuid;index" json:"created_by_employee,omitempty"`
+
+	// ReceiptURL is the public URL of the customer-submitted
+	// transfer screenshot when the abono comes from the live-tab
+	// page. The tendero opens it from TabReviewScreen to verify
+	// the transfer landed before flipping the abono to APPROVED.
+	// Empty for cash abonos and for tendero-registered manual
+	// abonos (those land APPROVED with no proof needed).
+	ReceiptURL string `gorm:"default:''" json:"receipt_url,omitempty"`
 }
 
 // PartialPaymentStatus enumerates the valid states for the state

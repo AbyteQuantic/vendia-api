@@ -155,6 +155,9 @@ func main() {
 	// Customer-submitted abono from the QR page — lands as PENDING
 	// until the tendero confirms on the POS. See handler for rationale.
 	r.POST("/api/v1/public/table-sessions/:session_token/payments", handlers.SubmitPartialPayment(db))
+	// Public receipt upload (screenshot of the transfer). Returns the
+	// public URL the SubmitPartialPayment call attaches as receipt_url.
+	r.POST("/api/v1/public/table-sessions/:session_token/receipts", handlers.UploadPaymentReceipt(db, storageSvc))
 
 	// ── Protected routes (JWT) ───────────────────────────────────────────────
 	v1 := r.Group("/api/v1")

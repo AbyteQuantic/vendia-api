@@ -2,17 +2,32 @@ package handlers
 
 import (
 	"errors"
+	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
+	"vendia-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+// paymentReceiptBucket holds the screenshots customers attach to a
+// pending abono ("aquí está mi comprobante de Nequi"). Kept in its
+// own bucket so retention rules can diverge from product photos:
+// receipts are legal proof, photos are tendero assets.
+const paymentReceiptBucket = "payment-receipts"
+
+// maxReceiptBytes caps uploads at 5 MiB. Bigger than the QR (3 MiB)
+// because phone screenshots from Nequi / Daviplata can hit that on
+// older devices that haven't compressed them yet.
+const maxReceiptBytes = 5 << 20
 
 // PublicTableSession is a deliberately narrowed projection of an
 // OrderTicket. It omits everything that could identify the tenant
@@ -63,12 +78,15 @@ type PublicTableItem struct {
 
 // PublicAbono is the public-facing projection of a PartialPayment
 // APPROVED row. Omits the operator id and the internal state machine
-// vocabulary — web sees amount + method + timestamp only.
+// vocabulary — web sees amount + method + timestamp + (optional)
+// receipt_url so a returning customer can re-open the proof they
+// already sent.
 type PublicAbono struct {
 	ID            string    `json:"id"`
 	Amount        float64   `json:"amount"`
 	PaymentMethod string    `json:"payment_method"`
 	CreatedAt     time.Time `json:"created_at"`
+	ReceiptURL    string    `json:"receipt_url,omitempty"`
 }
 
 // PublicPaymentMethodLite mirrors PublicCatalog's shape so the
@@ -163,6 +181,7 @@ func GetPublicTableSession(db *gorm.DB) gin.HandlerFunc {
 				Amount:        a.Amount,
 				PaymentMethod: a.PaymentMethod,
 				CreatedAt:     a.CreatedAt,
+				ReceiptURL:    a.ReceiptURL,
 			})
 		}
 		remaining := order.Total - paid
@@ -234,6 +253,13 @@ func SubmitPartialPayment(db *gorm.DB) gin.HandlerFunc {
 		PaymentMethod   string  `json:"payment_method"`
 		PaymentMethodID string  `json:"payment_method_id"`
 		Notes           string  `json:"notes"`
+		// ReceiptURL is the URL of the screenshot the customer
+		// uploaded via /receipts before this call. Optional —
+		// cash abonos and intra-tienda transfers don't need a
+		// receipt. We do NOT validate the URL host here so a
+		// future migration to a different storage backend
+		// doesn't require a backend redeploy in lockstep.
+		ReceiptURL string `json:"receipt_url"`
 	}
 
 	return func(c *gin.Context) {
@@ -282,6 +308,7 @@ func SubmitPartialPayment(db *gorm.DB) gin.HandlerFunc {
 			PaymentMethodID: pmID,
 			Status:          models.PartialPaymentStatusPending,
 			Notes:           strings.TrimSpace(req.Notes),
+			ReceiptURL:      strings.TrimSpace(req.ReceiptURL),
 		}
 		if err := db.Create(&abono).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -500,6 +527,123 @@ func CallWaiter(db *gorm.DB) gin.HandlerFunc {
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{
 				"called_at": now,
+			},
+		})
+	}
+}
+
+// UploadPaymentReceipt serves
+//
+//	POST /api/v1/public/table-sessions/:session_token/receipts
+//
+// Public — gated by the session_token. The customer uploads a
+// screenshot of the transfer they just made, we persist it in the
+// payment-receipts bucket, and return the public URL so the
+// SubmitPartialPayment call can attach it.
+//
+// Security posture:
+//   - Session token resolves the tenant; we never trust a query-string
+//     tenant_id from a public request.
+//   - Closed tickets (cobrado / cancelado) refuse the upload — a
+//     long-lived QR shouldn't keep accepting receipts after the meal.
+//   - 5 MiB hard cap, image/* enforced via Content-Type prefix.
+//   - We do NOT store the receipt against the abono yet — the
+//     client follows up with the abono POST that includes
+//     receipt_url. Keeps the storage write idempotent and lets the
+//     customer retry the upload without duplicating PartialPayment
+//     rows.
+func UploadPaymentReceipt(db *gorm.DB, storage services.FileStorage) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token := strings.TrimSpace(c.Param("session_token"))
+		if _, err := uuid.Parse(token); err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "sesión no encontrada"})
+			return
+		}
+
+		if storage == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error": "servicio de almacenamiento no configurado",
+			})
+			return
+		}
+
+		var order models.OrderTicket
+		if err := db.Where("session_token = ?", token).First(&order).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "sesión no encontrada"})
+			return
+		}
+		if order.Status == models.OrderStatusCobrado ||
+			order.Status == models.OrderStatusCancelado {
+			c.JSON(http.StatusGone, gin.H{"error": "la cuenta ya fue cerrada"})
+			return
+		}
+
+		file, header, err := c.Request.FormFile("receipt")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "archivo requerido (campo: receipt)",
+			})
+			return
+		}
+		defer file.Close()
+
+		if header.Size <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "archivo vacío"})
+			return
+		}
+		if header.Size > maxReceiptBytes {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "la imagen excede 5 MB",
+			})
+			return
+		}
+
+		mimeType := header.Header.Get("Content-Type")
+		if mimeType == "" || !strings.HasPrefix(mimeType, "image/") {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "el archivo debe ser una imagen (PNG/JPEG)",
+			})
+			return
+		}
+
+		data, err := io.ReadAll(io.LimitReader(file, maxReceiptBytes+1))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":  "error al leer imagen",
+				"detail": err.Error(),
+			})
+			return
+		}
+		if len(data) > maxReceiptBytes {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "la imagen excede 5 MB",
+			})
+			return
+		}
+
+		ext := extFromMime(mimeType)
+		// Tenant-prefixed key keeps receipts naturally isolated per
+		// merchant and makes future bucket-level retention rules
+		// easy to scope. Order id provides traceability when ops
+		// audits a disputed transfer.
+		key := fmt.Sprintf("%s/%s/%s%s",
+			order.TenantID, order.ID, uuid.NewString(), ext)
+
+		publicURL, err := storage.Upload(
+			c.Request.Context(), paymentReceiptBucket, key, data, mimeType)
+		if err != nil {
+			log.Printf("[RECEIPTS] upload failed tenant=%s order=%s bytes=%d: %v",
+				order.TenantID, order.ID, len(data), err)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":  "no se pudo subir el comprobante",
+				"detail": err.Error(),
+			})
+			return
+		}
+
+		c.JSON(http.StatusCreated, gin.H{
+			"data": gin.H{
+				"receipt_url": publicURL,
 			},
 		})
 	}
