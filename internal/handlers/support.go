@@ -178,7 +178,7 @@ func AdminListSupportTickets(db *gorm.DB) gin.HandlerFunc {
 		var rows []AdminTicketRow
 		query := db.Table("support_tickets AS st").
 			Select(`st.id, st.tenant_id, t.business_name, st.subject, st.status, st.priority, st.category, st.created_at, st.updated_at,
-			        (SELECT content FROM support_ticket_messages WHERE ticket_id = st.id ORDER BY created_at DESC LIMIT 1) as last_message`).
+			        COALESCE((SELECT content FROM support_ticket_messages WHERE ticket_id = st.id ORDER BY created_at DESC LIMIT 1), '') as last_message`).
 			Joins("JOIN tenants t ON t.id = st.tenant_id")
 		
 		if status != "" {
@@ -189,6 +189,8 @@ func AdminListSupportTickets(db *gorm.DB) gin.HandlerFunc {
 			Scan(&rows).Error
 
 		if err != nil {
+			// CRITICAL: Log the actual error for production debugging
+			log.Printf("[SUPPORT_API] list tickets failed: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al obtener tickets"})
 			return
 		}
