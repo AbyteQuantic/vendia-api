@@ -162,8 +162,9 @@ func AdminGetTenant(db *gorm.DB) gin.HandlerFunc {
 
 func AdminUpdateSubscription(db *gorm.DB) gin.HandlerFunc {
 	type Request struct {
-		Status string     `json:"status" binding:"required"`
-		EndsAt *time.Time `json:"ends_at"`
+		Status      string     `json:"status" binding:"required"`
+		TrialEndsAt *time.Time `json:"trial_ends_at"`
+		EndsAt      *time.Time `json:"ends_at"` // Backward compatibility
 	}
 
 	return func(c *gin.Context) {
@@ -175,10 +176,12 @@ func AdminUpdateSubscription(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		// Map input status to Pro status if applicable, but better use the constants
-		// ValidStatuses: TRIAL, FREE, PRO_ACTIVE, PRO_PAST_DUE
-		// The request might be sending legacy strings: trial, active, suspended, cancelled
+		// Explicit status mapping
 		statusMap := map[string]string{
+			"TRIAL":      models.SubscriptionStatusTrial,
+			"PRO_ACTIVE": models.SubscriptionStatusProActive,
+			"FREE":       models.SubscriptionStatusFree,
+			// Legacy support
 			"trial":     models.SubscriptionStatusTrial,
 			"active":    models.SubscriptionStatusProActive,
 			"suspended": models.SubscriptionStatusProPastDue,
@@ -197,8 +200,15 @@ func AdminUpdateSubscription(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		updates := map[string]any{"status": newStatus}
-		if req.EndsAt != nil && newStatus == models.SubscriptionStatusTrial {
-			updates["trial_ends_at"] = *req.EndsAt
+
+		// Prioritize trial_ends_at over ends_at
+		finalEndsAt := req.TrialEndsAt
+		if finalEndsAt == nil {
+			finalEndsAt = req.EndsAt
+		}
+
+		if finalEndsAt != nil && newStatus == models.SubscriptionStatusTrial {
+			updates["trial_ends_at"] = *finalEndsAt
 		}
 
 		result := db.Model(&models.TenantSubscription{}).Where("tenant_id = ?", tenantID).Updates(updates)
@@ -212,8 +222,8 @@ func AdminUpdateSubscription(db *gorm.DB) gin.HandlerFunc {
 				TenantID: tenantID,
 				Status:   newStatus,
 			}
-			if req.EndsAt != nil && newStatus == models.SubscriptionStatusTrial {
-				sub.TrialEndsAt = req.EndsAt
+			if finalEndsAt != nil && newStatus == models.SubscriptionStatusTrial {
+				sub.TrialEndsAt = finalEndsAt
 			}
 			if err := db.Create(&sub).Error; err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "error al crear suscripción"})
