@@ -1,5 +1,12 @@
 package models
 
+import (
+	"time"
+
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+)
+
 type OrderStatus string
 
 const (
@@ -35,7 +42,37 @@ type OrderTicket struct {
 	DeliveryAddress string      `json:"delivery_address,omitempty"`
 	CustomerPhone   string      `json:"customer_phone,omitempty"`
 	PaymentMethod   string      `json:"payment_method,omitempty"`
-	Items           []OrderItem `gorm:"foreignKey:OrderUUID;references:ID" json:"items"`
+	// SessionToken is an opaque, non-guessable UUID that lets a
+	// customer scan the table QR and watch their live tab from
+	// the public catalog without exposing the tenant_id or the
+	// order primary key (which is also a UUID but is used across
+	// authenticated endpoints and therefore higher-value to leak).
+	// Generated on first write via BeforeCreate and kept stable
+	// for the life of the ticket. Unique to prevent collisions.
+	SessionToken string `gorm:"type:uuid;uniqueIndex" json:"session_token,omitempty"`
+	// WaiterCalledAt marks the last time a customer pressed
+	// "Llamar al mesero" from the live-tab page. We store the
+	// timestamp (instead of a boolean) so the KDS can show "hace
+	// 2 min" and rate-limit repeated calls. Nullable because the
+	// vast majority of tickets never trigger the affordance.
+	WaiterCalledAt *time.Time  `json:"waiter_called_at,omitempty"`
+	Items          []OrderItem `gorm:"foreignKey:OrderUUID;references:ID" json:"items"`
+}
+
+// BeforeCreate runs after BaseModel.BeforeCreate (same hook name,
+// same receiver pattern). Gorm resolves promoted methods so we
+// explicitly override and forward to keep the UUID generation AND
+// initialize the session token. Idempotent: if the caller already
+// supplied a SessionToken (e.g. restoring from an offline queue),
+// we respect it.
+func (o *OrderTicket) BeforeCreate(tx *gorm.DB) error {
+	if err := o.BaseModel.BeforeCreate(tx); err != nil {
+		return err
+	}
+	if o.SessionToken == "" {
+		o.SessionToken = uuid.NewString()
+	}
+	return nil
 }
 
 type OrderItem struct {

@@ -146,6 +146,13 @@ func main() {
 	// handlers/customer_consent.go for the security rationale.
 	r.POST("/api/v1/public/catalog/:slug/check-customer", handlers.CheckCustomerConsent(db))
 
+	// Public "live tab" viewer. The QR printed for each table
+	// encodes only the session_token (not the order id or tenant
+	// id), so the lookup surface is narrow and un-guessable. See
+	// handlers/table_sessions.go for the full security rationale.
+	r.GET("/api/v1/public/table-sessions/:session_token", handlers.GetPublicTableSession(db))
+	r.POST("/api/v1/public/table-sessions/:session_token/call-waiter", handlers.CallWaiter(db))
+
 	// ── Protected routes (JWT) ───────────────────────────────────────────────
 	v1 := r.Group("/api/v1")
 	v1.Use(globalLimiter)
