@@ -3,6 +3,7 @@ package handlers
 import (
 	"net/http"
 	"strings"
+	"time"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
 
@@ -10,185 +11,285 @@ import (
 	"gorm.io/gorm"
 )
 
-// ── Types ────────────────────────────────────────────────────────────────────
+// ── Request Types ────────────────────────────────────────────────────────────
 
 type createTicketRequest struct {
-	Subject string `json:"subject" binding:"required"`
-	Message string `json:"message" binding:"required"`
+	Subject  string `json:"subject" binding:"required"`
+	Message  string `json:"message" binding:"required"`
+	Category string `json:"category"`
+	Priority string `json:"priority"`
 }
 
-// AdminTicketRow is the join of support_tickets with just enough
-// tenant + user context to render the admin card (business name,
-// tenant phone, reporter user phone). Kept flat so the frontend
-// doesn't need to thread three different endpoints.
-type AdminTicketRow struct {
-	ID             string `json:"id"`
-	TenantID       string `json:"tenant_id"`
-	BusinessName   string `json:"business_name"`
-	TenantPhone    string `json:"tenant_phone"`
-	UserID         string `json:"user_id,omitempty"`
-	UserPhone      string `json:"user_phone,omitempty"`
-	Subject        string `json:"subject"`
-	Message        string `json:"message"`
-	Status         string `json:"status"`
-	CreatedAt      string `json:"created_at"`
-	UpdatedAt      string `json:"updated_at"`
+type addMessageRequest struct {
+	Content string `json:"content" binding:"required"`
 }
 
 type updateTicketRequest struct {
-	Status string `json:"status" binding:"required"`
+	Status   string `json:"status"`
+	Priority string `json:"priority"`
 }
 
-// ── Handlers ─────────────────────────────────────────────────────────────────
+// ── Admin Types ─────────────────────────────────────────────────────────────
 
-// CreateSupportTicket is mounted under /api/v1/support (tenant-auth).
-// Subject is clipped to 160 chars; message is stored as-is (the DB
-// column is TEXT). Trimming whitespace stops "      " from passing
-// the binding:"required" check.
+type AdminTicketRow struct {
+	ID           string    `json:"id"`
+	TenantID     string    `json:"tenant_id"`
+	BusinessName string    `json:"business_name"`
+	Subject      string    `json:"subject"`
+	Status       string    `json:"status"`
+	Priority     string    `json:"priority"`
+	Category     string    `json:"category"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	LastMessage  string    `json:"last_message"`
+}
+
+// ── Handlers (Tenant) ────────────────────────────────────────────────────────
+
 func CreateSupportTicket(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
-		if tenantID == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "sesión requerida"})
-			return
-		}
 		userID := middleware.GetUserIDPtr(c)
 
 		var req createTicketRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error":      "asunto y mensaje son obligatorios",
-				"error_code": "invalid_request",
-			})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "asunto y mensaje son obligatorios"})
 			return
 		}
-		subject := strings.TrimSpace(req.Subject)
-		message := strings.TrimSpace(req.Message)
-		if subject == "" || message == "" {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error":      "asunto y mensaje no pueden estar vacíos",
-				"error_code": "invalid_request",
-			})
-			return
+
+		priority := req.Priority
+		if _, ok := models.ValidTicketPriorities[priority]; !ok {
+			priority = models.TicketPriorityNormal
 		}
-		if len(subject) > 160 {
-			subject = subject[:160]
+
+		category := req.Category
+		if _, ok := models.ValidTicketCategories[category]; !ok {
+			category = models.TicketCategoryOther
 		}
 
 		ticket := models.SupportTicket{
 			TenantID: tenantID,
 			UserID:   userID,
-			Subject:  subject,
-			Message:  message,
+			Subject:  strings.TrimSpace(req.Subject),
 			Status:   models.TicketStatusOpen,
+			Priority: priority,
+			Category: category,
 		}
-		if err := db.Create(&ticket).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": "no se pudo registrar el ticket",
-			})
-			return
-		}
-		c.JSON(http.StatusCreated, gin.H{"data": ticket})
-	}
-}
 
-// AdminListSupportTickets returns every ticket sorted so unresolved
-// work surfaces first (ORDER BY CASE status THEN created_at DESC).
-// Joins tenants + users to avoid N+1 on the frontend.
-func AdminListSupportTickets(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		var rows []AdminTicketRow
-		err := db.Table("support_tickets AS st").
-			Select(`st.id                         AS id,
-			        st.tenant_id                  AS tenant_id,
-			        t.business_name               AS business_name,
-			        t.phone                       AS tenant_phone,
-			        st.user_id                    AS user_id,
-			        COALESCE(u.phone,'')          AS user_phone,
-			        st.subject                    AS subject,
-			        st.message                    AS message,
-			        st.status                     AS status,
-			        st.created_at                 AS created_at,
-			        st.updated_at                 AS updated_at`).
-			Joins("JOIN tenants t ON t.id = st.tenant_id").
-			Joins("LEFT JOIN users u ON u.id = st.user_id").
-			// CASE expression keeps OPEN rows first without a second query
-			Order("CASE WHEN st.status = 'OPEN' THEN 0 ELSE 1 END, st.created_at DESC").
-			Scan(&rows).Error
+		err := db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Create(&ticket).Error; err != nil {
+				return err
+			}
+			// Initial message
+			msg := models.SupportTicketMessage{
+				TicketID:   ticket.ID,
+				SenderType: "TENANT",
+				SenderID:   tenantID, // Or userID if we prefer
+				Content:    strings.TrimSpace(req.Message),
+			}
+			return tx.Create(&msg).Error
+		})
+
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": "error al obtener tickets",
-			})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al crear ticket"})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"data": rows})
+
+		c.JSON(http.StatusCreated, ticket)
 	}
 }
 
-// AdminUpdateSupportTicket flips a ticket to RESOLVED (or back to
-// OPEN if the ops team reopens one). The status value is whitelisted
-// via models.ValidTicketStatuses — defence-in-depth before the DB
-// CHECK constraint rejects anything else.
-func AdminUpdateSupportTicket(db *gorm.DB) gin.HandlerFunc {
+func ListTenantTickets(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ticketID := c.Param("id")
-		var req updateTicketRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error":      "status requerido",
-				"error_code": "invalid_request",
-			})
+		tenantID := middleware.GetTenantID(c)
+		var tickets []models.SupportTicket
+		if err := db.Where("tenant_id = ?", tenantID).Order("updated_at desc").Find(&tickets).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al listar tickets"})
 			return
 		}
-		if _, ok := models.ValidTicketStatuses[req.Status]; !ok {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error":      "status inválido",
-				"error_code": "invalid_status",
-			})
-			return
-		}
+		c.JSON(http.StatusOK, tickets)
+	}
+}
 
-		result := db.Model(&models.SupportTicket{}).
-			Where("id = ?", ticketID).
-			Update("status", req.Status)
-		if result.Error != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": "no se pudo actualizar el ticket",
-			})
-			return
-		}
-		if result.RowsAffected == 0 {
+func GetTenantTicket(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		id := c.Param("id")
+
+		var ticket models.SupportTicket
+		if err := db.Preload("Messages", func(db *gorm.DB) *gorm.DB {
+			return db.Order("created_at asc")
+		}).Where("id = ? AND tenant_id = ?", id, tenantID).First(&ticket).Error; err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "ticket no encontrado"})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"message": "ticket actualizado"})
+		c.JSON(http.StatusOK, ticket)
 	}
 }
 
-// SortAdminTicketRowsOpenFirst is an exported helper so tests can
-// assert on the exact ordering invariant without a DB. Stable sort
-// on (status==OPEN first, then created_at DESC).
-func SortAdminTicketRowsOpenFirst(rows []AdminTicketRow) []AdminTicketRow {
-	out := make([]AdminTicketRow, len(rows))
-	copy(out, rows)
-	// simple insertion-sort is fine — ticket lists are O(hundreds)
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0; j-- {
-			if lessTicket(out[j], out[j-1]) {
-				out[j], out[j-1] = out[j-1], out[j]
-			} else {
-				break
+func AddTenantMessage(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		id := c.Param("id")
+
+		var req addMessageRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "contenido es requerido"})
+			return
+		}
+
+		// Verify ownership
+		var ticket models.SupportTicket
+		if err := db.Where("id = ? AND tenant_id = ?", id, tenantID).First(&ticket).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "ticket no encontrado"})
+			return
+		}
+
+		msg := models.SupportTicketMessage{
+			TicketID:   id,
+			SenderType: "TENANT",
+			SenderID:   tenantID,
+			Content:    strings.TrimSpace(req.Content),
+		}
+
+		err := db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Create(&msg).Error; err != nil {
+				return err
+			}
+			// Reopen if resolved? Or just update updated_at
+			return tx.Model(&ticket).Update("updated_at", time.Now()).Error
+		})
+
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al enviar mensaje"})
+			return
+		}
+
+		c.JSON(http.StatusCreated, msg)
+	}
+}
+
+// ── Handlers (Admin) ────────────────────────────────────────────────────────
+
+func AdminListSupportTickets(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		status := c.Query("status")
+		
+		var rows []AdminTicketRow
+		query := db.Table("support_tickets AS st").
+			Select(`st.id, st.tenant_id, t.business_name, st.subject, st.status, st.priority, st.category, st.created_at, st.updated_at,
+			        (SELECT content FROM support_ticket_messages WHERE ticket_id = st.id ORDER BY created_at DESC LIMIT 1) as last_message`).
+			Joins("JOIN tenants t ON t.id = st.tenant_id")
+		
+		if status != "" {
+			query = query.Where("st.status = ?", status)
+		}
+
+		err := query.Order("CASE WHEN st.status = 'OPEN' THEN 0 WHEN st.status = 'IN_PROGRESS' THEN 1 ELSE 2 END, st.updated_at DESC").
+			Scan(&rows).Error
+
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al obtener tickets"})
+			return
+		}
+		c.JSON(http.StatusOK, rows)
+	}
+}
+
+func AdminGetSupportTicket(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+
+		var ticket models.SupportTicket
+		if err := db.Preload("Messages", func(db *gorm.DB) *gorm.DB {
+			return db.Order("created_at asc")
+		}).First(&ticket, "id = ?", id).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "ticket no encontrado"})
+			return
+		}
+
+		// Get business name
+		var tenant models.Tenant
+		db.Select("business_name").First(&tenant, "id = ?", ticket.TenantID)
+		ticket.BusinessName = tenant.BusinessName
+
+		c.JSON(http.StatusOK, ticket)
+	}
+}
+
+func AdminAddTicketMessage(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+		adminID := middleware.GetUserID(c) // Assumes super-admin user id
+
+		var req addMessageRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "contenido es requerido"})
+			return
+		}
+
+		msg := models.SupportTicketMessage{
+			TicketID:   id,
+			SenderType: "ADMIN",
+			SenderID:   adminID,
+			Content:    strings.TrimSpace(req.Content),
+		}
+
+		err := db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Create(&msg).Error; err != nil {
+				return err
+			}
+			// Automatically mark as IN_PROGRESS if it was OPEN
+			return tx.Model(&models.SupportTicket{}).
+				Where("id = ? AND status = ?", id, models.TicketStatusOpen).
+				Updates(map[string]interface{}{
+					"status":     models.TicketStatusInProgress,
+					"updated_at": time.Now(),
+				}).Error
+		})
+
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al enviar respuesta"})
+			return
+		}
+
+		c.JSON(http.StatusCreated, msg)
+	}
+}
+
+func AdminUpdateSupportTicket(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.Param("id")
+		var req updateTicketRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+			return
+		}
+
+		updates := make(map[string]interface{})
+		if req.Status != "" {
+			if _, ok := models.ValidTicketStatuses[req.Status]; ok {
+				updates["status"] = req.Status
 			}
 		}
-	}
-	return out
-}
+		if req.Priority != "" {
+			if _, ok := models.ValidTicketPriorities[req.Priority]; ok {
+				updates["priority"] = req.Priority
+			}
+		}
 
-func lessTicket(a, b AdminTicketRow) bool {
-	aOpen := a.Status == models.TicketStatusOpen
-	bOpen := b.Status == models.TicketStatusOpen
-	if aOpen != bOpen {
-		return aOpen
+		if len(updates) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "nada que actualizar"})
+			return
+		}
+
+		updates["updated_at"] = time.Now()
+
+		if err := db.Model(&models.SupportTicket{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al actualizar ticket"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "ticket actualizado"})
 	}
-	return a.CreatedAt > b.CreatedAt
 }

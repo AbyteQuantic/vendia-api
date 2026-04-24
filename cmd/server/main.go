@@ -368,7 +368,10 @@ func main() {
 		v1.POST("/ocr/invoice", handlers.OCRInvoice(cfg.GeminiAPIKey))
 
 		// Phase 3 — Support hub (tenant side)
-		v1.POST("/support", handlers.CreateSupportTicket(db))
+		v1.POST("/support/tickets", handlers.CreateSupportTicket(db))
+		v1.GET("/support/tickets", handlers.ListTenantTickets(db))
+		v1.GET("/support/tickets/:id", handlers.GetTenantTicket(db))
+		v1.POST("/support/tickets/:id/messages", handlers.AddTenantMessage(db))
 	}
 
 	// ── Premium routes (JWT + PremiumAuth: TRIAL activo o PRO_ACTIVE) ────────
@@ -403,7 +406,9 @@ func main() {
 
 		// Phase 3 — Support hub (super-admin side)
 		admin.GET("/support/tickets", handlers.AdminListSupportTickets(db))
-		admin.PATCH("/support/tickets/:id", handlers.AdminUpdateSupportTicket(db))
+		admin.GET("/support/tickets/:id", handlers.AdminGetSupportTicket(db))
+		admin.POST("/support/tickets/:id/messages", handlers.AdminAddTicketMessage(db))
+		admin.PATCH("/support/tickets/:id/status", handlers.AdminUpdateSupportTicket(db))
 
 		// Catalog CMS & Template Engine
 		admin.GET("/catalogs/templates", handlers.AdminListCatalogTemplates(db))
