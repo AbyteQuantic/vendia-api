@@ -176,6 +176,16 @@ func TestPublicCatalog_ExposesActivePaymentMethods(t *testing.T) {
 		QRImageURL:     "https://cdn.example/qr/nequi.png",
 		IsActive:       true,
 	})
+	// Breve method with an http URL — catalog should classify it as
+	// kind="link" and expose `payment_link`.
+	db.Create(&models.TenantPaymentMethod{
+		BaseModel:      models.BaseModel{ID: "m-breve"},
+		TenantID:       "tenant-pay",
+		Name:           "Breve",
+		Provider:       "breve",
+		AccountDetails: "https://breve.co/pay/xyz",
+		IsActive:       true,
+	})
 	// Inactive method — must stay private. GORM `default:true` on
 	// Go zero-values means we have to create and then update,
 	// otherwise IsActive sneaks back to true on INSERT.
@@ -213,26 +223,40 @@ func TestPublicCatalog_ExposesActivePaymentMethods(t *testing.T) {
 				ID             string `json:"id"`
 				Name           string `json:"name"`
 				Provider       string `json:"provider"`
+				Kind           string `json:"kind"`
 				AccountDetails string `json:"account_details"`
+				PaymentLink    string `json:"payment_link"`
 				QRImageURL     string `json:"qr_image_url"`
 			} `json:"payment_methods"`
 		} `json:"data"`
 	}
 	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &res))
 
-	ids := map[string]string{}
+	byID := map[string]struct {
+		provider, kind, link, qr string
+	}{}
 	for _, m := range res.Data.PaymentMethods {
-		ids[m.ID] = m.Provider
+		byID[m.ID] = struct {
+			provider, kind, link, qr string
+		}{m.Provider, m.Kind, m.PaymentLink, m.QRImageURL}
 	}
-	assert.Equal(t, 1, len(res.Data.PaymentMethods),
-		"only the one active method of this tenant should be exposed")
-	assert.Equal(t, "nequi", ids["m-nequi"], "active method must be present")
-	_, hasInactive := ids["m-davi"]
-	assert.False(t, hasInactive, "inactive method must stay private")
-	_, hasLeak := ids["m-leak"]
-	assert.False(t, hasLeak, "other tenants' methods must never leak in")
+	assert.Equal(t, 2, len(res.Data.PaymentMethods),
+		"only this tenant's active methods (Nequi + Breve) should be exposed")
+	assert.Equal(t, "nequi", byID["m-nequi"].provider)
+	assert.Equal(t, "wallet", byID["m-nequi"].kind,
+		"Nequi without http URL should be kind=wallet")
+	assert.Equal(t, "https://cdn.example/qr/nequi.png", byID["m-nequi"].qr)
+	assert.Empty(t, byID["m-nequi"].link,
+		"Nequi should not leak account details as payment_link")
 
-	// QR URL round-trip — empty string when absent, full URL when set.
-	assert.Equal(t, "https://cdn.example/qr/nequi.png",
-		res.Data.PaymentMethods[0].QRImageURL)
+	assert.Equal(t, "breve", byID["m-breve"].provider)
+	assert.Equal(t, "link", byID["m-breve"].kind,
+		"Breve with http URL must be kind=link")
+	assert.Equal(t, "https://breve.co/pay/xyz", byID["m-breve"].link,
+		"payment_link must carry the URL so the SPA can open it")
+
+	_, hasInactive := byID["m-davi"]
+	assert.False(t, hasInactive, "inactive method must stay private")
+	_, hasLeak := byID["m-leak"]
+	assert.False(t, hasLeak, "other tenants' methods must never leak in")
 }

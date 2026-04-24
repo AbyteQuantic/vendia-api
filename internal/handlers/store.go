@@ -332,11 +332,23 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 		db.Where("tenant_id = ? AND is_active = true", tenant.ID).
 			Order("created_at ASC").
 			Find(&publicMethods)
+		// PublicPaymentMethod is the public-facing projection: no
+		// tenant_id, no timestamps, no is_active (we already
+		// filtered). We add:
+		//   - `payment_link`  — set when account_details is a URL
+		//     (typical for Breve / Wompi / PSE-style links) so the
+		//     web can render a "Pagar ahora" CTA instead of a
+		//     copy-to-clipboard chip.
+		//   - `kind`          — coarse hint ("wallet" | "link" |
+		//     "cash") that the SPA can switch on without having to
+		//     re-classify provider strings.
 		type PublicPaymentMethod struct {
 			ID             string `json:"id"`
 			Name           string `json:"name"`
 			Provider       string `json:"provider"`
+			Kind           string `json:"kind"`
 			AccountDetails string `json:"account_details"`
+			PaymentLink    string `json:"payment_link,omitempty"`
 			QRImageURL     string `json:"qr_image_url,omitempty"`
 		}
 		paymentMethodsOut := make([]PublicPaymentMethod, 0, len(publicMethods))
@@ -347,11 +359,29 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 				// tenants don't show up as "Otro" in the catalog.
 				provider = strings.ToLower(strings.TrimSpace(m.Name))
 			}
+			details := strings.TrimSpace(m.AccountDetails)
+			link := ""
+			kind := "wallet"
+			switch {
+			case strings.HasPrefix(details, "http://"),
+				strings.HasPrefix(details, "https://"):
+				link = details
+				kind = "link"
+			case provider == "breve":
+				// Breve without an http prefix is still a key the
+				// customer has to copy — treat it as a link so the
+				// web renders the "Copiar llave" CTA.
+				kind = "link"
+			case provider == "efectivo":
+				kind = "cash"
+			}
 			paymentMethodsOut = append(paymentMethodsOut, PublicPaymentMethod{
 				ID:             m.ID,
 				Name:           m.Name,
 				Provider:       provider,
-				AccountDetails: m.AccountDetails,
+				Kind:           kind,
+				AccountDetails: details,
+				PaymentLink:    link,
 				QRImageURL:     m.QRImageURL,
 			})
 		}
