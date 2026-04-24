@@ -233,7 +233,7 @@ func CreatePromotion(db *gorm.DB) gin.HandlerFunc {
 
 		promo := models.Promotion{
 			TenantID:    tenantID,
-			ProductUUID: req.ProductUUID,
+			ProductUUID: middleware.UUIDPtr(req.ProductUUID),
 			ProductName: product.Name,
 			OrigPrice:   product.Price,
 			PromoPrice:  req.PromoPrice,
@@ -574,8 +574,18 @@ func ApplyPromoToPOS(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// Combo promotions don't carry a single product_uuid — there's
+		// nothing to "apply to POS" as a price override, so refuse
+		// early instead of dereferencing a nil pointer.
+		if promo.ProductUUID == nil || *promo.ProductUUID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "esta promoción es un combo; no se puede aplicar como precio único al POS",
+			})
+			return
+		}
+
 		if err := db.Model(&models.Product{}).
-			Where("id = ? AND tenant_id = ?", promo.ProductUUID, tenantID).
+			Where("id = ? AND tenant_id = ?", *promo.ProductUUID, tenantID).
 			Update("price", promo.PromoPrice).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al aplicar precio"})
 			return
@@ -583,7 +593,7 @@ func ApplyPromoToPOS(db *gorm.DB) gin.HandlerFunc {
 
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{
-				"product_uuid": promo.ProductUUID,
+				"product_uuid": *promo.ProductUUID,
 				"new_price":    promo.PromoPrice,
 				"old_price":    promo.OrigPrice,
 			},

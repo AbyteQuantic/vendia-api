@@ -30,7 +30,12 @@ type Promotion struct {
 	BannerImageURL string     `gorm:"column:banner_image_url" json:"banner_image_url,omitempty"`
 
 	// Legacy single-product fields (nullable in DB since migration 019).
-	ProductUUID string  `gorm:"type:uuid" json:"product_uuid,omitempty"`
+	// ProductUUID is a pointer so combos — which don't have a single
+	// SKU — emit SQL NULL instead of the empty string. Without the
+	// pointer, GORM tries to INSERT '' into a uuid column and Postgres
+	// rejects with SQLSTATE 22P02 ("invalid input syntax for type
+	// uuid"). See feedback_nullable_uuid_rule.md.
+	ProductUUID *string `gorm:"type:uuid" json:"product_uuid,omitempty"`
 	ProductName string  `json:"product_name,omitempty"`
 	OrigPrice   float64 `json:"orig_price,omitempty"`
 	PromoPrice  float64 `json:"promo_price,omitempty"`
