@@ -74,7 +74,16 @@ type PartialPayment struct {
 // PartialPaymentStatus enumerates the valid states for the state
 // machine. Keeping them as typed constants so handlers and tests
 // share a single source of truth for whitelisting.
+//
+//	PENDING        — customer self-filed via the QR; tendero must
+//	                 confirm with the receipt screenshot.
+//	PENDING_SCAN   — customer chose "Efectivo / Al mesero"; the
+//	                 abono only counts once the staff scans the
+//	                 reverse QR on the POS, capturing the
+//	                 employee responsible for the cash.
+//	APPROVED       — abono is honoured by remaining_balance.
 const (
-	PartialPaymentStatusPending  = "PENDING"
-	PartialPaymentStatusApproved = "APPROVED"
+	PartialPaymentStatusPending     = "PENDING"
+	PartialPaymentStatusPendingScan = "PENDING_SCAN"
+	PartialPaymentStatusApproved    = "APPROVED"
 )

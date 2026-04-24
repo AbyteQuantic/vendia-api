@@ -297,6 +297,10 @@ func main() {
 		// so the POS TabReviewScreen can render them.
 		v1.POST("/orders/partial-payments", handlers.RegisterPartialPayment(db))
 		v1.GET("/orders/:uuid/partial-payments", handlers.ListPartialPayments(db))
+		// Reverse-QR: staff scans the customer-side QR and this
+		// flips the PENDING_SCAN abono to APPROVED, capturing the
+		// employee responsible for the cash.
+		v1.POST("/orders/payments/:payment_id/confirm", handlers.ConfirmPartialPayment(db))
 
 		// Suppliers
 		v1.GET("/suppliers", handlers.ListSuppliers(db))

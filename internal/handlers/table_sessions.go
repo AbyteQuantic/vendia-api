@@ -260,6 +260,13 @@ func SubmitPartialPayment(db *gorm.DB) gin.HandlerFunc {
 		// future migration to a different storage backend
 		// doesn't require a backend redeploy in lockstep.
 		ReceiptURL string `json:"receipt_url"`
+		// Mode toggles how the abono is queued. "transfer" (the
+		// default) lands as PENDING; "cash_waiter" lands as
+		// PENDING_SCAN so it stays out of remaining_balance until
+		// a staff member scans the reverse QR with the POS. Free
+		// text instead of a typed enum so the JSON contract
+		// degrades gracefully when an older client omits it.
+		Mode string `json:"mode"`
 	}
 
 	return func(c *gin.Context) {
@@ -299,6 +306,15 @@ func SubmitPartialPayment(db *gorm.DB) gin.HandlerFunc {
 			pmID = ""
 		}
 
+		// Map the requested mode → status. Anything other than the
+		// explicit "cash_waiter" trigger keeps the original
+		// PENDING semantics (transfer + receipt path).
+		status := models.PartialPaymentStatusPending
+		mode := strings.ToLower(strings.TrimSpace(req.Mode))
+		if mode == "cash_waiter" || mode == "efectivo_mesero" {
+			status = models.PartialPaymentStatusPendingScan
+		}
+
 		abono := models.PartialPayment{
 			OrderID:         order.ID,
 			TenantID:        order.TenantID,
@@ -306,7 +322,7 @@ func SubmitPartialPayment(db *gorm.DB) gin.HandlerFunc {
 			Amount:          req.Amount,
 			PaymentMethod:   strings.TrimSpace(req.PaymentMethod),
 			PaymentMethodID: pmID,
-			Status:          models.PartialPaymentStatusPending,
+			Status:          status,
 			Notes:           strings.TrimSpace(req.Notes),
 			ReceiptURL:      strings.TrimSpace(req.ReceiptURL),
 		}
@@ -319,21 +335,122 @@ func SubmitPartialPayment(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		// KDS bell for the tendero so they know to confirm it.
+		// PENDING_SCAN abonos already have a clear UX path (the
+		// staff scans the customer's reverse QR), but we still
+		// notify so a missed scan doesn't go unnoticed all night.
 		label := order.Label
 		if label == "" {
 			label = "Mesa sin nombre"
 		}
+		notifBody := label + " registró un abono por confirmar"
+		if status == models.PartialPaymentStatusPendingScan {
+			notifBody = label + " — efectivo en espera de escaneo"
+		}
 		CreateNotification(db, order.TenantID,
 			"Cliente envió un abono",
-			label+" registró un abono por confirmar",
+			notifBody,
 			"partial_payment",
 		)
 
 		c.JSON(http.StatusCreated, gin.H{
 			"data": gin.H{
-				"id":     abono.ID,
-				"status": abono.Status,
+				"id":         abono.ID,
+				"payment_id": abono.ID,
+				"status":     abono.Status,
+				"amount":     abono.Amount,
+				"order_id":   abono.OrderID,
 			},
+		})
+	}
+}
+
+// ConfirmPartialPayment serves
+//
+//	POST /api/v1/orders/payments/:payment_id/confirm
+//
+// Authenticated. Used by the staff scanner: a PENDING_SCAN abono
+// (customer chose "Efectivo / Al mesero" in the QR page) becomes
+// APPROVED only after a staff member scans the reverse QR and
+// physically takes the cash. The acting employee id is captured on
+// the row so audits can trace cash movements back to the person
+// who accepted them.
+//
+// Idempotent: scanning the same QR twice returns 200 with the
+// existing APPROVED row. Scanning an already-rejected or
+// already-paid abono returns 409 so the staff sees a deterministic
+// "ya cobrado" message instead of an opaque generic error.
+func ConfirmPartialPayment(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		paymentID := strings.TrimSpace(c.Param("payment_id"))
+		if !models.IsValidUUID(paymentID) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "payment_id inválido"})
+			return
+		}
+
+		var abono models.PartialPayment
+		err := db.Where("id = ? AND tenant_id = ?", paymentID, tenantID).
+			First(&abono).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "abono no encontrado"})
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":  "error al cargar el abono",
+				"detail": err.Error(),
+			})
+			return
+		}
+
+		// Idempotent re-scan: the same staff QR being scanned twice
+		// from the same device is harmless. We return 200 + the
+		// existing row so the Flutter UI can keep its happy path.
+		if abono.Status == models.PartialPaymentStatusApproved {
+			c.JSON(http.StatusOK, gin.H{
+				"data":    abono,
+				"already": true,
+			})
+			return
+		}
+		if abono.Status != models.PartialPaymentStatusPendingScan &&
+			abono.Status != models.PartialPaymentStatusPending {
+			c.JSON(http.StatusConflict, gin.H{
+				"error":  "el abono no está en un estado confirmable",
+				"status": abono.Status,
+			})
+			return
+		}
+
+		// Capture the staff member who scanned the QR — this is the
+		// entire point of the reverse-QR flow. Falls back to nil
+		// (rather than a placeholder) when the JWT didn't carry a
+		// user_id, so reports never blame the wrong employee.
+		userID := middleware.GetUserID(c)
+		var receivedBy *string
+		if models.IsValidUUID(userID) {
+			receivedBy = &userID
+		}
+
+		updates := map[string]any{
+			"status":              models.PartialPaymentStatusApproved,
+			"created_by_employee": receivedBy,
+		}
+		if err := db.Model(&abono).Updates(updates).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":  "no se pudo confirmar el abono",
+				"detail": err.Error(),
+			})
+			return
+		}
+
+		// Reload so the response reflects the new state without a
+		// second round-trip from the client.
+		_ = db.First(&abono, "id = ?", paymentID).Error
+
+		c.JSON(http.StatusOK, gin.H{
+			"data":    abono,
+			"already": false,
 		})
 	}
 }

@@ -180,6 +180,111 @@ func TestListOnlineOrders_FiltersByStatus(t *testing.T) {
 	assert.Equal(t, "A", resp.Data[0].CustomerName)
 }
 
+// Reverse-QR — verifies PartialPayment lands as PENDING_SCAN when
+// the customer chose the "Efectivo / Al mesero" mode and that the
+// authenticated confirm endpoint flips it to APPROVED while
+// capturing the employee that scanned it.
+func TestSubmitPartialPayment_CashWaiterStaysPendingScan(t *testing.T) {
+	db := setupOnlineOrdersDB(t)
+	tenantID := uuid.NewString()
+	require.NoError(t, db.Exec(
+		`INSERT INTO tenants (id, business_name, store_slug, created_at) VALUES (?, 'X', 'tt', datetime('now'))`,
+		tenantID,
+	).Error)
+
+	// online_orders schema in setupOnlineOrdersDB doesn't cover
+	// the OrderTicket / PartialPayment shape we need here, so the
+	// test crafts the minimum DDL alongside what already exists.
+	require.NoError(t, db.Exec(`CREATE TABLE order_tickets (
+		id TEXT PRIMARY KEY, created_at DATETIME, updated_at DATETIME,
+		deleted_at DATETIME, tenant_id TEXT NOT NULL,
+		branch_id TEXT, label TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'nuevo',
+		type TEXT NOT NULL DEFAULT 'mesa',
+		total REAL DEFAULT 0,
+		session_token TEXT
+	)`).Error)
+	require.NoError(t, db.Exec(`CREATE TABLE partial_payments (
+		id TEXT PRIMARY KEY, created_at DATETIME, updated_at DATETIME,
+		deleted_at DATETIME,
+		order_id TEXT NOT NULL, tenant_id TEXT NOT NULL,
+		branch_id TEXT,
+		amount REAL NOT NULL,
+		payment_method TEXT DEFAULT '',
+		payment_method_id TEXT,
+		status TEXT NOT NULL DEFAULT 'PENDING',
+		notes TEXT DEFAULT '',
+		receipt_url TEXT DEFAULT '',
+		created_by_employee TEXT
+	)`).Error)
+
+	orderID := uuid.NewString()
+	sessionToken := uuid.NewString()
+	require.NoError(t, db.Exec(
+		`INSERT INTO order_tickets (id, tenant_id, label, status, type, total, session_token, created_at) VALUES (?, ?, 'Mesa 1', 'nuevo', 'mesa', 25000, ?, datetime('now'))`,
+		orderID, tenantID, sessionToken,
+	).Error)
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/api/v1/public/table-sessions/:session_token/payments",
+		handlers.SubmitPartialPayment(db))
+
+	body, _ := json.Marshal(map[string]any{
+		"amount":         11000,
+		"payment_method": "Efectivo al mesero",
+		"mode":           "cash_waiter",
+	})
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/v1/public/table-sessions/"+sessionToken+"/payments",
+		bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var resp struct {
+		Data struct {
+			PaymentID string `json:"payment_id"`
+			Status    string `json:"status"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "PENDING_SCAN", resp.Data.Status)
+	require.NotEmpty(t, resp.Data.PaymentID)
+
+	// Confirm endpoint flips it to APPROVED and stamps the employee.
+	employeeID := uuid.NewString()
+	r2 := gin.New()
+	r2.POST("/api/v1/orders/payments/:payment_id/confirm",
+		func(c *gin.Context) {
+			c.Set(middleware.TenantIDKey, tenantID)
+			c.Set(middleware.UserIDKey, employeeID)
+			handlers.ConfirmPartialPayment(db)(c)
+		})
+
+	req2 := httptest.NewRequest(http.MethodPost,
+		"/api/v1/orders/payments/"+resp.Data.PaymentID+"/confirm", nil)
+	w2 := httptest.NewRecorder()
+	r2.ServeHTTP(w2, req2)
+	require.Equal(t, http.StatusOK, w2.Code, w2.Body.String())
+
+	var row models.PartialPayment
+	require.NoError(t, db.First(&row, "id = ?", resp.Data.PaymentID).Error)
+	assert.Equal(t, "APPROVED", row.Status)
+	require.NotNil(t, row.CreatedByEmployee)
+	assert.Equal(t, employeeID, *row.CreatedByEmployee,
+		"the staff member that scanned the QR must be on the row")
+
+	// Re-scanning the same QR is idempotent — no error, returns
+	// the same APPROVED row.
+	w3 := httptest.NewRecorder()
+	r2.ServeHTTP(w3, httptest.NewRequest(http.MethodPost,
+		"/api/v1/orders/payments/"+resp.Data.PaymentID+"/confirm", nil))
+	assert.Equal(t, http.StatusOK, w3.Code,
+		"second scan must return 200 instead of a confusing error")
+}
+
 func TestUpdateOnlineOrderStatus_RejectsUnknownStatus(t *testing.T) {
 	db := setupOnlineOrdersDB(t)
 	tenantID, _ := seedTenantWithBranch(t, db, "tienda-cuatro")
