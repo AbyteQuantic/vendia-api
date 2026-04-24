@@ -110,7 +110,13 @@ func TestPremiumAuth_RejectsExpiredTrialAndWritesThroughToFree(t *testing.T) {
 
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	// Legacy key — Flutter's Dio interceptor currently matches on it.
 	assert.Equal(t, "premium_expired", body["error_code"])
+	// Canonical keys the P.O. requested. Both shipping in parallel
+	// lets new Flutter builds switch without a coordinated deploy.
+	assert.Equal(t, "premium_feature_locked", body["error"])
+	assert.EqualValues(t, http.StatusForbidden, body["code"])
+	assert.NotEmpty(t, body["message"], "human-readable copy must survive")
 
 	// Write-through degrade: subsequent lookups should see FREE
 	var sub models.TenantSubscription

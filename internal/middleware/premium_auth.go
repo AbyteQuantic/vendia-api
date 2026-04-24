@@ -56,10 +56,7 @@ func PremiumAuth(db *gorm.DB, opts ...PremiumAuthOptions) gin.HandlerFunc {
 			// Tenant predates the trigger or the row was deleted — deny
 			// with the same soft paywall. The admin dashboard surfaces
 			// the missing row so ops can backfill it manually.
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-				"error":      "se requiere plan PRO",
-				"error_code": "premium_expired",
-			})
+			c.AbortWithStatusJSON(http.StatusForbidden, premiumLockedPayload("se requiere plan PRO"))
 			return
 		}
 		if err != nil {
@@ -89,9 +86,25 @@ func PremiumAuth(db *gorm.DB, opts ...PremiumAuthOptions) gin.HandlerFunc {
 				})
 		}
 
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-			"error":      "se requiere plan PRO",
-			"error_code": "premium_expired",
-		})
+		c.AbortWithStatusJSON(http.StatusForbidden, premiumLockedPayload("se requiere plan PRO"))
+	}
+}
+
+// premiumLockedPayload standardises the JSON shape every premium
+// endpoint emits when a tenant is not entitled. It ships both the
+// legacy keys (error / error_code = "premium_expired") for older
+// Flutter builds AND the brief's canonical keys (code: 403,
+// error: "premium_feature_locked") so new clients can switch over
+// without a coordinated deploy.
+//
+// Keeping both keys is deliberate — the Flutter Dio interceptor
+// currently matches on error_code. Removing it would tear down the
+// soft-paywall flow that's already shipped in production.
+func premiumLockedPayload(message string) gin.H {
+	return gin.H{
+		"error":      "premium_feature_locked",
+		"code":       http.StatusForbidden,
+		"error_code": "premium_expired",
+		"message":    message,
 	}
 }
