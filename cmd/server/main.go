@@ -245,6 +245,14 @@ func main() {
 		v1.PATCH("/tables/:id", handlers.UpdateTable(db))
 		v1.POST("/tables/sync", handlers.SyncTables(db))
 
+		// Table-tab upsert & lookup. Drives the "Open Tab" side of
+		// the POS: persists the cashier's local cart as an
+		// OrderTicket keyed by label so the live-tab QR has a
+		// stable session_token across rounds. See handlers/
+		// table_tabs.go for the full rationale.
+		v1.PUT("/tables/tab", handlers.UpsertTableTab(db))
+		v1.GET("/tables/tab/:label", handlers.GetTableTab(db))
+
 		// Notifications
 		v1.GET("/notifications", handlers.ListNotifications(db))
 		v1.POST("/notifications/read", handlers.MarkNotificationsRead(db))
