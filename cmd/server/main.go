@@ -133,8 +133,12 @@ func main() {
 	r.GET("/api/v1/public/fiado/:token", handlers.GetFiadoPublic(db))
 	r.POST("/api/v1/public/fiado/:token/accept", handlers.AcceptFiado(db))
 
-	// Public online orders (customer places order from catalog)
+	// Public online orders (customer places order from catalog).
+	// Two paths hit the same handler: the legacy shape and the
+	// brief's KDS-Phase-1 naming. Keeping both means older admin-web
+	// deploys still work while new clients migrate to `/catalog/.../orders`.
 	r.POST("/api/v1/store/:slug/online-order", handlers.PublicCreateOnlineOrder(db))
+	r.POST("/api/v1/public/catalog/:slug/orders", handlers.PublicCreateOnlineOrder(db))
 
 	// ── Protected routes (JWT) ───────────────────────────────────────────────
 	v1 := r.Group("/api/v1")
