@@ -313,6 +313,11 @@ func main() {
 		v1.POST("/store/payment-methods", handlers.CreatePaymentMethod(db))
 		v1.PATCH("/store/payment-methods/:id", handlers.UpdatePaymentMethod(db))
 		v1.DELETE("/store/payment-methods/:id", handlers.DeletePaymentMethod(db))
+		// Multipart QR upload lives on its own sub-route so the
+		// JSON-only POST above keeps its tight contract and clients
+		// that don't need QRs don't pay the multipart parser tax.
+		v1.POST("/store/payment-methods/:id/qr",
+			handlers.UploadPaymentMethodQR(db, storageSvc))
 
 		// Logo IA
 		v1.POST("/tenant/generate-logo", handlers.GenerateLogo(db, geminiSvc, storageSvc))

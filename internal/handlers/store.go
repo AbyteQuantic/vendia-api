@@ -323,6 +323,39 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 			})
 		}
 
+		// Active digital-payment methods so the public catalog can
+		// render "How to pay" without the shopper having to ask. Only
+		// is_active=true rows are exposed, and we expose a tight
+		// projection (id/provider/name/account/qr) — never the
+		// internal timestamps or tenant_id.
+		var publicMethods []models.TenantPaymentMethod
+		db.Where("tenant_id = ? AND is_active = true", tenant.ID).
+			Order("created_at ASC").
+			Find(&publicMethods)
+		type PublicPaymentMethod struct {
+			ID             string `json:"id"`
+			Name           string `json:"name"`
+			Provider       string `json:"provider"`
+			AccountDetails string `json:"account_details"`
+			QRImageURL     string `json:"qr_image_url,omitempty"`
+		}
+		paymentMethodsOut := make([]PublicPaymentMethod, 0, len(publicMethods))
+		for _, m := range publicMethods {
+			provider := m.Provider
+			if provider == "" {
+				// Pre-migration rows: derive on the fly so older
+				// tenants don't show up as "Otro" in the catalog.
+				provider = strings.ToLower(strings.TrimSpace(m.Name))
+			}
+			paymentMethodsOut = append(paymentMethodsOut, PublicPaymentMethod{
+				ID:             m.ID,
+				Name:           m.Name,
+				Provider:       provider,
+				AccountDetails: m.AccountDetails,
+				QRImageURL:     m.QRImageURL,
+			})
+		}
+
 		// Fetch theme config
 		var themeConfig models.TenantCatalogConfig
 		db.Preload("Template").Where("tenant_id = ?", tenant.ID).First(&themeConfig)
@@ -356,6 +389,7 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 				"min_order_amount": tenant.MinOrderAmount,
 				"products":         catalog,
 				"promotions":       promosOut,
+				"payment_methods":  paymentMethodsOut,
 				"theme":            themeOut,
 			},
 		})
