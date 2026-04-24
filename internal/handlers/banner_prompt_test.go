@@ -180,6 +180,51 @@ func TestBuildPromoBannerPrompt_V3_CatalogSourceWithZeroRefsFallsBackToAIBranch(
 	}
 }
 
+func TestBuildPromoBannerPrompt_EnforcesHorizontal16x9Format(t *testing.T) {
+	// Regresión P0: el slot "Special Offers" del catálogo web es un
+	// carrusel HORIZONTAL. Si el prompt permite (u obliga) formato
+	// cuadrado 1:1, los banners dejan franjas blancas laterales — el
+	// bug que motivó esta refactorización. Blindamos que AMBAS ramas
+	// (V1 fallback y V2 hardened) mencionen 16:9 explícitamente y
+	// prohíban 1:1 / cuadrado.
+	t.Run("V2 hardened", func(t *testing.T) {
+		got := BuildPromoBannerPrompt(PromoBannerPromptInput{
+			ComboTitle:     "Combo",
+			Products:       []string{"Producto"},
+			PromoPriceStr:  "$1.000",
+			NormalPriceStr: "$2.000",
+			DiscountStr:    "50% OFF",
+		})
+		for _, s := range []string{"16:9", "HORIZONTAL", "ANCHO COMPLETO"} {
+			if !strings.Contains(got, s) {
+				t.Errorf("V2 prompt must enforce %q for web catalogue slot, got:\n%s", s, got)
+			}
+		}
+		// El prompt actual admite la cadena "1:1" únicamente dentro
+		// del bloque de anti-patrones ("PROHIBIDO cuadrado 1:1"). Pero
+		// NUNCA debe decirle a Gemini que genere en cuadrado.
+		if strings.Contains(got, "generar UN banner promocional cuadrado 1:1") {
+			t.Errorf("V2 prompt still instructs Gemini to generate a SQUARE banner:\n%s", got)
+		}
+	})
+
+	t.Run("V1 fallback", func(t *testing.T) {
+		got := BuildPromoBannerPrompt(PromoBannerPromptInput{
+			PromoName:    "Promo",
+			Products:     []string{"x"},
+			DiscountText: "2x1",
+		})
+		for _, s := range []string{"16:9", "HORIZONTAL"} {
+			if !strings.Contains(got, s) {
+				t.Errorf("V1 fallback must also enforce %q, got:\n%s", s, got)
+			}
+		}
+		if strings.Contains(got, "banner publicitario cuadrado 1:1") {
+			t.Errorf("V1 fallback still instructs Gemini to generate a SQUARE banner:\n%s", got)
+		}
+	})
+}
+
 func TestBuildPromoBannerPrompt_NeverInventsPrices(t *testing.T) {
 	// Regresión: si el caller pasa productos pero cero info financiera,
 	// el prompt V1 NO debe mencionar precios específicos. El modelo no

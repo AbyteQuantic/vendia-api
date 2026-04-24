@@ -669,7 +669,7 @@ func BuildPromoBannerPrompt(in PromoBannerPromptInput) string {
 	// branch will disappear once the Flutter rollout is at 100 %.
 	if normalPrice == "" && promoPrice == "" && savings == "" {
 		return fmt.Sprintf(
-			`Eres un DIRECTOR DE ARTE publicitario para retail colombiano. Tu única tarea es generar UN banner publicitario cuadrado 1:1 de ALTA CALIDAD para esta promoción.
+			`Eres un DIRECTOR DE ARTE publicitario para retail colombiano. Tu única tarea es generar UN banner publicitario HORIZONTAL 16:9 de ALTA CALIDAD para esta promoción.
 
 PROMOCIÓN: %s
 PRODUCTOS INCLUIDOS: %s
@@ -677,15 +677,18 @@ TEXTO DE DESCUENTO PRINCIPAL: %s
 TONO VISUAL: %s
 
 REGLAS ESTRICTAS DE COMPOSICIÓN (no violarlas):
-1. Formato CUADRADO 1:1 con margen mínimo de 10%% a los 4 lados.
-2. TIPOGRAFÍA embebida: el texto "%s" debe ser el elemento más grande y leerse a la perfección a 320×320 px. Usa fuentes sans-serif bold con altísimo contraste (texto blanco sobre fondo oscuro o viceversa).
-3. El nombre de la promoción "%s" debe aparecer como subtítulo, más pequeño pero legible.
-4. Estilo VISUAL: fotografía publicitaria realista o ilustración vectorial limpia — NUNCA estilo cartoon infantil. Paleta vibrante pero coherente (naranjas/rojos para urgencia, verdes/azules para frescura).
-5. PROHIBIDO inventar texto adicional, logos falsos, mezclar idiomas, o escribir en inglés.
-6. Los productos deben aparecer representados visualmente (fotografía o ilustración fiel) sin deformaciones.
-7. Compuesto para redes sociales colombianas: legible en un scroll rápido de Instagram/WhatsApp Status.
+1. Formato HORIZONTAL ESTRICTO con aspect ratio 16:9 (paisaje, wide). Nunca cuadrado, nunca vertical — 16:9 exactos con margen mínimo de 8%% a los 4 lados.
+2. COMPOSICIÓN DE ANCHO COMPLETO: los productos y el escenario DEBEN aprovechar todo el ancho del rectángulo. NO dejes grandes franjas laterales vacías. Ejemplo: coloca los productos sobre un mantel, board de madera o mesa de restaurante que se extienda DE BORDE A BORDE. El fondo debe ser un entorno (p.ej. cocina / restaurante desenfocado, bodegón con textiles, góndola de supermercado) que rellene naturalmente el 16:9.
+3. LAYOUT HORIZONTAL tipo hero-banner: bloque de producto a un lado (≈55%% del ancho) y bloque de tipografía/oferta al otro (≈45%% del ancho), separados por respiración visual. Los elementos respiran horizontalmente — evita el collage apilado vertical.
+4. TIPOGRAFÍA embebida: el texto "%s" debe ser el elemento más grande y leerse a la perfección a 640×360 px (tamaño típico de preview en web). Usa fuentes sans-serif bold con altísimo contraste (texto blanco sobre fondo oscuro o viceversa).
+5. El nombre de la promoción "%s" debe aparecer como subtítulo, más pequeño pero legible.
+6. Estilo VISUAL: fotografía publicitaria realista o ilustración vectorial limpia — NUNCA estilo cartoon infantil. Paleta vibrante pero coherente (naranjas/rojos para urgencia, verdes/azules para frescura).
+7. PROHIBIDO inventar texto adicional, logos falsos, mezclar idiomas, o escribir en inglés.
+8. PROHIBIDO usar formato cuadrado 1:1 o vertical 9:16 — si la composición sale cuadrada el banner es RECHAZADO.
+9. Los productos deben aparecer representados visualmente (fotografía o ilustración fiel) sin deformaciones.
+10. Compuesto para el slot "Special Offers" horizontal de un catálogo web (carrusel 16:9), legible en un scroll rápido de Instagram/WhatsApp Status.
 
-Resultado: un banner listo para publicar, nivel agencia creativa.`,
+Resultado: un banner horizontal 16:9 listo para publicar, nivel agencia creativa.`,
 			promoName, productsStr, discountText, tone,
 			discountText, promoName,
 		)
@@ -760,7 +763,7 @@ No hay fotos reales adjuntas. Genera cada producto desde cero como FOTOGRAFÍA P
 	}
 
 	return fmt.Sprintf(
-		`Eres un DIRECTOR DE ARTE publicitario senior para retail colombiano. Tu ÚNICA tarea es generar UN banner promocional cuadrado 1:1 de alta calidad, estilo GÓNDOLA DE SUPERMERCADO / PUBLICIDAD DE VOLANTE, que comunique una oferta comercial específica con NÚMEROS LEGIBLES.
+		`Eres un DIRECTOR DE ARTE publicitario senior para retail colombiano. Tu ÚNICA tarea es generar UN banner promocional HORIZONTAL 16:9 de alta calidad, estilo HERO-BANNER DE CATÁLOGO WEB / GÓNDOLA DE SUPERMERCADO, que comunique una oferta comercial específica con NÚMEROS LEGIBLES.
 
 ══════════════════════════════════════════════════════════════════
 CONTEXTO COMERCIAL (usa estos datos EXACTOS, no inventes otros):
@@ -774,21 +777,36 @@ JERARQUÍA TIPOGRÁFICA OBLIGATORIA (de MÁS grande a menos grande):
 %s
 ══════════════════════════════════════════════════════════════════
 
+REGLAS DE FORMATO (CRÍTICAS — el slot de destino es un carrusel horizontal web "Special Offers"):
+F1. ASPECT RATIO OBLIGATORIO: 16:9 STRICT (paisaje / wide / horizontal). Jamás cuadrado 1:1. Jamás vertical 9:16. Jamás 4:3. Si la imagen sale cuadrada el banner es RECHAZADO automáticamente y se regenera.
+F2. La imagen DEBE ocupar el 100%% del marco 16:9 sin franjas blancas, letterbox, pillarbox, ni bordes vacíos decorativos. El slot destino usa object-cover — cualquier esquina desperdiciada se recorta.
+F3. Resolución objetivo: 1280×720 px (o proporcional). Legible también a 640×360 px (tamaño preview en móvil).
+
+REGLAS DE COMPOSICIÓN HORIZONTAL (UTILIZACIÓN DE ANCHO COMPLETO):
+C1. Layout HERO tipo catálogo Rappi / Uber Eats / Amazon hero-banner:
+    • Lado izquierdo (±55%% del ancho): BODEGÓN FOTOGRÁFICO de los productos — sobre mantel, board de madera, mesa de restaurante o góndola que SE EXTIENDA DE BORDE A BORDE del rectángulo, no centrado en un cuadrado chiquito.
+    • Lado derecho (±45%% del ancho): BLOQUE COMERCIAL — precios, sello de descuento, título. Respira con el fondo, alineación clara.
+    • Opcionalmente se puede invertir izquierda/derecha según la tonalidad, pero NUNCA apilar vertical (apilado vertical rompe el 16:9).
+C2. El FONDO debe rellenar todo el 16:9 de forma natural: cocina o restaurante colombiano desenfocado, textil de mesa, superficie de madera con textura, góndola de mercado. PROHIBIDO fondo de color plano rodeando un "cuadrado central" — eso recrea la franja blanca que estamos tratando de eliminar.
+C3. Los productos se componen HORIZONTALMENTE (uno al lado del otro, flat-lay alargado), nunca uno encima del otro tipo torre vertical.
+C4. Safe-zone de 6%% en los 4 lados — ningún texto ni producto toca los bordes, pero el fondo sí llega hasta el borde.
+
 REGLAS DE RENDER TIPOGRÁFICO (CRÍTICAS — violarlas = banner rechazado):
 A. Los valores de precio se renderizan EXACTAMENTE como están escritos arriba, INCLUYENDO el símbolo "$", el punto de miles y cualquier sufijo. No cambies "$8.100" por "$8100" ni lo traduzcas.
 B. La tipografía DEBE ser sans-serif geométrica bold (estilo Inter/Montserrat/Poppins), con kerning limpio y SIN deformar los caracteres. Los números deben verse tan legibles como en una publicidad de Éxito o D1.
 C. Contraste mínimo 7:1 entre texto de precio y su fondo. Si el fondo es claro, el texto es oscuro; si el fondo es oscuro, el texto es blanco.
 D. El precio normal tachado DEBE tener una línea diagonal VISIBLE que lo cruce, señal universal de "antes/después".
-E. El sello de descuento debe leerse como etiqueta comercial real (círculo, explosión o cinta), no como texto libre.
+E. El sello de descuento debe leerse como etiqueta comercial real (círculo, explosión o cinta), no como texto libre. Colócalo en una ESQUINA del rectángulo (no centrado).
 
-REGLAS DE COMPOSICIÓN:
-1. Formato CUADRADO 1:1 con safe-zone de 8%% en los 4 lados (no recortar el texto).
-2. Fotografía publicitaria realista de los productos O ilustración vectorial limpia — ocupa máximo 45%% del área, el resto es copy y fondo. PROHIBIDO estilo cartoon infantil, estilo IA surrealista o collage desordenado.
-3. Paleta coherente con el tono "%s": vibrante (naranjas/rojos saturados), elegante (negro+dorado), urgente (amarillo+negro contraste). Fondo sólido o gradiente suave — NO fondos ruidosos que compitan con el texto.
-4. Todos los textos en ESPAÑOL colombiano. No mezclar inglés. No inventar textos adicionales (ni "limited time", ni "sale", ni "SALE %%", ni URLs falsas, ni QRs).
-5. Los productos deben aparecer reconocibles y sin deformaciones — fotografía de empaque real.
+REGLAS DE ESTILO:
+S1. Fotografía publicitaria realista de los productos O ilustración vectorial limpia — los productos ocupan ±45%% del área total del banner horizontal, el resto es fondo + copy comercial.
+S2. Paleta coherente con el tono "%s": vibrante (naranjas/rojos saturados), elegante (negro+dorado), urgente (amarillo+negro contraste). Fondo sólido, gradiente suave o ambiente fotográfico desenfocado — NUNCA fondos ruidosos que compitan con el texto.
+S3. Todos los textos en ESPAÑOL colombiano. No mezclar inglés. No inventar textos adicionales (ni "limited time", ni "sale", ni "SALE %%", ni URLs falsas, ni QRs).
+S4. Los productos deben aparecer reconocibles y sin deformaciones — fotografía de empaque real.
 
 ANTI-PATRONES EXPLÍCITOS (si el banner cae en uno → es un FALLO):
+✗ Entregar imagen CUADRADA 1:1 o VERTICAL — cualquier aspect ratio distinto a 16:9 es inaceptable.
+✗ Centrar todos los productos en un cuadrado chiquito en medio del 16:9 dejando franjas laterales vacías o de color plano.
 ✗ Parecer una "foto de menú" de restaurante con productos flotando sin precios grandes.
 ✗ Omitir el precio promo o renderizarlo más pequeño que el nombre del producto.
 ✗ Escribir precios en formato internacional ($8,100.00 USD) en vez del formato local (%s).
@@ -796,7 +814,7 @@ ANTI-PATRONES EXPLÍCITOS (si el banner cae en uno → es un FALLO):
 ✗ Tipografía script/serif decorativa ilegible en scroll rápido de WhatsApp.
 ✗ Composición simétrica aburrida estilo flyer corporativo.
 
-OBJETIVO FINAL: Un banner que a 320×320 px en un scroll de WhatsApp Status haga que el cliente LEA el precio promo en menos de 1 segundo y entienda CUÁNTO se ahorra. Nivel agencia creativa colombiana.`,
+OBJETIVO FINAL: Un banner HORIZONTAL 16:9 que llene el slot "Special Offers" del catálogo web sin franjas blancas, con el precio promo tan legible a 640×360 px que el cliente entienda CUÁNTO ahorra en menos de 1 segundo. Nivel agencia creativa colombiana.`,
 		firstNonEmpty(tenant, "Tienda"),
 		promoName,
 		productsStr,

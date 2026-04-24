@@ -354,7 +354,8 @@ type ReferenceImage struct {
 }
 
 // GeneratePromoBanner produces a retail-advertising banner image
-// (typically square 1:1) from a fully-formed prompt. The caller is
+// (horizontal 16:9 — the aspect ratio the web catalogue's "Special
+// Offers" carousel expects) from a fully-formed prompt. The caller is
 // responsible for prompt assembly — this function just drives the
 // Gemini image model and returns the decoded PNG/JPEG bytes.
 //
