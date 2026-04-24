@@ -140,6 +140,12 @@ func main() {
 	r.POST("/api/v1/store/:slug/online-order", handlers.PublicCreateOnlineOrder(db))
 	r.POST("/api/v1/public/catalog/:slug/orders", handlers.PublicCreateOnlineOrder(db))
 
+	// Privacy-safe customer lookup for the checkout UI. Accepts a
+	// phone number and returns ONLY {"needs_consent": bool} — never
+	// the customer's name or any other PII. See
+	// handlers/customer_consent.go for the security rationale.
+	r.POST("/api/v1/public/catalog/:slug/check-customer", handlers.CheckCustomerConsent(db))
+
 	// ── Protected routes (JWT) ───────────────────────────────────────────────
 	v1 := r.Group("/api/v1")
 	v1.Use(globalLimiter)

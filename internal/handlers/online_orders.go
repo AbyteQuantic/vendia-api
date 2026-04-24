@@ -66,6 +66,12 @@ func PublicCreateOnlineOrder(db *gorm.DB) gin.HandlerFunc {
 		PaymentMethodID string    `json:"payment_method_id"`
 		Items           []ItemReq `json:"items" binding:"required,min=1"`
 		Notes           string    `json:"notes"`
+		// AcceptedTerms carries the Habeas-Data checkbox from the
+		// public catalogue. Only `true` triggers a consent flip on
+		// the Customer row (see upsertCustomerFromOrder). Omitted or
+		// `false` keeps the row in its prior state — we never revoke
+		// consent implicitly here.
+		AcceptedTerms bool `json:"accepted_terms"`
 	}
 
 	return func(c *gin.Context) {
@@ -124,6 +130,18 @@ func PublicCreateOnlineOrder(db *gorm.DB) gin.HandlerFunc {
 			})
 			return
 		}
+
+		// CRM upsert is best-effort — we already persisted the order,
+		// so if the customers table has a hiccup we still want the
+		// pedido to land in the KDS. Log the error silently (via the
+		// returned value) but don't fail the request.
+		_, _ = upsertCustomerFromOrder(
+			db,
+			tenant.ID,
+			req.CustomerName,
+			req.CustomerPhone,
+			req.AcceptedTerms,
+		)
 
 		// Create notification for the tenant
 		CreateNotification(db, tenant.ID,
