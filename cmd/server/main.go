@@ -152,6 +152,9 @@ func main() {
 	// handlers/table_sessions.go for the full security rationale.
 	r.GET("/api/v1/public/table-sessions/:session_token", handlers.GetPublicTableSession(db))
 	r.POST("/api/v1/public/table-sessions/:session_token/call-waiter", handlers.CallWaiter(db))
+	// Customer-submitted abono from the QR page — lands as PENDING
+	// until the tendero confirms on the POS. See handler for rationale.
+	r.POST("/api/v1/public/table-sessions/:session_token/payments", handlers.SubmitPartialPayment(db))
 
 	// ── Protected routes (JWT) ───────────────────────────────────────────────
 	v1 := r.Group("/api/v1")
@@ -286,6 +289,11 @@ func main() {
 		v1.PATCH("/orders/:uuid/status", handlers.UpdateOrderStatus(db))
 		v1.GET("/orders/open-accounts", handlers.OpenAccounts(db))
 		v1.POST("/orders/:uuid/close", handlers.CloseOrder(db))
+		// Live-tab partial payments — tendero registers a manual
+		// abono (APPROVED direct) or lists the abonos on a ticket
+		// so the POS TabReviewScreen can render them.
+		v1.POST("/orders/partial-payments", handlers.RegisterPartialPayment(db))
+		v1.GET("/orders/:uuid/partial-payments", handlers.ListPartialPayments(db))
 
 		// Suppliers
 		v1.GET("/suppliers", handlers.ListSuppliers(db))

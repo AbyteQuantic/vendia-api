@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
 
 	"github.com/gin-gonic/gin"
@@ -33,14 +34,53 @@ type PublicTableSession struct {
 	Items           []PublicTableItem  `json:"items"`
 	TenantName      string             `json:"tenant_name,omitempty"`
 	TenantBrandLogo string             `json:"tenant_brand_logo,omitempty"`
+
+	// Abonos aprobados (APPROVED). Pending payments are NOT
+	// surfaced publicly — they'd tempt the customer to believe
+	// they already settled when the tendero hasn't confirmed yet.
+	PartialPayments  []PublicAbono `json:"partial_payments"`
+	PaidAmount       float64       `json:"paid_amount"`
+	RemainingBalance float64       `json:"remaining_balance"`
+
+	// Payment methods the tenant accepts. Exposing them here
+	// means the web client can render the "Hacer abono" modal
+	// without a second round-trip to /catalog.
+	PaymentMethods []PublicPaymentMethodLite `json:"payment_methods"`
 }
 
 type PublicTableItem struct {
-	ProductName string  `json:"product_name"`
-	Quantity    int     `json:"quantity"`
-	UnitPrice   float64 `json:"unit_price"`
-	Emoji       string  `json:"emoji,omitempty"`
-	Subtotal    float64 `json:"subtotal"`
+	ProductName string    `json:"product_name"`
+	Quantity    int       `json:"quantity"`
+	UnitPrice   float64   `json:"unit_price"`
+	Emoji       string    `json:"emoji,omitempty"`
+	Subtotal    float64   `json:"subtotal"`
+	// AddedAt is the OrderItem.CreatedAt — timestamp the cashier
+	// dropped the product into the cuenta. The live-tab UI renders
+	// it as "14:35" next to the product name so the customer can
+	// audit "a qué horas me cobraron esto".
+	AddedAt time.Time `json:"added_at"`
+}
+
+// PublicAbono is the public-facing projection of a PartialPayment
+// APPROVED row. Omits the operator id and the internal state machine
+// vocabulary — web sees amount + method + timestamp only.
+type PublicAbono struct {
+	ID            string    `json:"id"`
+	Amount        float64   `json:"amount"`
+	PaymentMethod string    `json:"payment_method"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// PublicPaymentMethodLite mirrors PublicCatalog's shape so the
+// live-tab page can reuse the same chip component.
+type PublicPaymentMethodLite struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Provider       string `json:"provider"`
+	Kind           string `json:"kind"`
+	AccountDetails string `json:"account_details,omitempty"`
+	PaymentLink    string `json:"payment_link,omitempty"`
+	QRImageURL     string `json:"qr_image_url,omitempty"`
 }
 
 // GetPublicTableSession serves GET /api/v1/public/table-sessions/:session_token.
@@ -102,21 +142,287 @@ func GetPublicTableSession(db *gorm.DB) gin.HandlerFunc {
 				UnitPrice:   it.UnitPrice,
 				Emoji:       it.Emoji,
 				Subtotal:    it.UnitPrice * float64(it.Quantity),
+				AddedAt:     it.CreatedAt,
+			})
+		}
+
+		// Fetch approved abonos for this ticket so the public UI
+		// can render "Abonos: $X" in green and the remaining.
+		var abonos []models.PartialPayment
+		db.Where("order_id = ? AND status = ? AND deleted_at IS NULL",
+			order.ID, models.PartialPaymentStatusApproved).
+			Order("created_at ASC").
+			Find(&abonos)
+
+		publicAbonos := make([]PublicAbono, 0, len(abonos))
+		var paid float64
+		for _, a := range abonos {
+			paid += a.Amount
+			publicAbonos = append(publicAbonos, PublicAbono{
+				ID:            a.ID,
+				Amount:        a.Amount,
+				PaymentMethod: a.PaymentMethod,
+				CreatedAt:     a.CreatedAt,
+			})
+		}
+		remaining := order.Total - paid
+		if remaining < 0 {
+			remaining = 0
+		}
+
+		// Tenant payment methods the customer can pick in the
+		// "Hacer abono" modal. Active ones only, narrow projection.
+		var methodRows []models.TenantPaymentMethod
+		db.Where("tenant_id = ? AND is_active = true", order.TenantID).
+			Order("created_at ASC").
+			Find(&methodRows)
+		publicMethods := make([]PublicPaymentMethodLite, 0, len(methodRows))
+		for _, m := range methodRows {
+			details := strings.TrimSpace(m.AccountDetails)
+			kind := "wallet"
+			link := ""
+			switch {
+			case strings.HasPrefix(details, "http://"),
+				strings.HasPrefix(details, "https://"):
+				link = details
+				kind = "link"
+			case m.Provider == "efectivo":
+				kind = "cash"
+			}
+			publicMethods = append(publicMethods, PublicPaymentMethodLite{
+				ID:             m.ID,
+				Name:           m.Name,
+				Provider:       m.Provider,
+				Kind:           kind,
+				AccountDetails: details,
+				PaymentLink:    link,
+				QRImageURL:     m.QRImageURL,
 			})
 		}
 
 		c.JSON(http.StatusOK, gin.H{
 			"data": PublicTableSession{
-				TableLabel:      order.Label,
-				Status:          order.Status,
-				Type:            order.Type,
-				Total:           order.Total,
-				CreatedAt:       order.CreatedAt,
-				UpdatedAt:       order.UpdatedAt,
-				WaiterCalledAt:  order.WaiterCalledAt,
-				Items:           items,
-				TenantName:      tenant.BusinessName,
-				TenantBrandLogo: tenant.LogoURL,
+				TableLabel:       order.Label,
+				Status:           order.Status,
+				Type:             order.Type,
+				Total:            order.Total,
+				CreatedAt:        order.CreatedAt,
+				UpdatedAt:        order.UpdatedAt,
+				WaiterCalledAt:   order.WaiterCalledAt,
+				Items:            items,
+				TenantName:       tenant.BusinessName,
+				TenantBrandLogo:  tenant.LogoURL,
+				PartialPayments:  publicAbonos,
+				PaidAmount:       paid,
+				RemainingBalance: remaining,
+				PaymentMethods:   publicMethods,
+			},
+		})
+	}
+}
+
+// SubmitPartialPayment serves POST /api/v1/public/table-sessions/:session_token/payments.
+//
+// Self-service abono from the public live-tab page. Creates the row
+// in PENDING so the tendero has to confirm on the POS before it
+// counts against the remaining balance — otherwise a customer could
+// tap "Pagué $20.000 por Nequi" and walk out without actually
+// paying. Approvals happen in a separate authenticated endpoint.
+func SubmitPartialPayment(db *gorm.DB) gin.HandlerFunc {
+	type Request struct {
+		Amount          float64 `json:"amount" binding:"required,gt=0"`
+		PaymentMethod   string  `json:"payment_method"`
+		PaymentMethodID string  `json:"payment_method_id"`
+		Notes           string  `json:"notes"`
+	}
+
+	return func(c *gin.Context) {
+		token := strings.TrimSpace(c.Param("session_token"))
+		if _, err := uuid.Parse(token); err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "sesión no encontrada"})
+			return
+		}
+
+		var order models.OrderTicket
+		err := db.Where("session_token = ?", token).First(&order).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "sesión no encontrada"})
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":  "error al cargar la cuenta",
+				"detail": err.Error(),
+			})
+			return
+		}
+		if order.Status == models.OrderStatusCobrado ||
+			order.Status == models.OrderStatusCancelado {
+			c.JSON(http.StatusGone, gin.H{"error": "la cuenta ya fue cerrada"})
+			return
+		}
+
+		var req Request
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		pmID := strings.TrimSpace(req.PaymentMethodID)
+		if pmID != "" && !models.IsValidUUID(pmID) {
+			pmID = ""
+		}
+
+		abono := models.PartialPayment{
+			OrderID:         order.ID,
+			TenantID:        order.TenantID,
+			BranchID:        order.BranchID,
+			Amount:          req.Amount,
+			PaymentMethod:   strings.TrimSpace(req.PaymentMethod),
+			PaymentMethodID: pmID,
+			Status:          models.PartialPaymentStatusPending,
+			Notes:           strings.TrimSpace(req.Notes),
+		}
+		if err := db.Create(&abono).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":  "no pudimos registrar el abono",
+				"detail": err.Error(),
+			})
+			return
+		}
+
+		// KDS bell for the tendero so they know to confirm it.
+		label := order.Label
+		if label == "" {
+			label = "Mesa sin nombre"
+		}
+		CreateNotification(db, order.TenantID,
+			"Cliente envió un abono",
+			label+" registró un abono por confirmar",
+			"partial_payment",
+		)
+
+		c.JSON(http.StatusCreated, gin.H{
+			"data": gin.H{
+				"id":     abono.ID,
+				"status": abono.Status,
+			},
+		})
+	}
+}
+
+// RegisterPartialPayment serves the authenticated POST for the
+// tendero to record a manual abono from the POS (customer handed
+// them cash). Creates the row directly as APPROVED so it counts
+// against the remaining balance without an extra confirmation step.
+func RegisterPartialPayment(db *gorm.DB) gin.HandlerFunc {
+	type Request struct {
+		OrderID         string  `json:"order_id" binding:"required"`
+		Amount          float64 `json:"amount" binding:"required,gt=0"`
+		PaymentMethod   string  `json:"payment_method"`
+		PaymentMethodID string  `json:"payment_method_id"`
+		Notes           string  `json:"notes"`
+	}
+
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+
+		var req Request
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if !models.IsValidUUID(req.OrderID) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "order_id inválido"})
+			return
+		}
+
+		var order models.OrderTicket
+		if err := db.Where("id = ? AND tenant_id = ?", req.OrderID, tenantID).
+			First(&order).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "orden no encontrada"})
+			return
+		}
+		if order.Status == models.OrderStatusCobrado ||
+			order.Status == models.OrderStatusCancelado {
+			c.JSON(http.StatusGone, gin.H{"error": "la cuenta ya fue cerrada"})
+			return
+		}
+
+		pmID := strings.TrimSpace(req.PaymentMethodID)
+		if pmID != "" && !models.IsValidUUID(pmID) {
+			pmID = ""
+		}
+
+		employeeID := middleware.GetUserID(c)
+		var createdBy *string
+		if models.IsValidUUID(employeeID) {
+			createdBy = &employeeID
+		}
+
+		abono := models.PartialPayment{
+			OrderID:           order.ID,
+			TenantID:          tenantID,
+			BranchID:          order.BranchID,
+			Amount:            req.Amount,
+			PaymentMethod:     strings.TrimSpace(req.PaymentMethod),
+			PaymentMethodID:   pmID,
+			Status:            models.PartialPaymentStatusApproved,
+			Notes:             strings.TrimSpace(req.Notes),
+			CreatedByEmployee: createdBy,
+		}
+		if err := db.Create(&abono).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":  "no pudimos registrar el abono",
+				"detail": err.Error(),
+			})
+			return
+		}
+
+		c.JSON(http.StatusCreated, gin.H{"data": abono})
+	}
+}
+
+// ListPartialPayments serves GET /api/v1/orders/:uuid/partial-payments
+// so the Flutter TabReviewScreen can render the abonos list without
+// re-fetching the whole order. Scoped to the caller's tenant.
+func ListPartialPayments(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		orderID := strings.TrimSpace(c.Param("uuid"))
+		if !models.IsValidUUID(orderID) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "uuid inválido"})
+			return
+		}
+
+		// Confirm the order belongs to this tenant before listing —
+		// prevents a crafted order_id from leaking cross-tenant
+		// abonos.
+		var exists int64
+		db.Model(&models.OrderTicket{}).
+			Where("id = ? AND tenant_id = ?", orderID, tenantID).
+			Count(&exists)
+		if exists == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": "orden no encontrada"})
+			return
+		}
+
+		var rows []models.PartialPayment
+		db.Where("order_id = ? AND deleted_at IS NULL", orderID).
+			Order("created_at ASC").
+			Find(&rows)
+
+		var paid float64
+		for _, r := range rows {
+			if r.Status == models.PartialPaymentStatusApproved {
+				paid += r.Amount
+			}
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"data": gin.H{
+				"payments":    rows,
+				"paid_amount": paid,
 			},
 		})
 	}

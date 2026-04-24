@@ -96,6 +96,11 @@ func Migrate(db *gorm.DB) error {
 		&models.CatalogTemplate{},
 		&models.TenantCatalogConfig{},
 		&models.CatalogAnalytics{},
+		// Live-tab epic 2026-04-24: abonos / partial payments against
+		// open table tickets so the customer can settle in parts from
+		// the public QR page and the tendero can reconcile from the
+		// POS tab-review screen.
+		&models.PartialPayment{},
 	)
 	if err != nil {
 		return err
