@@ -103,15 +103,26 @@ func TestIsSupportedAudioMimeType(t *testing.T) {
 }
 
 func TestVoiceInventoryPrompt_IsStable(t *testing.T) {
-	// The Flutter client relies on this exact phrasing for the
-	// marketing copy ("Escucha tu voz y te armamos el inventario" —
-	// mirrored from the prompt's instruction). Any drift needs a
-	// matching Flutter + docs update, so lock the content here.
-	assert.Contains(t, VoiceInventoryPrompt, "tenderos colombianos")
-	assert.Contains(t, VoiceInventoryPrompt, "JSON Array")
-	// Hardened wording — forbids markdown fences explicitly.
+	// Anti-hallucination guardrails the 2026-04-24 incident forced
+	// into the prompt. Losing any of these reopens the
+	// "Arroz Roa / Aceite Premier / Huevos AAA" class of bug.
+	assert.Contains(t, VoiceInventoryPrompt, "NO inventes productos")
+	assert.Contains(t, VoiceInventoryPrompt, "arreglo vacío: []")
+	assert.Contains(t, VoiceInventoryPrompt, "NUNCA uses ejemplos predeterminados")
+	assert.Contains(t, VoiceInventoryPrompt, "NO inventes marcas ni presentaciones")
+	// Output format lock.
 	assert.Contains(t, VoiceInventoryPrompt, "NO uses bloques de código markdown")
 	assert.Contains(t, VoiceInventoryPrompt, `[{"name": "string", "quantity": int, "price": float}]`)
+	// The prompt must NOT embed any sample product name — Gemini
+	// would anchor on the first example and hallucinate around it
+	// whenever the audio is unclear. No brand, no product category.
+	forbiddenExamples := []string{
+		"Coca Cola", "Arroz", "Aceite", "Huevos", "Empanada",
+	}
+	for _, sample := range forbiddenExamples {
+		assert.NotContains(t, VoiceInventoryPrompt, sample,
+			"prompt must not seed %q — the model anchors on examples", sample)
+	}
 }
 
 func TestIsSupportedAudioMimeType_StripsParameters(t *testing.T) {

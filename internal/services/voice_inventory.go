@@ -1,11 +1,15 @@
 package services
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"mime"
+	"net/http"
 	"strings"
 )
 
@@ -24,20 +28,23 @@ type VoiceInventoryItem struct {
 // expectations — any drift between the brief and this constant is a
 // regression we want to catch at test time.
 //
-// Hardening (2026-04-23): the original prompt let Gemini wrap the
-// array in ```json fences. The parser handles that, but the stricter
-// wording below reduces the incidence outright and removes a failure
-// mode when the model emits stray prose around the fence.
-const VoiceInventoryPrompt = `Eres un asistente de inventario para tenderos colombianos. Escucha el audio y extrae una lista de productos.
+// Hardening (2026-04-24): after production users reported the model
+// inventing Colombian retail brands ("Arroz Roa", "Aceite Premier",
+// "Huevos AAA") when the audio is unclear, we rewrote the prompt as
+// strict zero-shot — no example rows, "echo the user verbatim",
+// and an explicit "return []" escape hatch. Combined with
+// temperature=0 in the request payload this eliminates the
+// hallucination path: the model either transcribes or returns empty.
+const VoiceInventoryPrompt = `Eres un procesador de datos estricto para un inventario. Tu ÚNICO trabajo es extraer los productos mencionados en el texto del usuario y convertirlos a JSON.
 
-Reglas estrictas de salida:
-- Responde ÚNICA Y EXCLUSIVAMENTE con un JSON Array válido.
-- NO uses bloques de código markdown. NO uses backticks (` + "```" + `). NO escribas la palabra "json" antes del arreglo.
-- NO agregues texto, saludos, ni explicaciones antes o después del arreglo.
-- Formato estricto: [{"name": "string", "quantity": int, "price": float}]
-- Si el usuario menciona cantidades y precios, asígnalos; si omite el precio, ponlo en 0.
-
-Ejemplo válido de salida: [{"name":"Coca Cola 350ml","quantity":12,"price":2500}]`
+REGLAS ESTRICTAS:
+1. NO inventes productos. Usa EXACTAMENTE las palabras que dice el usuario en el audio, palabra por palabra.
+2. Si el audio es incomprensible, está vacío, o no menciona productos claros, DEBES retornar un arreglo vacío: []
+3. NUNCA uses ejemplos predeterminados ni productos genéricos cuando no entiendas. Mejor retorna [].
+4. NO inventes marcas ni presentaciones que el usuario no dijo. Preserva tal cual lo que oíste.
+5. El precio es 0 si el usuario no lo menciona. La cantidad es 1 si no la menciona.
+6. Responde ÚNICA Y EXCLUSIVAMENTE con un JSON Array válido. NO uses bloques de código markdown. NO uses backticks. NO escribas la palabra "json" antes del arreglo. NO agregues texto antes ni después.
+7. Formato obligatorio: [{"name": "string", "quantity": int, "price": float}]`
 
 // Supported audio MIME types accepted by Gemini multimodal. See
 //   https://ai.google.dev/gemini-api/docs/audio
@@ -95,11 +102,21 @@ func normaliseMimeType(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
 }
 
-// ExtractVoiceInventory sends the raw audio to Gemini multimodal with
-// the Phase-4 prompt and returns the parsed product list. Errors are
-// classified so the caller can 422 on LLM-parse failures vs. 503 on
-// transport failures — but we keep the API simple: one error type,
-// the handler maps it to a single 422 payload.
+// ExtractVoiceInventory sends the raw audio to Gemini multimodal
+// with the strict zero-shot prompt (see VoiceInventoryPrompt). Uses
+// its own HTTP path (instead of sharing callWithImage with OCR) so
+// it can pin temperature=0 — a 2026-04-24 hallucination incident
+// had the default temperature let Gemini invent Colombian retail
+// brands when the audio was unclear. The request is now:
+//
+//   - temperature: 0            (no creativity)
+//   - topP: 0.1 / topK: 1       (narrow sampling window)
+//   - responseMimeType: json    (structured output)
+//   - maxOutputTokens: 512      (fail-closed cap)
+//
+// The raw response is logged (truncated) on every call so the next
+// hallucination report has a full audit trail without redeploying
+// with debug flags.
 func (s *GeminiService) ExtractVoiceInventory(
 	ctx context.Context,
 	audioData []byte,
@@ -112,16 +129,16 @@ func (s *GeminiService) ExtractVoiceInventory(
 		return nil, fmt.Errorf("unsupported audio mime type: %s", mimeType)
 	}
 
-	// callWithImage is misleadingly named — the underlying Gemini
-	// inlineData schema accepts any binary payload (image, audio,
-	// video). Reusing it avoids a parallel implementation that would
-	// drift over time. The request still goes to s.model (text model)
-	// because the multimodal capability lives on gemini-2.0-flash /
-	// gemini-1.5-flash — the same model we already use for OCR.
-	raw, err := s.callWithImage(ctx, audioData, mimeType, VoiceInventoryPrompt)
+	raw, err := s.callVoiceInventory(ctx, audioData, mimeType)
 	if err != nil {
 		return nil, err
 	}
+
+	// Always log the raw Gemini response (truncated). Future
+	// hallucination reports need this trail — without it we have no
+	// way to tell "bad audio" apart from "model went off-script".
+	log.Printf("[VOICE] gemini raw response (%d bytes): %.400s",
+		len(raw), raw)
 
 	items, err := ParseVoiceInventoryJSON(raw)
 	if err != nil {
@@ -129,6 +146,87 @@ func (s *GeminiService) ExtractVoiceInventory(
 		return nil, err
 	}
 	return items, nil
+}
+
+// callVoiceInventory is the dedicated Gemini call for the voice
+// inventory flow. Kept inline here (instead of GeminiService's
+// generic callWithImage) so the strict generationConfig below
+// doesn't leak into OCR / banner / photo-enhance paths where some
+// creativity is intentional.
+func (s *GeminiService) callVoiceInventory(
+	ctx context.Context,
+	audioData []byte,
+	mimeType string,
+) (string, error) {
+	b64 := base64.StdEncoding.EncodeToString(audioData)
+
+	payload := map[string]any{
+		"contents": []map[string]any{
+			{
+				"parts": []map[string]any{
+					{
+						"inlineData": map[string]any{
+							"mimeType": mimeType,
+							"data":     b64,
+						},
+					},
+					{"text": VoiceInventoryPrompt},
+				},
+			},
+		},
+		"generationConfig": map[string]any{
+			// Zero creativity — the model MUST echo what it heard
+			// or fall through to the empty-array escape hatch.
+			"temperature":      0,
+			"topP":             0.1,
+			"topK":             1,
+			"maxOutputTokens":  512,
+			"responseMimeType": "application/json",
+		},
+	}
+
+	body, _ := json.Marshal(payload)
+	url := fmt.Sprintf(
+		"https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s",
+		s.model, s.apiKey,
+	)
+
+	reqCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+
+	req, _ := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("gemini voice request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read gemini voice response: %w", err)
+	}
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf(
+			"gemini voice returned %d: %.200s",
+			resp.StatusCode, respBody,
+		)
+	}
+
+	var parsed geminiResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return "", fmt.Errorf("failed to parse gemini voice envelope: %w", err)
+	}
+	if len(parsed.Candidates) == 0 || len(parsed.Candidates[0].Content.Parts) == 0 {
+		return "", fmt.Errorf("empty gemini voice response")
+	}
+
+	text := parsed.Candidates[0].Content.Parts[0].Text
+	text = strings.TrimPrefix(text, "```json")
+	text = strings.TrimPrefix(text, "```")
+	text = strings.TrimSuffix(text, "```")
+	return strings.TrimSpace(text), nil
 }
 
 // ParseVoiceInventoryJSON is the pure-function decoder. Exported so
