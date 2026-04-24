@@ -207,7 +207,7 @@ func AdminUpdateSubscription(db *gorm.DB) gin.HandlerFunc {
 			finalEndsAt = req.EndsAt
 		}
 
-		if finalEndsAt != nil && newStatus == models.SubscriptionStatusTrial {
+		if finalEndsAt != nil && (newStatus == models.SubscriptionStatusTrial || newStatus == models.SubscriptionStatusProActive) {
 			updates["trial_ends_at"] = *finalEndsAt
 		}
 
@@ -222,7 +222,7 @@ func AdminUpdateSubscription(db *gorm.DB) gin.HandlerFunc {
 				TenantID: tenantID,
 				Status:   newStatus,
 			}
-			if finalEndsAt != nil && newStatus == models.SubscriptionStatusTrial {
+			if finalEndsAt != nil && (newStatus == models.SubscriptionStatusTrial || newStatus == models.SubscriptionStatusProActive) {
 				sub.TrialEndsAt = finalEndsAt
 			}
 			if err := db.Create(&sub).Error; err != nil {

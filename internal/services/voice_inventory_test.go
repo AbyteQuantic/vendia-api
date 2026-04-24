@@ -109,7 +109,28 @@ func TestVoiceInventoryPrompt_IsStable(t *testing.T) {
 	// matching Flutter + docs update, so lock the content here.
 	assert.Contains(t, VoiceInventoryPrompt, "tenderos colombianos")
 	assert.Contains(t, VoiceInventoryPrompt, "JSON Array")
-	assert.Contains(t, VoiceInventoryPrompt, "{name, quantity, price}")
+	// Hardened wording — forbids markdown fences explicitly.
+	assert.Contains(t, VoiceInventoryPrompt, "NO uses bloques de código markdown")
+	assert.Contains(t, VoiceInventoryPrompt, `[{"name": "string", "quantity": int, "price": float}]`)
+}
+
+func TestIsSupportedAudioMimeType_StripsParameters(t *testing.T) {
+	// Dio's MultipartFile occasionally ships with a Content-Type that
+	// includes parameters ("audio/m4a; charset=utf-8"). Without strip
+	// the map lookup fails and the handler 400s with "formato de audio
+	// no soportado" — which the Flutter catch currently masks as the
+	// generic "No se pudo procesar." toast.
+	cases := map[string]bool{
+		"audio/m4a; charset=utf-8": true,
+		"audio/webm;codecs=opus":   true,
+		"AUDIO/WAV; boundary=---":  true,
+		"audio/flac; charset=utf-8": false,
+	}
+	for mt, want := range cases {
+		t.Run(mt, func(t *testing.T) {
+			assert.Equal(t, want, IsSupportedAudioMimeType(mt))
+		})
+	}
 }
 
 func TestExtractVoiceInventory_RejectsUnsupportedMimeType(t *testing.T) {

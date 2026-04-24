@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"mime"
 	"strings"
 )
 
@@ -22,7 +23,21 @@ type VoiceInventoryItem struct {
 // Exported so tests can assert it stayed aligned with the Flutter
 // expectations — any drift between the brief and this constant is a
 // regression we want to catch at test time.
-const VoiceInventoryPrompt = `Eres un asistente de inventario para tenderos colombianos. Escucha el audio y extrae una lista de productos. Si el usuario menciona cantidades y precios, asígnalos. Si omite el precio, ponlo en 0. Responde ÚNICAMENTE con un JSON Array bajo la estructura: [{name, quantity, price}].`
+//
+// Hardening (2026-04-23): the original prompt let Gemini wrap the
+// array in ```json fences. The parser handles that, but the stricter
+// wording below reduces the incidence outright and removes a failure
+// mode when the model emits stray prose around the fence.
+const VoiceInventoryPrompt = `Eres un asistente de inventario para tenderos colombianos. Escucha el audio y extrae una lista de productos.
+
+Reglas estrictas de salida:
+- Responde ÚNICA Y EXCLUSIVAMENTE con un JSON Array válido.
+- NO uses bloques de código markdown. NO uses backticks (` + "```" + `). NO escribas la palabra "json" antes del arreglo.
+- NO agregues texto, saludos, ni explicaciones antes o después del arreglo.
+- Formato estricto: [{"name": "string", "quantity": int, "price": float}]
+- Si el usuario menciona cantidades y precios, asígnalos; si omite el precio, ponlo en 0.
+
+Ejemplo válido de salida: [{"name":"Coca Cola 350ml","quantity":12,"price":2500}]`
 
 // Supported audio MIME types accepted by Gemini multimodal. See
 //   https://ai.google.dev/gemini-api/docs/audio
@@ -44,9 +59,40 @@ var SupportedAudioMimeTypes = map[string]struct{}{
 // IsSupportedAudioMimeType is the exported predicate the handler uses.
 // Kept as a function (not a direct map lookup) so callers don't need
 // to understand the internal representation.
+//
+// Robust against parameters: when Dio's MultipartFile ships a part with
+// a Content-Type like "audio/m4a; charset=utf-8" the raw map lookup
+// would miss — the header value includes parameters that never belong
+// in the key. We normalise via mime.ParseMediaType, fall back to a
+// manual split when that fails (odd vendor strings), and lower-case
+// for the final check.
 func IsSupportedAudioMimeType(mimeType string) bool {
-	_, ok := SupportedAudioMimeTypes[strings.ToLower(strings.TrimSpace(mimeType))]
+	normalised := normaliseMimeType(mimeType)
+	if normalised == "" {
+		return false
+	}
+	_, ok := SupportedAudioMimeTypes[normalised]
 	return ok
+}
+
+// normaliseMimeType trims whitespace, drops parameters after the first
+// `;`, and lower-cases the result. Exported via tests only — callers
+// should prefer IsSupportedAudioMimeType.
+func normaliseMimeType(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if mediaType, _, err := mime.ParseMediaType(s); err == nil {
+		return strings.ToLower(mediaType)
+	}
+	// mime.ParseMediaType rejects some browsers' malformed params.
+	// Fall back to a simple split so a misbehaving client can still
+	// get through when the type itself is fine.
+	if idx := strings.Index(s, ";"); idx >= 0 {
+		s = s[:idx]
+	}
+	return strings.ToLower(strings.TrimSpace(s))
 }
 
 // ExtractVoiceInventory sends the raw audio to Gemini multimodal with
