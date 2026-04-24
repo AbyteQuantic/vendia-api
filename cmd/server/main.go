@@ -240,9 +240,6 @@ func main() {
 		v1.GET("/store/config", handlers.GetStoreConfig(db))
 		v1.PATCH("/store/status", handlers.UpdateStoreStatus(db))
 		v1.PATCH("/store/payment-config", handlers.UpdatePaymentConfig(db))
-		// TODO(phase-5): UpdateDeliveryConfig + CheckSlugAvailability
-		// handlers are referenced here but never landed. Re-wire when
-		// the handlers ship.
 		v1.PATCH("/store/slug", handlers.UpdateStoreSlug(db))
 
 		// Panic button
