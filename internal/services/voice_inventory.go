@@ -175,11 +175,17 @@ func (s *GeminiService) callVoiceInventory(
 			},
 		},
 		"generationConfig": map[string]any{
-			// Zero creativity — the model MUST echo what it heard
-			// or fall through to the empty-array escape hatch.
+			// temperature=0 eliminates the "plausible completion"
+			// path that produced the 2026-04-24 hallucination
+			// ("Arroz Roa", "Aceite Premier", "Huevos AAA"). We
+			// intentionally leave topP / topK at the provider
+			// defaults — pinning them both too low (topK=1,
+			// topP=0.1) starves the decoder during transcription
+			// and made Gemini emit "[]" even for clean audio that
+			// said "30 cervezas aguila 350". Temperature alone is
+			// enough to lock out the creativity anchor; the strict
+			// prompt handles the rest.
 			"temperature":      0,
-			"topP":             0.1,
-			"topK":             1,
 			"maxOutputTokens":  512,
 			"responseMimeType": "application/json",
 		},
