@@ -179,6 +179,11 @@ func main() {
 		v1.PATCH("/employees/:uuid", handlers.UpdateEmployee(db))
 		v1.DELETE("/employees/:uuid", handlers.DeleteEmployee(db))
 		v1.POST("/employees/verify-pin", handlers.VerifyPin(db))
+		// Owner-only credential reset — also upserts the User +
+		// UserWorkspace rows so the staff can log in via the
+		// multi-tenant flow. See handler for the
+		// "phone-belongs-to-multiple-tenants" rationale.
+		v1.POST("/employees/:uuid/password", handlers.SetEmployeePassword(db))
 
 		// Branches (Phase 5 — multi-sede). List + read endpoints sit
 		// here under tenant auth; CREATE lives in the premium group
