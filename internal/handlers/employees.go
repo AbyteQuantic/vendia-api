@@ -123,10 +123,12 @@ func CreateEmployee(db *gorm.DB) gin.HandlerFunc {
 
 func UpdateEmployee(db *gorm.DB) gin.HandlerFunc {
 	type Request struct {
-		Name  *string              `json:"name"`
-		Phone *string              `json:"phone"`
-		Pin   *string              `json:"pin"`
-		Role  *models.EmployeeRole `json:"role"`
+		Name     *string              `json:"name"`
+		Phone    *string              `json:"phone"`
+		Pin      *string              `json:"pin"`
+		Role     *models.EmployeeRole `json:"role"`
+		BranchID *string              `json:"branch_id"`
+		IsActive *bool                `json:"is_active"`
 	}
 
 	return func(c *gin.Context) {
@@ -148,10 +150,10 @@ func UpdateEmployee(db *gorm.DB) gin.HandlerFunc {
 
 		updates := map[string]any{}
 		if req.Name != nil {
-			updates["name"] = *req.Name
+			updates["name"] = strings.TrimSpace(*req.Name)
 		}
 		if req.Phone != nil {
-			updates["phone"] = *req.Phone
+			updates["phone"] = strings.TrimSpace(*req.Phone)
 		}
 		if req.Pin != nil {
 			if len(*req.Pin) != 4 {
@@ -168,12 +170,64 @@ func UpdateEmployee(db *gorm.DB) gin.HandlerFunc {
 		if req.Role != nil {
 			updates["role"] = *req.Role
 		}
+		if req.BranchID != nil {
+			// Empty string = clear assignment (mono-sede tenants
+			// don't have branches yet). Anything else must be a
+			// valid UUID belonging to this tenant — reject crafted
+			// ids that target another tenant's sede.
+			trimmed := strings.TrimSpace(*req.BranchID)
+			if trimmed == "" {
+				updates["branch_id"] = gorm.Expr("NULL")
+			} else {
+				if !models.IsValidUUID(trimmed) {
+					c.JSON(http.StatusBadRequest, gin.H{
+						"error": "branch_id debe ser un UUID válido",
+					})
+					return
+				}
+				var owns int64
+				db.Model(&models.Branch{}).
+					Where("id = ? AND tenant_id = ? AND deleted_at IS NULL",
+						trimmed, tenantID).
+					Count(&owns)
+				if owns == 0 {
+					c.JSON(http.StatusForbidden, gin.H{
+						"error":      "esa sede no pertenece a este negocio",
+						"error_code": "branch_not_owned",
+					})
+					return
+				}
+				updates["branch_id"] = trimmed
+			}
+		}
+		if req.IsActive != nil {
+			// The OWNER row protects itself — disabling the dueño
+			// would lock the tenant out of their own admin surface.
+			if employee.IsOwner && !*req.IsActive {
+				c.JSON(http.StatusForbidden, gin.H{
+					"error":      "no puedes desactivar al dueño",
+					"error_code": "owner_cannot_disable",
+				})
+				return
+			}
+			updates["is_active"] = *req.IsActive
+		}
 
-		if err := db.Model(&employee).Updates(updates).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al actualizar empleado"})
+		if len(updates) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "no hay campos para actualizar"})
 			return
 		}
 
+		if err := db.Model(&employee).Updates(updates).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":  "error al actualizar empleado",
+				"detail": err.Error(),
+			})
+			return
+		}
+
+		// Reload so the response carries the post-update shape.
+		_ = db.First(&employee, "id = ?", employee.ID).Error
 		c.JSON(http.StatusOK, gin.H{"data": employee})
 	}
 }
