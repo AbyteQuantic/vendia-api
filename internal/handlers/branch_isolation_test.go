@@ -84,7 +84,8 @@ func setupIsolationDB(t *testing.T) *gorm.DB {
 			is_credit INTEGER DEFAULT 0,
 			credit_account_id TEXT,
 			payment_status TEXT DEFAULT 'COMPLETED',
-			dynamic_qr_payload TEXT
+			dynamic_qr_payload TEXT,
+			source TEXT NOT NULL DEFAULT 'POS'
 		)`,
 		`CREATE TABLE sale_items (
 			id TEXT PRIMARY KEY, created_at DATETIME, updated_at DATETIME,

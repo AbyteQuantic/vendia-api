@@ -48,9 +48,21 @@ type Sale struct {
 	// DynamicQRPayload is the raw QR string shown to the customer for
 	// transfer sales (e.g. "nequi://pay?phone=300…&amount=12500"). Kept
 	// for audit + later reconciliation when Webhooks land.
-	DynamicQRPayload *string    `gorm:"type:text" json:"dynamic_qr_payload,omitempty"`
-	Items            []SaleItem `gorm:"foreignKey:SaleID" json:"items"`
+	DynamicQRPayload *string `gorm:"type:text" json:"dynamic_qr_payload,omitempty"`
+	// Source attributes the sale to its origin so the unified ledger
+	// can split totals by channel. Defaults to "POS" for the cashier
+	// surface; "WEB" lands when an OnlineOrder transitions to
+	// completed; "TABLE" when an OrderTicket closes via CloseOrder.
+	Source string     `gorm:"type:varchar(16);not null;default:'POS';index" json:"source"`
+	Items  []SaleItem `gorm:"foreignKey:SaleID" json:"items"`
 }
+
+// SaleSource enumerates the source vocab for the unified ledger.
+const (
+	SaleSourcePOS   = "POS"
+	SaleSourceWeb   = "WEB"
+	SaleSourceTable = "TABLE"
+)
 
 // SaleItem is agnostic as of migration 020: it can represent either a
 // product line (physical retail — ProductID populated, IsService=false)

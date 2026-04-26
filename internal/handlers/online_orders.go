@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"vendia-backend/internal/middleware"
@@ -218,17 +220,127 @@ func UpdateOnlineOrderStatus(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		result := db.Model(&models.OnlineOrder{}).
-			Where("id = ? AND tenant_id = ?", orderID, tenantID).
-			Update("status", status)
-
-		if result.RowsAffected == 0 {
+		// Load + mutate inside a single tx so the bridge to the
+		// sales ledger sees the freshly-completed state without a
+		// race against a concurrent fetch.
+		var order models.OnlineOrder
+		err := db.Where("id = ? AND tenant_id = ?", orderID, tenantID).
+			First(&order).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "pedido no encontrado"})
 			return
+		}
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":  "error al cargar pedido",
+				"detail": err.Error(),
+			})
+			return
+		}
+
+		previous := order.Status
+		if err := db.Model(&order).Update("status", status).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":  "error al actualizar estado",
+				"detail": err.Error(),
+			})
+			return
+		}
+
+		// Ledger bridge: when an online order transitions INTO
+		// "completed" we drop a Sale row with source=WEB so the
+		// finance dashboard, the receipts list and any reporting
+		// pipeline see web orders alongside POS sales without a
+		// special case. Idempotent — guards against re-firing on a
+		// double-tap of "Marcar entregado".
+		if status == "completed" && previous != "completed" {
+			if err := bridgeOnlineOrderToSale(db, order); err != nil {
+				log.Printf("[ONLINE_ORDERS] sale bridge failed order=%s: %v",
+					order.ID, err)
+				// Don't block the status update — the order is
+				// still completed; we'll surface the bridge failure
+				// in logs for ops, not in the cashier's UI.
+			}
 		}
 
 		c.JSON(http.StatusOK, gin.H{"message": "estado actualizado"})
 	}
+}
+
+// bridgeOnlineOrderToSale upserts a Sale row mirroring an OnlineOrder
+// that just landed in completed. The Sale's id matches the order's id
+// so re-firing is a no-op (ON CONFLICT DO NOTHING via Where().Count
+// guard). Items are fanned out into sale_items so the unified
+// /sales/history endpoint can render them with the same shape used
+// for POS sales.
+func bridgeOnlineOrderToSale(db *gorm.DB, order models.OnlineOrder) error {
+	var existing int64
+	db.Model(&models.Sale{}).Where("id = ?", order.ID).Count(&existing)
+	if existing > 0 {
+		return nil // already bridged on a previous completion
+	}
+
+	method := models.PaymentCash
+	switch strings.ToLower(strings.TrimSpace(order.PaymentMethod)) {
+	case "transferencia", "transfer", "nequi", "daviplata":
+		method = models.PaymentTransfer
+	case "tarjeta", "card", "credito", "credit":
+		method = models.PaymentCard
+	}
+
+	// Decode the JSON-encoded items blob the OnlineOrder carries so
+	// each line gets its own SaleItem row with name/qty/price.
+	type orderItem struct {
+		ProductID string  `json:"product_id"`
+		Name      string  `json:"name"`
+		Quantity  int     `json:"quantity"`
+		Price     float64 `json:"price"`
+	}
+	var rawItems []orderItem
+	if order.Items != "" {
+		if err := json.Unmarshal([]byte(order.Items), &rawItems); err != nil {
+			return fmt.Errorf("decode items: %w", err)
+		}
+	}
+
+	return db.Transaction(func(tx *gorm.DB) error {
+		sale := models.Sale{
+			BaseModel: models.BaseModel{ID: order.ID},
+			TenantID:  order.TenantID,
+			BranchID:  order.BranchID,
+			Total:     order.TotalAmount,
+			PaymentMethod: method,
+			PaymentStatus: "COMPLETED",
+			Source:        models.SaleSourceWeb,
+			CustomerNameSnapshot:  order.CustomerName,
+			CustomerPhoneSnapshot: order.CustomerPhone,
+		}
+		if err := tx.Create(&sale).Error; err != nil {
+			return fmt.Errorf("create sale: %w", err)
+		}
+		for _, it := range rawItems {
+			subtotal := it.Price * float64(it.Quantity)
+			item := models.SaleItem{
+				SaleID:   sale.ID,
+				Name:     it.Name,
+				Price:    it.Price,
+				Quantity: it.Quantity,
+				Subtotal: subtotal,
+			}
+			// product_id is optional: web orders snapshot the name
+			// at order time so a deleted product still shows up on
+			// the receipt. Only attach when the order_item carries
+			// a valid UUID.
+			if models.IsValidUUID(it.ProductID) {
+				pid := it.ProductID
+				item.ProductID = &pid
+			}
+			if err := tx.Create(&item).Error; err != nil {
+				return fmt.Errorf("create sale_item: %w", err)
+			}
+		}
+		return nil
+	})
 }
 
 // PublicCustomerOrder is the deliberately-narrow projection a guest

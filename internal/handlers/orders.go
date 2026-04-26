@@ -263,11 +263,16 @@ func CloseOrder(db *gorm.DB) gin.HandlerFunc {
 
 			sale := models.Sale{
 				TenantID:      tenantID,
+				BranchID:      order.BranchID,
 				Total:         order.Total,
 				PaymentMethod: models.PaymentMethod(req.PaymentMethod),
 				EmployeeUUID:  order.EmployeeUUID,
 				EmployeeName:  order.EmployeeName,
-				Items:         saleItems,
+				// Distinguish table-closed sales from POS quick-sales
+				// in the unified ledger so the dashboard can split
+				// totals by channel without re-joining order_tickets.
+				Source: models.SaleSourceTable,
+				Items:  saleItems,
 			}
 			return tx.Create(&sale).Error
 		})
