@@ -230,3 +230,108 @@ func UpdateOnlineOrderStatus(db *gorm.DB) gin.HandlerFunc {
 		c.JSON(http.StatusOK, gin.H{"message": "estado actualizado"})
 	}
 }
+
+// PublicCustomerOrder is the deliberately-narrow projection a guest
+// caller sees from the my-orders endpoint. We exclude every field
+// that could be exfiltrated by guessing a phone number — the brief
+// flagged this as a Habeas-Data risk:
+//
+//   - customer_name, customer_phone (the caller already knows the
+//     phone they queried; we don't reveal whose name it belongs to)
+//   - notes (live-tab order builder dumps "Entrega: <address>" here)
+//   - branch_id, payment_method_id, payment_method, tenant_id
+//     (operator-side metadata)
+//   - any soft-delete / audit timestamps
+//
+// What WE DO return: id, status, created_at, total_amount, items
+// (which only carry product names + qty + price — never customer
+// PII). The customer can rebuild their own context from those fields.
+type PublicCustomerOrder struct {
+	ID          string  `json:"id"`
+	Status      string  `json:"status"`
+	CreatedAt   string  `json:"created_at"`
+	TotalAmount float64 `json:"total_amount"`
+	Items       any     `json:"items"`
+}
+
+// PublicCustomerOrders — GET /api/v1/public/catalog/:slug/my-orders?phone=…
+//
+// Privacy posture:
+//
+//   - Lookup MUST be scoped to the tenant resolved from the slug
+//     so a phone match can't cross tenants. A phone that's a regular
+//     at Tienda A AND has ordered once at Tienda B only sees Tienda
+//     A's orders when querying via Tienda A's slug.
+//   - The response runs through PublicCustomerOrder and never
+//     leaks customer_name / address / notes — see type comment.
+//   - We require a non-trivial phone (≥7 digits) to make brute-force
+//     scraping marginally harder. Anything that doesn't match the
+//     digit gate returns an empty list with 200 — never reveal
+//     "ese número no existe" vs "ese número no tiene pedidos".
+//   - Hard cap of 50 rows so a chatty query can't pull the whole
+//     order history of a high-volume tenant.
+func PublicCustomerOrders(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		slug := strings.TrimSpace(c.Param("slug"))
+		phone := strings.TrimSpace(c.Query("phone"))
+
+		// Strip everything but digits before the length check so a
+		// "+57 300…" string doesn't bypass the brute-force gate.
+		digitOnly := stripNonDigits(phone)
+		if len(digitOnly) < 7 {
+			// Empty list keeps the response shape uniform regardless
+			// of why the lookup failed — the caller can't fingerprint
+			// "wrong phone format" vs "phone with no orders".
+			c.JSON(http.StatusOK, gin.H{"data": []PublicCustomerOrder{}})
+			return
+		}
+
+		var tenant models.Tenant
+		if err := db.Where("store_slug = ?", slug).First(&tenant).Error; err != nil {
+			c.JSON(http.StatusOK, gin.H{"data": []PublicCustomerOrder{}})
+			return
+		}
+
+		var rows []models.OnlineOrder
+		// We match against the literal phone the customer typed AND
+		// the digits-only version so a tenant that stored "+57 300
+		// 555 1234" in some rows and "3005551234" in others still
+		// returns the full set. OnlineOrder doesn't use BaseModel,
+		// so no deleted_at filter is needed (or available).
+		db.Where("tenant_id = ?", tenant.ID).
+			Where("customer_phone = ? OR customer_phone = ?", phone, digitOnly).
+			Order("created_at DESC").
+			Limit(50).
+			Find(&rows)
+
+		out := make([]PublicCustomerOrder, 0, len(rows))
+		for _, r := range rows {
+			// items is JSON-encoded text on the wire. Decode lazily
+			// so the customer-side UI can render line items without
+			// re-parsing. Fall back to the raw string when the JSON
+			// is malformed (older rows / partial writes).
+			var items any
+			if err := json.Unmarshal([]byte(r.Items), &items); err != nil {
+				items = []any{}
+			}
+			out = append(out, PublicCustomerOrder{
+				ID:          r.ID,
+				Status:      r.Status,
+				CreatedAt:   r.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+				TotalAmount: r.TotalAmount,
+				Items:       items,
+			})
+		}
+		c.JSON(http.StatusOK, gin.H{"data": out})
+	}
+}
+
+func stripNonDigits(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}

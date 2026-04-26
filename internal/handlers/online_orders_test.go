@@ -180,6 +180,101 @@ func TestListOnlineOrders_FiltersByStatus(t *testing.T) {
 	assert.Equal(t, "A", resp.Data[0].CustomerName)
 }
 
+// Customer Portal — verifies the sanitized projection does NOT leak
+// any PII (name, phone, address-in-notes, branch_id, etc.) and
+// that the lookup is strictly scoped to the slug's tenant so a
+// shared phone across tenants doesn't bleed orders sideways.
+func TestPublicCustomerOrders_SanitizedAndTenantScoped(t *testing.T) {
+	db := setupOnlineOrdersDB(t)
+
+	// Two tenants, same phone customer.
+	tenantA, _ := seedTenantWithBranch(t, db, "tienda-a")
+	tenantB, _ := seedTenantWithBranch(t, db, "tienda-b")
+
+	// One order per tenant, phone matches both. Tenant A row carries
+	// PII shapes the brief flagged: customer_name, notes with an
+	// address.
+	require.NoError(t, db.Exec(
+		`INSERT INTO online_orders (id, tenant_id, customer_name, customer_phone, delivery_type, status, total_amount, items, notes, created_at) VALUES (?, ?, 'Pedro Pérez', '3001112222', 'delivery', 'pending', 12000, '[{"name":"Empanada","quantity":2,"price":3000}]', 'Entrega: Cra 7 #45-12', datetime('now'))`,
+		uuid.NewString(), tenantA,
+	).Error)
+	require.NoError(t, db.Exec(
+		`INSERT INTO online_orders (id, tenant_id, customer_name, customer_phone, delivery_type, status, total_amount, items, notes, created_at) VALUES (?, ?, 'Pedro Pérez', '3001112222', 'pickup', 'completed', 8000, '[{"name":"Otro","quantity":1,"price":8000}]', 'no notes', datetime('now', '-1 day'))`,
+		uuid.NewString(), tenantB,
+	).Error)
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/api/v1/public/catalog/:slug/my-orders",
+		handlers.PublicCustomerOrders(db))
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/public/catalog/tienda-a/my-orders?phone=3001112222", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	// Habeas-Data assertions — none of these forbidden substrings
+	// must surface in the response. They were present in the seed.
+	body := w.Body.String()
+	for _, leak := range []string{
+		"Pedro Pérez", // customer_name
+		"3001112222",  // customer_phone (caller already knows it)
+		"Cra 7 #45-12", // address inside notes
+		"customer_name",
+		"customer_phone",
+		"notes",
+		"branch_id",
+		"tenant_id",
+		"payment_method_id",
+	} {
+		assert.NotContainsf(t, body, leak,
+			"my-orders must NOT leak %q", leak)
+	}
+
+	// Whitelisted fields ARE present so the customer can render the
+	// timeline + history.
+	for _, want := range []string{
+		"\"id\":",
+		"\"status\":",
+		"\"created_at\":",
+		"\"total_amount\":",
+		"\"items\":",
+		"Empanada",
+	} {
+		assert.Containsf(t, body, want,
+			"my-orders must include %q for the customer view", want)
+	}
+
+	// Tenant scoping: querying via tienda-a must NOT return tenant
+	// B's $8000 row even though the phone matches both.
+	assert.NotContains(t, body, "8000",
+		"slug must scope lookup so a shared phone doesn't leak orders cross-tenant")
+}
+
+func TestPublicCustomerOrders_RejectsShortPhoneSilently(t *testing.T) {
+	db := setupOnlineOrdersDB(t)
+	seedTenantWithBranch(t, db, "tienda-c")
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/api/v1/public/catalog/:slug/my-orders",
+		handlers.PublicCustomerOrders(db))
+
+	for _, bad := range []string{"", "12345", "abc"} {
+		req := httptest.NewRequest(http.MethodGet,
+			"/api/v1/public/catalog/tienda-c/my-orders?phone="+bad, nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusOK, w.Code,
+			"short / malformed phones must return 200 + empty list, "+
+				"not a 400 — that would leak the gate logic")
+		assert.Contains(t, w.Body.String(), `"data":[]`,
+			"short phones return empty data so callers can't fingerprint "+
+				"valid-format vs no-orders")
+	}
+}
+
 // Reverse-QR — verifies PartialPayment lands as PENDING_SCAN when
 // the customer chose the "Efectivo / Al mesero" mode and that the
 // authenticated confirm endpoint flips it to APPROVED while

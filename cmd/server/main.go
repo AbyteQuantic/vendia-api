@@ -145,6 +145,10 @@ func main() {
 	// the customer's name or any other PII. See
 	// handlers/customer_consent.go for the security rationale.
 	r.POST("/api/v1/public/catalog/:slug/check-customer", handlers.CheckCustomerConsent(db))
+	// Customer Portal — sanitized order history by phone. The handler
+	// scopes the lookup to the slug's tenant + strips PII before
+	// returning, see PublicCustomerOrders for the privacy contract.
+	r.GET("/api/v1/public/catalog/:slug/my-orders", handlers.PublicCustomerOrders(db))
 
 	// Public "live tab" viewer. The QR printed for each table
 	// encodes only the session_token (not the order id or tenant
