@@ -52,14 +52,17 @@ func Login(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 		user, ok := lookupUserByPhone(db, phone, digits)
 		if ok {
 			if err := bcrypt.CompareHashAndPassword(
-				[]byte(user.PasswordHash), []byte(req.Password)); err != nil {
-				c.JSON(http.StatusUnauthorized, gin.H{
-					"error": "teléfono o contraseña incorrectos",
-				})
+				[]byte(user.PasswordHash), []byte(req.Password)); err == nil {
+				respondWithUser(c, db, user, jwtSecret)
 				return
 			}
-			respondWithUser(c, db, user, jwtSecret)
-			return
+			// User row matches the phone, but the global password
+			// doesn't match. Don't 401 yet — the same person can
+			// own a tenant elsewhere AND have a different password
+			// assigned by another tenant's owner on their Employee
+			// row. Fall through to Path 3 so we still match on
+			// Employee.PasswordHash. If THAT also misses, the
+			// final 401 below trips.
 		}
 
 		// ── Path 2: tenants table (legacy owner) ─────────────────
@@ -95,46 +98,90 @@ func Login(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 		}
 
 		// ── Path 3: employees table (RBAC fallback) ──────────────
-		emp, ok := lookupEmployeeByPhone(db, phone, digits)
-		if ok {
-			if !emp.IsActive {
+		//
+		// One person can have multiple Employee rows (one per
+		// tenant they work for) and each row can have a DIFFERENT
+		// password — the dueño of every tenant assigns their own.
+		// We have to iterate every row and try the password against
+		// each, returning on the first match. The matching row
+		// scopes the resulting JWT to its tenant (NOT to the
+		// user's other workspaces) so the credential boundary
+		// stays clean: a password issued by Tienda A's owner
+		// only opens Tienda A.
+		emps := lookupEmployeesByPhone(db, phone, digits)
+		if len(emps) > 0 {
+			// Track WHY no row matched so the response can give a
+			// specific hint when applicable (inactive / no-pw).
+			var (
+				sawInactive  bool
+				sawNoPw      bool
+				matchedEmp   *models.Employee
+			)
+			for i := range emps {
+				e := &emps[i]
+				if !e.IsActive {
+					sawInactive = true
+					continue
+				}
+				if e.PasswordHash == "" {
+					sawNoPw = true
+					continue
+				}
+				if err := bcrypt.CompareHashAndPassword(
+					[]byte(e.PasswordHash), []byte(req.Password)); err == nil {
+					matchedEmp = e
+					break
+				}
+			}
+
+			if matchedEmp != nil {
+				// Auth passed. Ensure a UserWorkspace exists for
+				// THIS tenant so the JWT carries the right role.
+				// upsertUserFromEmployee preserves any existing
+				// User.password_hash — we never overwrite the
+				// global credential the user uses to log in to
+				// OTHER tenants.
+				lazyUser, err := upsertUserFromEmployee(
+					db, *matchedEmp, []byte(req.Password))
+				if err != nil {
+					log.Printf("[LOGIN] employee upsert failed phone=%s: %v",
+						matchedEmp.Phone, err)
+					respondWithEmployeeFallback(c, db, *matchedEmp, jwtSecret)
+					return
+				}
+				// Workspace-scoped response: emit a JWT for the
+				// specific tenant whose password matched. We do
+				// NOT call respondWithUser here because that
+				// would surface every workspace the user belongs
+				// to, including tenants whose owners issued a
+				// different credential. The cashier in Tienda A
+				// must NOT pull JWTs for Tienda B by typing
+				// Tienda A's local password.
+				respondWithEmployeeWorkspace(c, db, lazyUser, *matchedEmp, jwtSecret)
+				return
+			}
+
+			// No password match across the rows. Surface the most
+			// helpful error we can without leaking which row was
+			// involved.
+			if sawInactive && !sawNoPw {
 				c.JSON(http.StatusForbidden, gin.H{
 					"error":      "tu cuenta fue desactivada por el dueño",
 					"error_code": "employee_inactive",
 				})
 				return
 			}
-			if emp.PasswordHash == "" {
+			if sawNoPw && !sawInactive {
 				c.JSON(http.StatusUnauthorized, gin.H{
 					"error":      "el dueño aún no asignó tu contraseña",
 					"error_code": "no_password_set",
 				})
 				return
 			}
-			if err := bcrypt.CompareHashAndPassword(
-				[]byte(emp.PasswordHash), []byte(req.Password)); err != nil {
-				c.JSON(http.StatusUnauthorized, gin.H{
-					"error": "teléfono o contraseña incorrectos",
-				})
-				return
-			}
-			// Auth passed against the Employee row — lazily upsert
-			// the User + UserWorkspace pair so subsequent logins land
-			// on Path 1 without revisiting employees, AND the user
-			// gets multi-workspace support automatically if they're
-			// also an owner elsewhere.
-			lazyUser, err := upsertUserFromEmployee(db, emp, []byte(req.Password))
-			if err != nil {
-				log.Printf("[LOGIN] employee upsert failed phone=%s: %v",
-					emp.Phone, err)
-				// Don't 500 — we already authenticated. Fall through
-				// to a synthetic single-workspace response built
-				// directly from the Employee row so the cashier
-				// isn't locked out by a write failure.
-				respondWithEmployeeFallback(c, db, emp, jwtSecret)
-				return
-			}
-			respondWithUser(c, db, lazyUser, jwtSecret)
+			// Mixed or all-with-passwords-but-wrong: canonical 401.
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "teléfono o contraseña incorrectos",
+			})
 			return
 		}
 
@@ -170,20 +217,22 @@ func lookupUserByPhone(db *gorm.DB, phone, digits string) (models.User, bool) {
 	return models.User{}, false
 }
 
-// lookupEmployeeByPhone mirrors the user-side fallback. Honours the
-// per-tenant phone format AND the digits-only path.
-func lookupEmployeeByPhone(db *gorm.DB, phone, digits string) (models.Employee, bool) {
-	var e models.Employee
-	if err := db.Where("phone = ?", phone).First(&e).Error; err == nil {
-		return e, true
+// lookupEmployeesByPhone returns EVERY Employee row matching the
+// phone, across all tenants. Plural matters because the same
+// person can be cashier at Tienda A AND owner at Tienda B —
+// each tenant's owner sets a DIFFERENT password on their
+// respective Employee row, and the login flow needs to try every
+// hash, not just the first one ordered by the index.
+func lookupEmployeesByPhone(db *gorm.DB, phone, digits string) []models.Employee {
+	var rows []models.Employee
+	if err := db.Where("phone = ?", phone).Find(&rows).Error; err == nil &&
+		len(rows) > 0 {
+		return rows
 	}
 	if digits != "" {
-		if err := db.Where(phoneNormaliseSQL+" = ?", digits).
-			First(&e).Error; err == nil {
-			return e, true
-		}
+		_ = db.Where(phoneNormaliseSQL+" = ?", digits).Find(&rows).Error
 	}
-	return models.Employee{}, false
+	return rows
 }
 
 // upsertUserFromEmployee creates a User + UserWorkspace pair when an
@@ -319,15 +368,15 @@ func respondWithUser(c *gin.Context, db *gorm.DB, user models.User, jwtSecret st
 	})
 }
 
-// respondWithEmployeeFallback is the safety net for the rare case
-// where authentication succeeded against an Employee row but the
-// User upsert failed mid-flight (e.g. unique-index race). We mint a
-// workspace JWT directly from the Employee row + tenant lookup so
-// the cashier can keep working; the next login will retry the
-// upsert from a clean slate.
-func respondWithEmployeeFallback(
+// respondWithEmployeeWorkspace emits a JWT scoped to the SINGLE
+// tenant whose Employee row matched the password. We deliberately
+// don't surface other workspaces the same person might belong to —
+// a credential issued by Tienda A's owner cannot mint JWTs for
+// Tienda B even though the underlying User row may link to both.
+func respondWithEmployeeWorkspace(
 	c *gin.Context,
 	db *gorm.DB,
+	user models.User,
 	emp models.Employee,
 	jwtSecret string,
 ) {
@@ -346,21 +395,31 @@ func respondWithEmployeeFallback(
 	} else if emp.Role == models.RoleAdmin {
 		wsRole = string(models.RoleWSAdmin)
 	}
-	// Reuse the existing token pair builder shape by synthesising a
-	// User row from the Employee. The User.ID is the Employee.ID so
-	// the JWT remains stable across the eventual upsert.
-	pseudoUser := models.User{
-		BaseModel: models.BaseModel{ID: emp.ID},
-		Phone:     emp.Phone,
-		Name:     emp.Name,
-	}
 	resp, err := createWorkspaceTokenPair(
-		db, pseudoUser, emp.TenantID, branchID, tenant.BusinessName, wsRole, jwtSecret)
+		db, user, emp.TenantID, branchID, tenant.BusinessName, wsRole, jwtSecret)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "error al generar tokens"})
 		return
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+// respondWithEmployeeFallback is the safety net for the rare case
+// where the User upsert failed mid-flight (e.g. unique-index race).
+// We mint a workspace JWT directly from the Employee row so the
+// cashier can keep working; the next login retries the upsert.
+func respondWithEmployeeFallback(
+	c *gin.Context,
+	db *gorm.DB,
+	emp models.Employee,
+	jwtSecret string,
+) {
+	pseudo := models.User{
+		BaseModel: models.BaseModel{ID: emp.ID},
+		Phone:     emp.Phone,
+		Name:      emp.Name,
+	}
+	respondWithEmployeeWorkspace(c, db, pseudo, emp, jwtSecret)
 }
 
 func digitsOnly(s string) string {

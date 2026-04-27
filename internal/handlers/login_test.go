@@ -200,6 +200,54 @@ func TestLogin_InactiveEmployee_Forbidden(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "employee_inactive")
 }
 
+// The Viviana case (QA hotfix 2026-04-27): same phone has a User
+// row with one password (her global one) AND an Employee row in
+// another tenant with a DIFFERENT password assigned by the dueño
+// of that tenant. Login with the tenant-assigned password must
+// succeed — Path 1 fails on hash mismatch but Path 3 catches it
+// against the Employee row and emits a workspace-scoped JWT.
+func TestLogin_UserHashDiffersFromEmployee_FallsBackToEmployee(t *testing.T) {
+	db := setupLoginDB(t)
+
+	tenantID := uuid.NewString()
+	require.NoError(t, db.Exec(
+		`INSERT INTO tenants (id, business_name, store_slug, created_at) VALUES (?, 'Don Brayan', 'tt', datetime('now'))`,
+		tenantID,
+	).Error)
+
+	personalPwd := "mi-clave-global"
+	tenantAssignedPwd := "que-me-dio-brayan"
+
+	// User row carries the global personal password.
+	userID := uuid.NewString()
+	require.NoError(t, db.Exec(
+		`INSERT INTO users (id, phone, name, password_hash, created_at) VALUES (?, '3022798580', 'Viviana', ?, datetime('now'))`,
+		userID, bcryptHash(t, personalPwd),
+	).Error)
+	// Employee row in Tienda A has the tenant-assigned password.
+	require.NoError(t, db.Exec(
+		`INSERT INTO employees (id, tenant_id, name, phone, role, password_hash, is_owner, is_active, created_at) VALUES (?, ?, 'Viviana', '3022798580', 'cashier', ?, 0, 1, datetime('now'))`,
+		uuid.NewString(), tenantID, bcryptHash(t, tenantAssignedPwd),
+	).Error)
+
+	// Login with the password Brayan assigned must succeed.
+	w := postLogin(t, mountLogin(db), map[string]string{
+		"phone":    "3022798580",
+		"password": tenantAssignedPwd,
+	})
+	require.Equal(t, http.StatusOK, w.Code,
+		"login must fall back to the Employee.password_hash when the User hash differs")
+
+	// AND her personal password STILL works via Path 1 (we never
+	// overwrote User.password_hash on the upsert).
+	w2 := postLogin(t, mountLogin(db), map[string]string{
+		"phone":    "3022798580",
+		"password": personalPwd,
+	})
+	assert.Equal(t, http.StatusOK, w2.Code,
+		"the global User credential must keep working — fallback never overwrote it")
+}
+
 // Wrong password against the same employee path returns the canonical
 // 401 — never leaks "employee row exists with a different password".
 func TestLogin_WrongPassword_Returns401(t *testing.T) {
