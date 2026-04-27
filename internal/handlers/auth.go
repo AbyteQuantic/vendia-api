@@ -12,13 +12,25 @@ import (
 )
 
 type AuthResponse struct {
-	Token         string              `json:"token"`
+	Token string `json:"token"`
+	// AccessToken is the same JWT under the canonical name newer
+	// Flutter clients key on. We populate both so legacy clients
+	// reading `token` keep working while the new branch reads
+	// `access_token` to distinguish the workspace-aware response
+	// from the legacy single-tenant payload.
+	AccessToken   string              `json:"access_token"`
 	RefreshToken  string              `json:"refresh_token,omitempty"`
 	TenantID      string              `json:"tenant_id"`
 	OwnerName     string              `json:"owner_name"`
 	BusinessName  string              `json:"business_name"`
 	BusinessTypes []string            `json:"business_types"`
 	FeatureFlags  models.FeatureFlags `json:"feature_flags"`
+	// Role / BranchID / UserID expose the workspace context the
+	// JWT already carries so the client can persist them without
+	// decoding the token. Empty on the legacy tenants-only path.
+	Role     string `json:"role,omitempty"`
+	BranchID string `json:"branch_id,omitempty"`
+	UserID   string `json:"user_id,omitempty"`
 }
 
 func createTokenPair(db *gorm.DB, tenant models.Tenant, jwtSecret string) (*AuthResponse, error) {
@@ -43,6 +55,7 @@ func createTokenPair(db *gorm.DB, tenant models.Tenant, jwtSecret string) (*Auth
 
 	return &AuthResponse{
 		Token:         accessToken,
+		AccessToken:   accessToken,
 		RefreshToken:  refreshStr,
 		TenantID:      tenant.ID,
 		OwnerName:     tenant.OwnerName,

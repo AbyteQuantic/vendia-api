@@ -44,12 +44,16 @@ func createWorkspaceTokenPair(db *gorm.DB, user models.User, tenantID, branchID,
 
 	return &AuthResponse{
 		Token:         accessToken,
+		AccessToken:   accessToken,
 		RefreshToken:  refreshStr,
 		TenantID:      tenantID,
 		OwnerName:     user.Name,
 		BusinessName:  businessName,
 		BusinessTypes: tenant.BusinessTypes,
 		FeatureFlags:  tenant.FeatureFlags,
+		Role:          role,
+		BranchID:      branchID,
+		UserID:        user.ID,
 	}, nil
 }
 
