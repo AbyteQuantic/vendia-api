@@ -190,9 +190,11 @@ func AdminListSupportTickets(db *gorm.DB) gin.HandlerFunc {
 			Scan(&rows).Error
 
 		if err != nil {
-			// CRITICAL: Log the actual error for production debugging
+			// CRITICAL: Log and expose error for P0 diagnosis
 			log.Printf("[SUPPORT_API] list tickets failed: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al obtener tickets"})
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "error al obtener tickets: " + err.Error(),
+			})
 			return
 		}
 		c.JSON(http.StatusOK, rows)
