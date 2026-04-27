@@ -11,6 +11,10 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"vendia-backend/internal/aiusage"
+	"vendia-backend/internal/models"
+
+	"gorm.io/gorm"
 )
 
 type GeminiService struct {
@@ -18,6 +22,7 @@ type GeminiService struct {
 	model      string
 	imageModel string
 	timeout    time.Duration
+	usageDB    *gorm.DB
 }
 
 func NewGeminiService(apiKey, model, imageModel string, timeout time.Duration) *GeminiService {
@@ -40,6 +45,48 @@ func NewGeminiService(apiKey, model, imageModel string, timeout time.Duration) *
 
 	log.Printf("[GEMINI] Using models — text/OCR: %s | image: %s", svc.model, svc.imageModel)
 	return svc
+}
+
+// WithUsageDB wires PostgreSQL for persisting token usage to ai_usage_logs
+// (FinOps). Safe to call with nil; logging is a no-op when unset.
+func (s *GeminiService) WithUsageDB(db *gorm.DB) *GeminiService {
+	if s == nil {
+		return s
+	}
+	s.usageDB = db
+	return s
+}
+
+// recordTokenUsage runs after a successful Google API JSON parse. Cost uses
+// EstimateGeminiCostUSD; tenant comes from aiusage.WithTenantID in handlers.
+func (s *GeminiService) recordTokenUsage(ctx context.Context, feature, modelName string, gr *geminiResponse) {
+	if s == nil || s.usageDB == nil || gr == nil {
+		return
+	}
+	tid := aiusage.TenantIDFromContext(ctx)
+	if tid == "" {
+		return
+	}
+	in := gr.UsageMetadata.PromptTokenCount
+	out := gr.UsageMetadata.CandidatesTokenCount
+	if in == 0 && out == 0 && gr.UsageMetadata.TotalTokenCount > 0 {
+		out = gr.UsageMetadata.TotalTokenCount
+	}
+	if in == 0 && out == 0 {
+		return
+	}
+	cost := EstimateGeminiCostUSD(modelName, in, out)
+	row := models.AIUsageLog{
+		TenantID:         tid,
+		Feature:          feature,
+		TokensInput:      int64(in),
+		TokensOutput:     int64(out),
+		EstimatedCostUSD: cost,
+		ModelName:        modelName,
+	}
+	if err := s.usageDB.Create(&row).Error; err != nil {
+		log.Printf("[AI-USAGE] insert failed: %v", err)
+	}
 }
 
 // discoverModels queries the Google AI API to find available models dynamically.
@@ -226,7 +273,7 @@ func (s *GeminiService) GenerateLogo(ctx context.Context, businessName, business
 			`ideal para un avatar circular de aplicación móvil.`,
 		businessName, businessType)
 
-	results, err := s.callImageGeneration(ctx, prompt, 1)
+	results, err := s.callImageGeneration(ctx, models.AIFeatureLogoGen, prompt, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -319,6 +366,8 @@ Resultado esperado: Fotografía tipo catálogo Amazon — producto REAL sobre fo
 	if geminiResp.Error != nil {
 		return nil, fmt.Errorf("gemini error %d: %s", geminiResp.Error.Code, geminiResp.Error.Message)
 	}
+
+	s.recordTokenUsage(ctx, models.AIFeatureEnhancePhoto, s.imageModel, &geminiResp)
 
 	// Collect any text response for debugging
 	var textParts []string
@@ -434,6 +483,8 @@ func (s *GeminiService) GeneratePromoBanner(ctx context.Context, prompt string, 
 		return nil, fmt.Errorf("gemini error %d: %s", geminiResp.Error.Code, geminiResp.Error.Message)
 	}
 
+	s.recordTokenUsage(ctx, models.AIFeaturePromoBanner, s.imageModel, &geminiResp)
+
 	for _, candidate := range geminiResp.Candidates {
 		for _, part := range candidate.Content.Parts {
 			if part.InlineData.Data == "" {
@@ -521,6 +572,8 @@ Estilo fotográfico:
 		return nil, fmt.Errorf("gemini error %d: %s", geminiResp.Error.Code, geminiResp.Error.Message)
 	}
 
+	s.recordTokenUsage(ctx, models.AIFeatureProductImage, s.imageModel, &geminiResp)
+
 	for _, candidate := range geminiResp.Candidates {
 		for _, part := range candidate.Content.Parts {
 			if part.InlineData.Data != "" {
@@ -600,6 +653,8 @@ func (s *GeminiService) callWithImageLowTemp(ctx context.Context, imageData []by
 		return "", fmt.Errorf("gemini error %d: %s", geminiResp.Error.Code, geminiResp.Error.Message)
 	}
 
+	s.recordTokenUsage(ctx, models.AIFeatureOCRInvoice, s.model, &geminiResp)
+
 	if len(geminiResp.Candidates) == 0 {
 		log.Printf("[GEMINI-OCR] No candidates: %.500s", string(respBody))
 		return "", fmt.Errorf("la IA no generó respuesta. Intente con otra foto")
@@ -674,7 +729,7 @@ func (s *GeminiService) callWithImage(ctx context.Context, imageData []byte, mim
 	return text, nil
 }
 
-func (s *GeminiService) callImageGeneration(ctx context.Context, prompt string, count int) ([]LogoResult, error) {
+func (s *GeminiService) callImageGeneration(ctx context.Context, feature, prompt string, count int) ([]LogoResult, error) {
 	payload := map[string]any{
 		"contents": []map[string]any{
 			{
@@ -713,6 +768,9 @@ func (s *GeminiService) callImageGeneration(ctx context.Context, prompt string, 
 	if err := json.Unmarshal(respBody, &geminiResp); err != nil {
 		return nil, fmt.Errorf("failed to parse image gen response: %w", err)
 	}
+	if geminiResp.Error == nil {
+		s.recordTokenUsage(ctx, feature, s.imageModel, &geminiResp)
+	}
 
 	var results []LogoResult
 	for _, candidate := range geminiResp.Candidates {
@@ -734,6 +792,13 @@ func (s *GeminiService) callImageGeneration(ctx context.Context, prompt string, 
 }
 
 type geminiResponse struct {
+	// UsageMetadata is set by the Generative Language API on success.
+	// See: https://ai.google.dev/api/generate-content#UsageMetadata
+	UsageMetadata struct {
+		PromptTokenCount     int `json:"promptTokenCount"`
+		CandidatesTokenCount int `json:"candidatesTokenCount"`
+		TotalTokenCount      int `json:"totalTokenCount"`
+	} `json:"usageMetadata"`
 	Candidates []struct {
 		Content struct {
 			Parts []struct {

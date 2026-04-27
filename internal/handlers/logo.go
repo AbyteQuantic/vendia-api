@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"time"
+	"vendia-backend/internal/aiusage"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
 	"vendia-backend/internal/services"
@@ -50,7 +51,10 @@ func GenerateLogo(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc ser
 			}
 		}
 
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
+		ctx, cancel := context.WithTimeout(
+			aiusage.WithTenantID(c.Request.Context(), tenantID),
+			60*time.Second,
+		)
 		defer cancel()
 
 		logos, err := geminiSvc.GenerateLogo(ctx, req.BusinessName, req.BusinessType)

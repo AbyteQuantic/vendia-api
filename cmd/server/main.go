@@ -44,8 +44,8 @@ func main() {
 	// ── Initialize external services (optional, nil-safe) ───────────────────
 	var geminiSvc *services.GeminiService
 	if cfg.GeminiAPIKey != "" {
-		geminiSvc = services.NewGeminiService(cfg.GeminiAPIKey, cfg.GeminiModel, cfg.GeminiImageModel, 30*time.Second)
-		log.Println("[SVC] Gemini service initialized")
+		geminiSvc = services.NewGeminiService(cfg.GeminiAPIKey, cfg.GeminiModel, cfg.GeminiImageModel, 30*time.Second).WithUsageDB(db)
+		log.Println("[SVC] Gemini service initialized (AI usage → ai_usage_logs)")
 	}
 
 	// Storage: prefer Supabase Storage, fallback to R2
@@ -420,6 +420,9 @@ func main() {
 	admin.Use(middleware.SuperAdminOnly())
 	{
 		admin.GET("/analytics/overview", handlers.AdminOverview(db))
+		admin.GET("/analytics/ai-costs", handlers.AdminAICosts(db))
+		admin.GET("/analytics/revenue", handlers.AdminSubscriptionRevenue(db))
+		admin.GET("/analytics/profitability", handlers.AdminProfitability(db, cfg.ProMonthlyPriceUSD))
 		admin.GET("/tenants", handlers.AdminListTenants(db))
 		admin.GET("/tenants/:id", handlers.AdminGetTenant(db))
 		admin.PATCH("/tenants/:id/subscription", handlers.AdminUpdateSubscription(db))

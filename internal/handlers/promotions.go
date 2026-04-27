@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"vendia-backend/internal/aiusage"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
 	"vendia-backend/internal/services"
@@ -373,7 +374,10 @@ func GenerateMarketingBanner(geminiSvc *services.GeminiService, storageSvc servi
 			NumRefImages:    len(refImages),
 		})
 
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 45*time.Second)
+		ctx, cancel := context.WithTimeout(
+			aiusage.WithTenantID(c.Request.Context(), tenantID),
+			45*time.Second,
+		)
 		defer cancel()
 
 		imageBytes, err := geminiSvc.GeneratePromoBanner(ctx, prompt, refImages)

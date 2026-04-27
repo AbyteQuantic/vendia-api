@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"vendia-backend/internal/aiusage"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
 	"vendia-backend/internal/services"
@@ -49,7 +50,10 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 			return
 		}
 
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(
+			aiusage.WithTenantID(c.Request.Context(), tenantID),
+			30*time.Second,
+		)
 		defer cancel()
 
 		result, err := geminiSvc.ScanInvoice(ctx, data, mimeType)
@@ -320,7 +324,10 @@ func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, storage
 			sourceURL = product.ImageURL
 		}
 
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(
+			aiusage.WithTenantID(c.Request.Context(), tenantID),
+			30*time.Second,
+		)
 		defer cancel()
 
 		imgReq, err := http.NewRequestWithContext(ctx, "GET", sourceURL, nil)
@@ -452,7 +459,10 @@ func GenerateProductImage(db *gorm.DB, geminiSvc *services.GeminiService, storag
 			productInfo += " " + content
 		}
 
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
+		ctx, cancel := context.WithTimeout(
+			aiusage.WithTenantID(c.Request.Context(), tenantID),
+			60*time.Second,
+		)
 		defer cancel()
 
 		generated, err := geminiSvc.GenerateProductImage(ctx, productInfo)

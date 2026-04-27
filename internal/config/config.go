@@ -3,6 +3,7 @@ package config
 import (
 	"log"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -34,6 +35,10 @@ type Config struct {
 	SeedAdminEmail    string
 	SeedAdminPassword string
 	SeedAdminName     string
+
+	// FinOps: assumed list price for PRO (USD / month) — used for
+	// "margin at risk" when AI cost / seat approaches 50% of ARPU.
+	ProMonthlyPriceUSD float64
 }
 
 func Load() *Config {
@@ -110,7 +115,18 @@ func Load() *Config {
 		SeedAdminEmail:    os.Getenv("SEED_ADMIN_EMAIL"),
 		SeedAdminPassword: os.Getenv("SEED_ADMIN_PASSWORD"),
 		SeedAdminName:     os.Getenv("SEED_ADMIN_NAME"),
+		ProMonthlyPriceUSD: proMonthlyOrDefault(),
 	}
+}
+
+// proMonthlyOrDefault reads PRO_MONTHLY_PRICE_USD; falls back to 29.99.
+func proMonthlyOrDefault() float64 {
+	if v := strings.TrimSpace(os.Getenv("PRO_MONTHLY_PRICE_USD")); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			return f
+		}
+	}
+	return 29.99
 }
 
 func parsePositiveInt(s string) int {

@@ -101,6 +101,8 @@ func Migrate(db *gorm.DB) error {
 		// the public QR page and the tendero can reconcile from the
 		// POS tab-review screen.
 		&models.PartialPayment{},
+		&models.AIUsageLog{},
+		&models.SubscriptionPayment{},
 	)
 	if err != nil {
 		return err

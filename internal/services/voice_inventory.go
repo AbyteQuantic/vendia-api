@@ -11,6 +11,7 @@ import (
 	"mime"
 	"net/http"
 	"strings"
+	"vendia-backend/internal/models"
 )
 
 // VoiceInventoryItem mirrors the Phase-4 contract the tendero's voice
@@ -227,6 +228,8 @@ func (s *GeminiService) callVoiceInventory(
 	if len(parsed.Candidates) == 0 || len(parsed.Candidates[0].Content.Parts) == 0 {
 		return "", fmt.Errorf("empty gemini voice response")
 	}
+
+	s.recordTokenUsage(ctx, models.AIFeatureVoiceInv, s.model, &parsed)
 
 	text := parsed.Candidates[0].Content.Parts[0].Text
 	text = strings.TrimPrefix(text, "```json")

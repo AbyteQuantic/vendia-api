@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"time"
 
+	"vendia-backend/internal/aiusage"
+	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
@@ -81,7 +83,10 @@ func VoiceInventory(geminiSvc *services.GeminiService) gin.HandlerFunc {
 
 		// 45s covers Gemini's typical multimodal latency for ~60s
 		// audio clips with headroom for re-tries inside the SDK.
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 45*time.Second)
+		ctx, cancel := context.WithTimeout(
+			aiusage.WithTenantID(c.Request.Context(), middleware.GetTenantID(c)),
+			45*time.Second,
+		)
 		defer cancel()
 
 		items, err := geminiSvc.ExtractVoiceInventory(ctx, data, mimeType)
