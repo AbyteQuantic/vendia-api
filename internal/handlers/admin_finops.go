@@ -29,6 +29,13 @@ type topTenantCost struct {
 	CostUSD      float64 `json:"cost_usd"`
 }
 
+type finopsMetaCosts struct {
+	// AiLogsInPeriod is rows matching the requested date filter — if 0,
+	// either no Gemini traffic was logged yet or usageMetadata was empty.
+	AiLogsInPeriod int64 `json:"ai_logs_in_period"`
+	AiLogsTotal    int64 `json:"ai_logs_total"`
+}
+
 type adminAICostsResponse struct {
 	From        string            `json:"from"`
 	To          string            `json:"to"`
@@ -36,6 +43,7 @@ type adminAICostsResponse struct {
 	Daily       []aiCostDayPoint  `json:"daily"`
 	ByFeature   []aiFeatureCost   `json:"by_feature"`
 	TopTenants  []topTenantCost   `json:"top_tenants"`
+	Meta        finopsMetaCosts   `json:"meta"`
 }
 
 func AdminAICosts(db *gorm.DB) gin.HandlerFunc {
@@ -54,13 +62,13 @@ func AdminAICosts(db *gorm.DB) gin.HandlerFunc {
 			Select("COALESCE(SUM(estimated_cost_usd),0)").Scan(&periodTotal)
 
 		var daily []struct {
-			Day         time.Time
-			CostUSD     float64
-			TokensIn    int64
-			TokensOut   int64
+			Day         string  `gorm:"column:day"`
+			CostUSD     float64 `gorm:"column:cost_usd"`
+			TokensIn    int64   `gorm:"column:tokens_in"`
+			TokensOut   int64   `gorm:"column:tokens_out"`
 		}
 		db.Raw(`
-			SELECT date_trunc('day', created_at AT TIME ZONE 'UTC') AS day,
+			SELECT to_char((created_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS day,
 				COALESCE(SUM(estimated_cost_usd), 0) AS cost_usd,
 				COALESCE(SUM(tokens_input), 0) AS tokens_in,
 				COALESCE(SUM(tokens_output), 0) AS tokens_out
@@ -73,12 +81,19 @@ func AdminAICosts(db *gorm.DB) gin.HandlerFunc {
 		dailyOut := make([]aiCostDayPoint, 0, len(daily))
 		for _, r := range daily {
 			dailyOut = append(dailyOut, aiCostDayPoint{
-				Date:         r.Day.UTC().Format("2006-01-02"),
+				Date:         r.Day,
 				CostUSD:      r.CostUSD,
 				TokensInput:  r.TokensIn,
 				TokensOutput: r.TokensOut,
 			})
 		}
+
+		var aiLogsInPeriod int64
+		db.Model(&models.AIUsageLog{}).
+			Where("created_at >= ? AND created_at < ?", from, endExclusive).
+			Count(&aiLogsInPeriod)
+		var aiLogsTotal int64
+		db.Model(&models.AIUsageLog{}).Count(&aiLogsTotal)
 
 		var byFeat []struct {
 			Feature string
@@ -124,6 +139,10 @@ func AdminAICosts(db *gorm.DB) gin.HandlerFunc {
 			Daily:       dailyOut,
 			ByFeature:   bf,
 			TopTenants:  topOut,
+			Meta: finopsMetaCosts{
+				AiLogsInPeriod: aiLogsInPeriod,
+				AiLogsTotal:    aiLogsTotal,
+			},
 		})
 	}
 }
@@ -135,11 +154,17 @@ type revenueDayPoint struct {
 	RevenueUSD float64 `json:"revenue_usd"`
 }
 
+type finopsMetaRevenue struct {
+	PaymentsConfirmedInPeriod int64 `json:"payments_confirmed_in_period"`
+	PaymentsConfirmedTotal    int64 `json:"payments_confirmed_total"`
+}
+
 type adminRevenueResponse struct {
 	From        string            `json:"from"`
 	To          string            `json:"to"`
 	PeriodTotal float64           `json:"period_total_usd"`
 	Daily       []revenueDayPoint `json:"daily"`
+	Meta        finopsMetaRevenue `json:"meta"`
 }
 
 func AdminSubscriptionRevenue(db *gorm.DB) gin.HandlerFunc {
@@ -158,11 +183,11 @@ func AdminSubscriptionRevenue(db *gorm.DB) gin.HandlerFunc {
 			Select("COALESCE(SUM(amount_usd),0)").Scan(&total)
 
 		var daily []struct {
-			Day   time.Time
-			Total float64
+			Day   string  `gorm:"column:day"`
+			Total float64 `gorm:"column:total"`
 		}
 		db.Raw(`
-			SELECT date_trunc('day', COALESCE(confirmed_at, created_at) AT TIME ZONE 'UTC') AS day,
+			SELECT to_char((COALESCE(confirmed_at, created_at) AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS day,
 				COALESCE(SUM(amount_usd), 0) AS total
 			FROM subscription_payments
 			WHERE status = ? AND COALESCE(confirmed_at, created_at) >= ? AND COALESCE(confirmed_at, created_at) < ?
@@ -173,16 +198,30 @@ func AdminSubscriptionRevenue(db *gorm.DB) gin.HandlerFunc {
 		dOut := make([]revenueDayPoint, 0, len(daily))
 		for _, r := range daily {
 			dOut = append(dOut, revenueDayPoint{
-				Date:       r.Day.UTC().Format("2006-01-02"),
+				Date:       r.Day,
 				RevenueUSD: r.Total,
 			})
 		}
+
+		var payInPeriod int64
+		db.Model(&models.SubscriptionPayment{}).
+			Where("status = ? AND COALESCE(confirmed_at, created_at) >= ? AND COALESCE(confirmed_at, created_at) < ?",
+				models.SubscriptionPaymentStatusConfirmed, from, endExclusive).
+			Count(&payInPeriod)
+		var payTotal int64
+		db.Model(&models.SubscriptionPayment{}).
+			Where("status = ?", models.SubscriptionPaymentStatusConfirmed).
+			Count(&payTotal)
 
 		c.JSON(http.StatusOK, adminRevenueResponse{
 			From:        from.Format("2006-01-02"),
 			To:          to.Format("2006-01-02"),
 			PeriodTotal: total,
 			Daily:       dOut,
+			Meta: finopsMetaRevenue{
+				PaymentsConfirmedInPeriod: payInPeriod,
+				PaymentsConfirmedTotal:    payTotal,
+			},
 		})
 	}
 }
@@ -199,6 +238,10 @@ type adminProfitabilityResponse struct {
 	ProSubscribers     int64   `json:"pro_subscribers"`
 	CostPerProUserUSD  float64 `json:"ai_cost_per_pro_user_usd"`
 	MarginAtRisk       bool    `json:"margin_at_risk"`
+	Meta               struct {
+		AiLogsInMonth int64 `json:"ai_logs_in_month"`
+		PaymentsInMonth int64 `json:"payments_confirmed_in_month"`
+	} `json:"meta"`
 }
 
 // AdminProfitability aggregates subscription revenue vs AI spend for a
@@ -246,7 +289,17 @@ func AdminProfitability(db *gorm.DB, proMonthlyListUSD float64) gin.HandlerFunc 
 		}
 		atRisk := proCount > 0 && costPerPro >= 0.5*proMonthlyListUSD
 
-		c.JSON(http.StatusOK, adminProfitabilityResponse{
+		var aiLogsMonth int64
+		db.Model(&models.AIUsageLog{}).
+			Where("created_at >= ? AND created_at < ?", start, end).
+			Count(&aiLogsMonth)
+		var payMonth int64
+		db.Model(&models.SubscriptionPayment{}).
+			Where("status = ? AND COALESCE(confirmed_at, created_at) >= ? AND COALESCE(confirmed_at, created_at) < ?",
+				models.SubscriptionPaymentStatusConfirmed, start, end).
+			Count(&payMonth)
+
+		resp := adminProfitabilityResponse{
 			Month:              month,
 			ProMonthlyPriceUSD: proMonthlyListUSD,
 			RevenueUSD:         revenue,
@@ -256,7 +309,11 @@ func AdminProfitability(db *gorm.DB, proMonthlyListUSD float64) gin.HandlerFunc 
 			ProSubscribers:     proCount,
 			CostPerProUserUSD:  costPerPro,
 			MarginAtRisk:       atRisk,
-		})
+		}
+		resp.Meta.AiLogsInMonth = aiLogsMonth
+		resp.Meta.PaymentsInMonth = payMonth
+
+		c.JSON(http.StatusOK, resp)
 	}
 }
 
