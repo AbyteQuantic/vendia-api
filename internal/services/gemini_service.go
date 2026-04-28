@@ -264,20 +264,107 @@ type LogoResult struct {
 	MimeType  string `json:"mime_type"`
 }
 
-func (s *GeminiService) GenerateLogo(ctx context.Context, businessName, businessType string) ([]LogoResult, error) {
-	prompt := fmt.Sprintf(
-		`Un logo minimalista, profesional y moderno para un negocio llamado '%s'. `+
-			`El tipo de negocio es '%s'. `+
-			`Estilo de ilustración vectorial plana, diseño limpio, colores vibrantes, `+
-			`fondo blanco puro sólido. Sin texto complejo adicional, centrado, `+
-			`ideal para un avatar circular de aplicación móvil.`,
-		businessName, businessType)
+// GenerateLogo asks Gemini for a single brand mark for a small
+// Colombian business. The prompt is intentionally prescriptive — the
+// model is good at rendering shapes and bad at rendering text + 3D
+// effects, so we steer it hard toward flat vector iconography that
+// works as a 24px app icon AND a 512px hero on the public catalog.
+//
+// The output lands in `store-logos`/Cloudflare R2 (handler side) and
+// must therefore be square, on a solid background, with generous
+// safe-area padding so circular cropping by a downstream UI never
+// clips the subject.
+func (s *GeminiService) GenerateLogo(
+	ctx context.Context,
+	businessName, businessType string,
+) ([]LogoResult, error) {
+	industryHint := industryIconHint(businessType)
+	typeLabel := businessTypeLabel(businessType)
+
+	prompt := fmt.Sprintf(`Generate a single, professional, BRAND LOGO for a small business in Colombia. Output: a 1024x1024 square image, suitable as a mobile app icon, WhatsApp avatar, and public-catalog hero.
+
+BUSINESS CONTEXT
+- Brand name: "%s"
+- Industry: %s
+- Audience: adults 50+ running an informal neighbourhood business in Latin America. The logo must read as TRUSTED and HONEST, not flashy or trendy.
+
+UI/UX DESIGN REQUIREMENTS (mandatory — violations are unacceptable)
+1. STYLE: Flat vector illustration. Geometric, modern, minimalist. NO photorealism, NO 3D, NO gradients, NO drop shadows, NO film grain, NO sketchy lines.
+2. COLOR PALETTE: 2 to 3 colours maximum (subject + accent + background). Bold and saturated, NOT pastel. Pick a warm, professional combination — examples that work: deep indigo + warm cream, terracotta + ivory, charcoal + mustard, sage green + bone, navy + amber.
+3. BACKGROUND: SOLID single colour or pure white (#FFFFFF). NEVER transparent, NEVER gradient, NEVER patterned, NEVER textured paper.
+4. COMPOSITION: Subject perfectly centred. Reserve 10-15%% safe-area padding on all four sides so a circular crop never amputates the subject. Balance positive and negative space.
+5. NO TEXT WHATSOEVER. No letters, no words, no logograms, no monograms, no decorative typography. The model renders text poorly and any garbled glyph would destroy the brand. The brand name appears alongside the logo in the app — the logo itself is purely a symbol.
+6. SUBJECT: A SINGLE, recognisable iconographic mark for the industry. %s
+7. SCALABILITY: Must remain instantly recognisable at 24px (app icon size) AND impressive at 512px (catalog header). Avoid any detail finer than 1/40th of the canvas.
+8. STROKE WEIGHTS: Consistent. If using outlines, all strokes should share one of at most two thicknesses.
+
+OUTPUT
+Return ONLY the image. No watermarks, no text overlays, no signatures, no annotations, no border frames.`,
+		businessName, typeLabel, industryHint)
 
 	results, err := s.callImageGeneration(ctx, models.AIFeatureLogoGen, prompt, 1)
 	if err != nil {
 		return nil, err
 	}
 	return results, nil
+}
+
+// industryIconHint maps the backend business-type enum to a short
+// English brief steering the model toward an industry-appropriate
+// symbol. Listed as alternatives so the model can pick whichever
+// composes best — single deterministic symbols tend to feel sterile.
+func industryIconHint(businessType string) string {
+	switch businessType {
+	case "tienda_barrio":
+		return `Suggested symbols: a stylised storefront facade with awning, a paper grocery bag, a wicker basket of staples, or a small house silhouette with a window. Evokes "the corner store the whole neighbourhood trusts".`
+	case "minimercado":
+		return `Suggested symbols: a shopping cart with a few groceries, a stack of fresh produce, or a market stall icon. Evokes "fresh, organised, well-stocked".`
+	case "restaurante":
+		return `Suggested symbols: a crossed fork and knife, a covered plate with steam wisps, a chef's hat, or an open menu. Evokes "warm hospitality, good food".`
+	case "comidas_rapidas":
+		return `Suggested symbols: a burger silhouette, a paper bag of fries, a lightning bolt, or a take-away cup. Evokes "quick, satisfying, fun".`
+	case "bar":
+		return `Suggested symbols: a cocktail glass, a beer mug silhouette, a wine bottle and glass pair, or a neon star. Evokes "vibrant nightlife, social".`
+	case "deposito_construccion":
+		return `Suggested symbols: a hard hat, a toolbox, a ruler and pencil crossed, or a stack of bricks. Evokes "reliable, builders' supply".`
+	case "manufactura":
+		return `Suggested symbols: a single gear, a stylised factory roofline, or a stack of geometric shapes. Evokes "production, precision".`
+	case "reparacion_muebles":
+		return `Suggested symbols: a wrench, a screwdriver and hammer crossed, a chair silhouette, or a sewing-needle-and-thread for upholstery. Evokes "skilled hands, restoration".`
+	case "emprendimiento_general":
+		return `Suggested symbols: a rocket silhouette, a lightbulb, a mountain peak with sun, or a rising graph arrow. Evokes "ambition, growth, ideas".`
+	default:
+		return `Use a clean abstract geometric mark — circle + square or a stylised monogram silhouette — that conveys "professional small business".`
+	}
+}
+
+// businessTypeLabel turns the backend enum into a human label the
+// model can reason about (it's still in Spanish — the model speaks
+// every language in the prompt window equally well, but a translated
+// label primes industry semantics better than the raw enum).
+func businessTypeLabel(t string) string {
+	switch t {
+	case "tienda_barrio":
+		return "Tienda de Barrio (neighbourhood corner store)"
+	case "minimercado":
+		return "Minimercado (small supermarket / mini-mart)"
+	case "restaurante":
+		return "Restaurante (sit-down restaurant)"
+	case "comidas_rapidas":
+		return "Comidas Rápidas (fast-food / take-away)"
+	case "bar":
+		return "Bar / Discoteca (bar or nightclub)"
+	case "deposito_construccion":
+		return "Depósito de Construcción / Ferretería (hardware store)"
+	case "manufactura":
+		return "Manufactura (small-scale manufacturing)"
+	case "reparacion_muebles":
+		return "Reparación / Servicios (repair shop or service trade)"
+	case "emprendimiento_general":
+		return "Emprendimiento (general entrepreneurship)"
+	default:
+		return t
+	}
 }
 
 // EnhancePhoto generates a professional e-commerce product photo.
