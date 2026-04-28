@@ -232,10 +232,36 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 			if paymentStatus == "" {
 				paymentStatus = "COMPLETED"
 			}
+			// Resolve who is making the sale so the analytics dashboard
+			// can attribute it to the right employee (Ranking del
+			// equipo). The JWT carries user_id; we look up the User row
+			// once for the name. Empty userID means a legacy single-
+			// tenant token without user context — falls back to the
+			// owner's name on the Tenant row so the dashboard at least
+			// shows the dueño instead of "Sin asignar". Cheap query
+			// (PK lookup); cached implicitly by the connection pool.
+			employeeName := ""
+			if userID != "" {
+				var u models.User
+				if err := db.Select("name").
+					Where("id = ?", userID).First(&u).Error; err == nil {
+					employeeName = u.Name
+				}
+			}
+			if employeeName == "" {
+				var t models.Tenant
+				if err := db.Select("owner_name").
+					Where("id = ?", tenantID).First(&t).Error; err == nil {
+					employeeName = t.OwnerName
+				}
+			}
+
 			sale = models.Sale{
 				TenantID:              tenantID,
 				CreatedBy:             middleware.UUIDPtr(userID),
 				BranchID:              middleware.UUIDPtr(branchID),
+				EmployeeUUID:          middleware.UUIDPtr(userID),
+				EmployeeName:          employeeName,
 				Total:                 total,
 				TaxAmount:             req.TaxAmount,
 				TipAmount:             req.TipAmount,
