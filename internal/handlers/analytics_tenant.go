@@ -441,6 +441,131 @@ func SalesHistoryByPeriod(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// ProductInsights consolidates the "what to act on" view for the
+// dashboard's product card: top sellers, slow movers, and items
+// near expiry. Single endpoint, single round-trip — the screen can
+// paint everything with one fetch.
+//
+// GET /api/v1/analytics/products-insights?period=30d
+func ProductInsights(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		period := c.DefaultQuery("period", "30d")
+
+		var since time.Time
+		switch period {
+		case "7d":
+			since = time.Now().AddDate(0, 0, -7)
+		case "30d":
+			since = time.Now().AddDate(0, 0, -30)
+		case "90d":
+			since = time.Now().AddDate(0, 0, -90)
+		default:
+			since = time.Now().AddDate(0, 0, -30)
+		}
+
+		// ── top_sellers — most quantity moved in the window ──
+		type TopSeller struct {
+			ProductID string  `json:"product_id"`
+			Name      string  `json:"name"`
+			Quantity  int     `json:"quantity"`
+			Revenue   float64 `json:"revenue"`
+			ImageURL  string  `json:"image_url"`
+			Stock     int     `json:"stock"`
+		}
+		var topSellers []TopSeller
+		db.Table("sale_items si").
+			Select(`si.product_id,
+				MAX(si.name) AS name,
+				SUM(si.quantity) AS quantity,
+				SUM(si.subtotal) AS revenue,
+				MAX(COALESCE(p.image_url, '')) AS image_url,
+				MAX(COALESCE(p.stock, 0)) AS stock`).
+			Joins("JOIN sales s ON s.id = si.sale_id").
+			Joins("LEFT JOIN products p ON p.id = si.product_id").
+			Where("s.tenant_id = ? AND s.created_at >= ? AND s.deleted_at IS NULL",
+				tenantID, since).
+			Where("si.product_id IS NOT NULL AND si.product_id <> ''").
+			Group("si.product_id").
+			Order("quantity DESC").
+			Limit(10).
+			Scan(&topSellers)
+
+		// ── slow_movers — available products that sold < 3 units in
+		// the window (or never sold). LEFT JOIN keeps zero-sale
+		// products in the result. We exclude AGOTADO (stock 0) so the
+		// list focuses on stuff sitting on the shelf.
+		type SlowMover struct {
+			ProductID  string  `json:"product_id"`
+			Name       string  `json:"name"`
+			Stock      int     `json:"stock"`
+			Price      float64 `json:"price"`
+			ImageURL   string  `json:"image_url"`
+			Quantity   int     `json:"quantity_sold"`
+			LastSaleAt *string `json:"last_sale_at,omitempty"`
+		}
+		var slowMovers []SlowMover
+		db.Table("products p").
+			Select(`p.id AS product_id,
+				p.name,
+				p.stock,
+				p.price,
+				COALESCE(p.image_url, '') AS image_url,
+				COALESCE(SUM(si.quantity), 0) AS quantity,
+				MAX(s.created_at)::text AS last_sale_at`).
+			Joins(`LEFT JOIN sale_items si ON si.product_id = p.id`).
+			Joins(`LEFT JOIN sales s ON s.id = si.sale_id
+				AND s.tenant_id = p.tenant_id
+				AND s.deleted_at IS NULL
+				AND s.created_at >= ?`, since).
+			Where("p.tenant_id = ? AND p.is_available = true AND p.deleted_at IS NULL AND p.stock > 0",
+				tenantID).
+			Group("p.id, p.name, p.stock, p.price, p.image_url").
+			Having("COALESCE(SUM(si.quantity), 0) < 3").
+			Order("quantity ASC, p.updated_at ASC").
+			Limit(15).
+			Scan(&slowMovers)
+
+		// ── expiring_soon — items with expiry_date in the next
+		// 30 days (or already past, so the merchant can pull them).
+		type Expiring struct {
+			ProductID    string  `json:"product_id"`
+			Name         string  `json:"name"`
+			Stock        int     `json:"stock"`
+			Price        float64 `json:"price"`
+			PurchasePrice float64 `json:"purchase_price"`
+			ImageURL     string  `json:"image_url"`
+			ExpiryDate   string  `json:"expiry_date"`
+			DaysLeft     int     `json:"days_left"`
+		}
+		var expiring []Expiring
+		thirtyDaysAhead := time.Now().AddDate(0, 0, 30).Format("2006-01-02")
+		db.Table("products p").
+			Select(`p.id AS product_id, p.name, p.stock, p.price,
+				COALESCE(p.purchase_price, 0) AS purchase_price,
+				COALESCE(p.image_url, '') AS image_url,
+				p.expiry_date::text AS expiry_date,
+				EXTRACT(DAY FROM (p.expiry_date::timestamp - NOW()))::int AS days_left`).
+			Where("p.tenant_id = ? AND p.is_available = true AND p.deleted_at IS NULL AND p.stock > 0",
+				tenantID).
+			Where("p.expiry_date IS NOT NULL AND p.expiry_date <= ?", thirtyDaysAhead).
+			Order("p.expiry_date ASC").
+			Limit(20).
+			Scan(&expiring)
+
+		c.JSON(http.StatusOK, gin.H{
+			"data": gin.H{
+				"period":         period,
+				"top_sellers":    topSellers,
+				"slow_movers":    slowMovers,
+				"expiring_soon":  expiring,
+				"no_sales_count": len(slowMovers),
+				"expiring_count": len(expiring),
+			},
+		})
+	}
+}
+
 func TopProducts(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)

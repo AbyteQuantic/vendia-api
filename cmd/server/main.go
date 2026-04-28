@@ -382,6 +382,7 @@ func main() {
 		v1.GET("/analytics/ingestion-method", handlers.IngestionMethod(db))
 		v1.GET("/analytics/financial-summary", handlers.FinancialSummary(db))
 		v1.GET("/analytics/sales-history", handlers.SalesHistoryByPeriod(db))
+		v1.GET("/analytics/products-insights", handlers.ProductInsights(db))
 
 		// Rockola (admin)
 		v1.GET("/rockola/pending", handlers.PendingSongs(db))
