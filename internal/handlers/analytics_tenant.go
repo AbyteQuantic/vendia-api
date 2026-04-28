@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 	"time"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
@@ -59,34 +60,73 @@ func AnalyticsDashboard(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-// FinancialSummary returns aggregated financial data by payment method.
-// GET /api/v1/analytics/financial-summary?period=today|week|month
+// FinancialSummary returns the full financial cube the dashboard
+// needs to support owner/manager decisions:
+//   - headline (total + count + avg ticket + vs-previous %)
+//   - cash flow buckets (cash drawer / digital / accounts receivable)
+//   - by_method, by_channel, by_hour, by_weekday slices
+//   - peak_hour + first_sale_at to spot opening-hour patterns
+//   - top_employees ranked by sales total + estimated profit
+//   - best_day / worst_day for week/month windows
+//
+// Filters (query params, all optional):
+//   period=today|week|month       — coarse window (default today)
+//   since=ISO8601 & until=ISO8601 — overrides period for custom range
+//   employee=<name>               — narrow to a single employee
+//   source=POS|WEB|TABLE          — narrow to a single channel
+//   payment_method=cash|transfer  — narrow to a single method
+//
+// GET /api/v1/analytics/financial-summary
 func FinancialSummary(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
 		period := c.DefaultQuery("period", "today")
 
 		now := time.Now()
-		var since time.Time
-		switch period {
-		case "week":
-			since = now.AddDate(0, 0, -7)
-		case "month":
-			since = now.AddDate(0, -1, 0)
-		default: // today
-			since = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		since, prevSince, prevEnd := windowFor(period, now,
+			c.Query("since"), c.Query("until"))
+
+		empFilter := strings.TrimSpace(c.Query("employee"))
+		sourceFilter := strings.TrimSpace(c.Query("source"))
+		methodFilter := strings.TrimSpace(c.Query("payment_method"))
+
+		// Single base query that every aggregation builds on. Wrapping
+		// in a closure keeps the WHERE clauses identical across slices
+		// — cheaper than re-typing the same predicates for each query
+		// and means a new filter only needs to be added once.
+		baseSales := func() *gorm.DB {
+			q := db.Model(&models.Sale{}).
+				Where("tenant_id = ? AND deleted_at IS NULL", tenantID).
+				Where("created_at >= ?", since)
+			// `until` is implied by the period upper bound for today
+			// (= now), or by the explicit `until` query param via
+			// windowFor. We never include cancelled / soft-deleted.
+			if untilStr := c.Query("until"); untilStr != "" {
+				if t, err := time.Parse(time.RFC3339, untilStr); err == nil {
+					q = q.Where("created_at <= ?", t)
+				}
+			}
+			if empFilter != "" {
+				q = q.Where("employee_name = ?", empFilter)
+			}
+			if sourceFilter != "" {
+				q = q.Where("source = ?", sourceFilter)
+			}
+			if methodFilter != "" {
+				q = q.Where("payment_method = ?", methodFilter)
+			}
+			return q
 		}
 
-		// Total sales by payment method
+		// ── by_method ──
 		type MethodTotal struct {
 			PaymentMethod string  `json:"payment_method"`
 			Total         float64 `json:"total"`
 			Count         int64   `json:"count"`
 		}
 		var byMethod []MethodTotal
-		db.Model(&models.Sale{}).
+		baseSales().
 			Select("payment_method, COALESCE(SUM(total), 0) as total, COUNT(*) as count").
-			Where("tenant_id = ? AND created_at >= ? AND deleted_at IS NULL", tenantID, since).
 			Group("payment_method").
 			Scan(&byMethod)
 
@@ -94,6 +134,7 @@ func FinancialSummary(db *gorm.DB) gin.HandlerFunc {
 		var totalCount int64
 		cashInDrawer := 0.0
 		digitalMoney := 0.0
+		creditTotal := 0.0
 		for _, m := range byMethod {
 			totalSales += m.Total
 			totalCount += m.Count
@@ -102,27 +143,156 @@ func FinancialSummary(db *gorm.DB) gin.HandlerFunc {
 				cashInDrawer = m.Total
 			case "transfer", "card", "nequi", "daviplata":
 				digitalMoney += m.Total
+			case "credit":
+				creditTotal = m.Total
+			}
+		}
+		avgTicket := 0.0
+		if totalCount > 0 {
+			avgTicket = totalSales / float64(totalCount)
+		}
+
+		// ── by_channel (source) ──
+		type ChannelTotal struct {
+			Source string  `json:"source"`
+			Total  float64 `json:"total"`
+			Count  int64   `json:"count"`
+		}
+		var byChannel []ChannelTotal
+		baseSales().
+			Select("source, COALESCE(SUM(total), 0) as total, COUNT(*) as count").
+			Group("source").
+			Scan(&byChannel)
+
+		// ── by_hour (0-23) ──
+		type HourTotal struct {
+			Hour  int     `json:"hour"`
+			Total float64 `json:"total"`
+			Count int64   `json:"count"`
+		}
+		var byHour []HourTotal
+		baseSales().
+			Select("EXTRACT(HOUR FROM created_at)::int AS hour, " +
+				"COALESCE(SUM(total), 0) as total, COUNT(*) as count").
+			Group("hour").
+			Order("hour").
+			Scan(&byHour)
+
+		// Derive peak hour + share %.
+		var peakHour *struct {
+			Hour     int     `json:"hour"`
+			Total    float64 `json:"total"`
+			SharePct float64 `json:"share_pct"`
+		}
+		for _, h := range byHour {
+			if peakHour == nil || h.Total > peakHour.Total {
+				peakHour = &struct {
+					Hour     int     `json:"hour"`
+					Total    float64 `json:"total"`
+					SharePct float64 `json:"share_pct"`
+				}{Hour: h.Hour, Total: h.Total}
+			}
+		}
+		if peakHour != nil && totalSales > 0 {
+			peakHour.SharePct = (peakHour.Total / totalSales) * 100
+		}
+
+		// ── by_weekday (0=Sun..6=Sat) — only meaningful when window > 1 day ──
+		type WeekdayTotal struct {
+			Weekday int     `json:"weekday"`
+			Name    string  `json:"name"`
+			Total   float64 `json:"total"`
+			Count   int64   `json:"count"`
+		}
+		var byWeekday []WeekdayTotal
+		baseSales().
+			Select("EXTRACT(DOW FROM created_at)::int AS weekday, " +
+				"COALESCE(SUM(total), 0) as total, COUNT(*) as count").
+			Group("weekday").
+			Order("weekday").
+			Scan(&byWeekday)
+		for i := range byWeekday {
+			byWeekday[i].Name = weekdayLabel(byWeekday[i].Weekday)
+		}
+
+		var bestDay, worstDay *WeekdayTotal
+		for i := range byWeekday {
+			w := byWeekday[i]
+			if bestDay == nil || w.Total > bestDay.Total {
+				bestDay = &w
+			}
+			if worstDay == nil || (w.Count > 0 && w.Total < worstDay.Total) {
+				worstDay = &w
 			}
 		}
 
-		// Accounts receivable (open credits)
+		// ── first_sale_at ──
+		var firstSale *time.Time
+		baseSales().
+			Select("MIN(created_at)").
+			Scan(&firstSale)
+
+		// ── top_employees (with profit estimate) ──
+		// LEFT JOIN sale_items + products so the cost is per-line and
+		// services / non-product items don't break the aggregation.
+		type EmployeeRow struct {
+			Name        string  `json:"name"`
+			SalesTotal  float64 `json:"sales_total"`
+			TxCount     int64   `json:"tx_count"`
+			Profit      float64 `json:"profit"`
+		}
+		var topEmployees []EmployeeRow
+		empQuery := db.Table("sales s").
+			Select(`COALESCE(NULLIF(s.employee_name, ''), 'Sin asignar') AS name,
+				COALESCE(SUM(s.total), 0)                       AS sales_total,
+				COUNT(*)                                        AS tx_count,
+				COALESCE(SUM(s.total - COALESCE(line_cost.cost, 0)), 0) AS profit`).
+			Joins(`LEFT JOIN (
+				SELECT sale_id, SUM(quantity * COALESCE(p.purchase_price, 0)) AS cost
+				FROM sale_items
+				LEFT JOIN products p ON p.id = sale_items.product_id
+				GROUP BY sale_id
+			) line_cost ON line_cost.sale_id = s.id`).
+			Where("s.tenant_id = ? AND s.deleted_at IS NULL", tenantID).
+			Where("s.created_at >= ?", since).
+			Group("name").
+			Order("sales_total DESC").
+			Limit(10)
+		if empFilter != "" {
+			empQuery = empQuery.Where("s.employee_name = ?", empFilter)
+		}
+		if sourceFilter != "" {
+			empQuery = empQuery.Where("s.source = ?", sourceFilter)
+		}
+		if methodFilter != "" {
+			empQuery = empQuery.Where("s.payment_method = ?", methodFilter)
+		}
+		if untilStr := c.Query("until"); untilStr != "" {
+			if t, err := time.Parse(time.RFC3339, untilStr); err == nil {
+				empQuery = empQuery.Where("s.created_at <= ?", t)
+			}
+		}
+		empQuery.Scan(&topEmployees)
+
+		// ── total profit (window-wide) ──
+		var totalCost float64
+		db.Model(&models.SaleItem{}).
+			Select("COALESCE(SUM(sale_items.quantity * p.purchase_price), 0)").
+			Joins("JOIN sales ON sales.id = sale_items.sale_id").
+			Joins("JOIN products p ON p.id = sale_items.product_id").
+			Where("sales.tenant_id = ? AND sales.deleted_at IS NULL", tenantID).
+			Where("sales.created_at >= ?", since).
+			Scan(&totalCost)
+		totalProfit := totalSales - totalCost
+
+		// ── accounts receivable (always tenant-wide) ──
 		var accountsReceivable float64
 		db.Model(&models.CreditAccount{}).
 			Where("tenant_id = ? AND status IN ('open', 'partial')", tenantID).
 			Select("COALESCE(SUM(total_amount - paid_amount), 0)").
 			Scan(&accountsReceivable)
 
-		// Profit estimate (sales - cost)
-		var totalCost float64
-		db.Model(&models.SaleItem{}).
-			Select("COALESCE(SUM(sale_items.quantity * p.purchase_price), 0)").
-			Joins("JOIN sales ON sales.id = sale_items.sale_id").
-			Joins("JOIN products p ON p.id = sale_items.product_id").
-			Where("sales.tenant_id = ? AND sales.created_at >= ? AND sales.deleted_at IS NULL",
-				tenantID, since).
-			Scan(&totalCost)
-
-		// Daily average (last 30 days)
+		// ── 30-day daily average (always tenant-wide) ──
 		thirtyDaysAgo := now.AddDate(0, 0, -30)
 		var last30Total float64
 		db.Model(&models.Sale{}).
@@ -131,19 +301,108 @@ func FinancialSummary(db *gorm.DB) gin.HandlerFunc {
 			Scan(&last30Total)
 		dailyAvg := last30Total / 30
 
+		// ── vs previous period (% change) ──
+		var prevTotal float64
+		db.Model(&models.Sale{}).
+			Where("tenant_id = ? AND deleted_at IS NULL", tenantID).
+			Where("created_at >= ? AND created_at < ?", prevSince, prevEnd).
+			Select("COALESCE(SUM(total), 0)").
+			Scan(&prevTotal)
+		var vsPrevPct *float64
+		if prevTotal > 0 {
+			pct := (totalSales - prevTotal) / prevTotal * 100
+			vsPrevPct = &pct
+		}
+
+		// ── available employees + sources for the filter UI ──
+		var employees []string
+		db.Model(&models.Sale{}).
+			Where("tenant_id = ? AND employee_name <> ''", tenantID).
+			Distinct("employee_name").
+			Order("employee_name").
+			Pluck("employee_name", &employees)
+
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{
-				"total_sales":          totalSales,
-				"transaction_count":    totalCount,
-				"total_profit":         totalSales - totalCost,
-				"daily_average":        dailyAvg,
-				"cash_in_drawer":       cashInDrawer,
-				"digital_money":        digitalMoney,
-				"accounts_receivable":  accountsReceivable,
-				"by_method":            byMethod,
+				"period":              period,
+				"since":               since,
+				"total_sales":         totalSales,
+				"transaction_count":   totalCount,
+				"avg_ticket":          avgTicket,
+				"total_profit":        totalProfit,
+				"daily_average":       dailyAvg,
+				"vs_previous_pct":     vsPrevPct,
+				"cash_in_drawer":      cashInDrawer,
+				"digital_money":       digitalMoney,
+				"credit_paid_total":   creditTotal,
+				"accounts_receivable": accountsReceivable,
+				"by_method":           byMethod,
+				"by_channel":          byChannel,
+				"by_hour":             byHour,
+				"by_weekday":          byWeekday,
+				"best_day":            bestDay,
+				"worst_day":           worstDay,
+				"first_sale_at":       firstSale,
+				"peak_hour":           peakHour,
+				"top_employees":       topEmployees,
+				"available_employees": employees,
+				"filters": gin.H{
+					"employee":       empFilter,
+					"source":         sourceFilter,
+					"payment_method": methodFilter,
+				},
 			},
 		})
 	}
+}
+
+// windowFor resolves (since, prevSince, prevEnd) for a given period.
+// `prevSince`/`prevEnd` describe the same-length window immediately
+// before `since`, used for vs-previous comparison.
+func windowFor(period string, now time.Time, sinceQ, untilQ string) (time.Time, time.Time, time.Time) {
+	if sinceQ != "" {
+		if t, err := time.Parse(time.RFC3339, sinceQ); err == nil {
+			until := now
+			if untilQ != "" {
+				if u, err := time.Parse(time.RFC3339, untilQ); err == nil {
+					until = u
+				}
+			}
+			win := until.Sub(t)
+			return t, t.Add(-win), t
+		}
+	}
+	switch period {
+	case "week":
+		since := now.AddDate(0, 0, -7)
+		return since, since.AddDate(0, 0, -7), since
+	case "month":
+		since := now.AddDate(0, -1, 0)
+		return since, since.AddDate(0, -1, 0), since
+	default: // today
+		since := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		return since, since.AddDate(0, 0, -1), since
+	}
+}
+
+func weekdayLabel(dow int) string {
+	switch dow {
+	case 0:
+		return "Domingo"
+	case 1:
+		return "Lunes"
+	case 2:
+		return "Martes"
+	case 3:
+		return "Miércoles"
+	case 4:
+		return "Jueves"
+	case 5:
+		return "Viernes"
+	case 6:
+		return "Sábado"
+	}
+	return ""
 }
 
 // SalesHistoryByPeriod returns paginated sales filtered by period.
