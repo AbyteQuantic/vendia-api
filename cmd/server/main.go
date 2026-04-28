@@ -113,6 +113,18 @@ func main() {
 	r.POST("/api/v1/admin/login",
 		loginLimiter, handlers.AdminLogin(db, cfg.JWTSecret))
 	r.POST("/api/v1/tenant/register", handlers.TenantRegister(db, cfg.JWTSecret))
+
+	// Onboarding logo preview — public, rate-limited. Lets the
+	// merchant generate / upload their logo BEFORE registration so
+	// the URL ships in the register payload. Without this the
+	// onboarding logo step (5/6) was a "coming after Crear cuenta"
+	// dead end. loginLimiter is reused (5/min/IP) — strict because
+	// the IA call is the API's most expensive operation.
+	r.POST("/api/v1/auth/preview-logo",
+		loginLimiter, handlers.PreviewLogoIA(geminiSvc, storageSvc))
+	r.POST("/api/v1/auth/preview-logo-upload",
+		loginLimiter, handlers.PreviewLogoUpload(storageSvc))
+
 	r.POST("/api/v1/auth/refresh", handlers.RefreshToken(db, cfg.JWTSecret))
 	r.POST("/api/v1/auth/select-workspace", middleware.Auth(cfg.JWTSecret), handlers.SelectWorkspace(db, cfg.JWTSecret))
 

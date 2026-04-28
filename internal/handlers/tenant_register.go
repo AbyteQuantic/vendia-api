@@ -30,6 +30,11 @@ type BusinessInput struct {
 	RazonSocial string   `json:"razon_social"`
 	NIT         string   `json:"nit"`
 	Address     string   `json:"address"`
+	// LogoURL — set when the merchant generated/uploaded a logo
+	// during the new step 5 (pre-register). Persisted on the tenant
+	// at creation time so the merchant lands on the dashboard with
+	// the brand mark already in place.
+	LogoURL string `json:"logo_url"`
 }
 
 type ConfigInput struct {
@@ -106,6 +111,7 @@ func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 				SaleTypes:     req.Config.SaleTypes,
 				HasShowcases:  req.Config.HasShowcases,
 				HasTables:     req.Config.HasTables || flags.EnableTables,
+				LogoURL:       req.Business.LogoURL,
 			}
 			if err := tx.Create(&tenant).Error; err != nil {
 				return err
