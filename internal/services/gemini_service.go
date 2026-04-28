@@ -278,48 +278,42 @@ func (s *GeminiService) GenerateLogo(
 	ctx context.Context,
 	businessName, businessType, details string,
 ) ([]LogoResult, error) {
-	industryHint := industryIconHint(businessType)
-	typeLabel := businessTypeLabel(businessType)
-
-	// Brand-tone line. When the merchant wrote a description in the
-	// onboarding logo step ("vendo helados artesanales con sabores de
-	// frutas") we fold it in verbatim so the model picks symbology /
-	// palette accents matching what they actually sell. Empty string
-	// → omit the line entirely so the rubro hint stays the dominant
-	// signal.
-	detailsLine := ""
+	// Subject is the most important line — we lead with it. When the
+	// merchant typed details ("Llaveros y utensilios de moda"), that
+	// description IS the brief; the rubro fallback only kicks in when
+	// the textbox was empty. Image-generation models follow concrete
+	// "draw a X" instructions much better than abstract design rules,
+	// so we pre-resolve the subject here instead of letting the model
+	// guess between competing constraints.
 	details = strings.TrimSpace(details)
+	if len(details) > 240 {
+		details = details[:240]
+	}
+	subject := resolveLogoSubject(businessType, details)
+
+	contextNote := ""
 	if details != "" {
-		// Cap at 240 chars — same as the client UI — so a malicious
-		// caller can't pad the prompt with thousands of tokens.
-		if len(details) > 240 {
-			details = details[:240]
-		}
-		detailsLine = fmt.Sprintf(`
-- Owner's brand tone (verbatim — fold into the symbol choice and palette accents): "%s"`,
+		contextNote = fmt.Sprintf(
+			"\n\nThe owner described the business in their own words: \"%s\". Use this description as the PRIMARY guide — the icon must clearly evoke what they actually sell. If they mention a colour preference, use it as the dominant accent.",
 			details)
 	}
 
-	prompt := fmt.Sprintf(`Generate a single, professional, BRAND LOGO for a small business in Colombia. Output: a 1024x1024 square image, suitable as a mobile app icon, WhatsApp avatar, and public-catalog hero.
+	// Single-paragraph "describe-the-picture" brief. Image generation
+	// models (Imagen / gemini-2.5-flash-image) follow this format far
+	// better than multi-rule UI/UX checklists. The subject statement
+	// goes first so the model has its anchor before any style rules.
+	prompt := fmt.Sprintf(`A flat vector logo icon. Subject: %s. Render it as a single, centered pictogram filling about 60%%%% of the canvas, with generous padding all around so a circular crop never clips the subject.
 
-BUSINESS CONTEXT
-- Brand name: "%s"
-- Industry: %s%s
-- Audience: adults 50+ running an informal neighbourhood business in Latin America. The logo must read as TRUSTED and HONEST, not flashy or trendy.
+Style: modern, minimalist, geometric flat-vector design. Bold solid colours, 2 to 3 colours total, high contrast. Examples of palettes that work: deep indigo + warm cream, terracotta + ivory, sage green + bone, charcoal + mustard, navy + amber. The background must be ONE solid colour — pure white or a single saturated tone — never transparent, never a gradient, never patterned.
 
-UI/UX DESIGN REQUIREMENTS (mandatory — violations are unacceptable)
-1. STYLE: Flat vector illustration. Geometric, modern, minimalist. NO photorealism, NO 3D, NO gradients, NO drop shadows, NO film grain, NO sketchy lines.
-2. COLOR PALETTE: 2 to 3 colours maximum (subject + accent + background). Bold and saturated, NOT pastel. Pick a warm, professional combination — examples that work: deep indigo + warm cream, terracotta + ivory, charcoal + mustard, sage green + bone, navy + amber. If the owner mentioned a colour preference in the brand-tone line above, weight the palette toward it.
-3. BACKGROUND: SOLID single colour or pure white (#FFFFFF). NEVER transparent, NEVER gradient, NEVER patterned, NEVER textured paper.
-4. COMPOSITION: Subject perfectly centred. Reserve 10-15%% safe-area padding on all four sides so a circular crop never amputates the subject. Balance positive and negative space.
-5. NO TEXT WHATSOEVER. No letters, no words, no logograms, no monograms, no decorative typography. The model renders text poorly and any garbled glyph would destroy the brand. The brand name appears alongside the logo in the app — the logo itself is purely a symbol.
-6. SUBJECT: A SINGLE, recognisable iconographic mark. %s If the brand-tone line mentions a specific product (e.g. "helados", "ropa de niños", "panadería con horno de leña"), bias the symbol toward that product over the generic industry icon — that's what makes THIS business different.
-7. SCALABILITY: Must remain instantly recognisable at 24px (app icon size) AND impressive at 512px (catalog header). Avoid any detail finer than 1/40th of the canvas.
-8. STROKE WEIGHTS: Consistent. If using outlines, all strokes should share one of at most two thicknesses.
+The whole logo must be instantly readable at 24 pixels (mobile app icon size) and still look great at 512 pixels (storefront banner). Use consistent stroke weights. No photorealism. No 3D. No drop shadows. No textures.
 
-OUTPUT
-Return ONLY the image. No watermarks, no text overlays, no signatures, no annotations, no border frames.`,
-		businessName, typeLabel, detailsLine, industryHint)
+ABSOLUTE PROHIBITION: do NOT render any letters, numbers, words, or text characters anywhere in the image — not even decorative ones, not even the brand name. The logo is pure symbol. Any text-like marks ruin the design and must be replaced with shapes.
+
+The brand is "%s", a small business in Colombia (%s).%s
+
+Output ONLY the finished logo image as a 1024x1024 square. No mockups, no signatures, no border frames, no watermarks.`,
+		subject, businessName, businessTypeLabel(businessType), contextNote)
 
 	results, err := s.callImageGeneration(ctx, models.AIFeatureLogoGen, prompt, 1)
 	if err != nil {
@@ -328,32 +322,123 @@ Return ONLY the image. No watermarks, no text overlays, no signatures, no annota
 	return results, nil
 }
 
-// industryIconHint maps the backend business-type enum to a short
-// English brief steering the model toward an industry-appropriate
-// symbol. Listed as alternatives so the model can pick whichever
-// composes best — single deterministic symbols tend to feel sterile.
+// resolveLogoSubject picks the concrete pictogram the model should
+// draw. When the merchant typed details ("Llaveros y utensilios de
+// moda"), we extract a directive subject from those words so the
+// model has a single, unambiguous anchor — image-gen models drift
+// hard when fed competing options. When details are empty we fall
+// back to the rubro default.
+//
+// The mapping is keyword-based, biased to common Spanish products in
+// Colombian neighbourhood businesses. Order matters — the first match
+// wins. Multi-product hints chain with " y " so the model can blend
+// (e.g. "tienda + helados" → "a corner store storefront together with
+// a stylised ice cream cone").
+func resolveLogoSubject(businessType, details string) string {
+	rubro := industryIconHint(businessType)
+	if details == "" {
+		return rubro
+	}
+	d := strings.ToLower(details)
+	hits := []string{}
+
+	add := func(symbol string) {
+		for _, h := range hits {
+			if h == symbol {
+				return
+			}
+		}
+		hits = append(hits, symbol)
+	}
+
+	type kw struct {
+		keywords []string
+		symbol   string
+	}
+	mapping := []kw{
+		{[]string{"helado", "ice cream", "nieve"}, "a stylised ice cream cone with a generous scoop"},
+		{[]string{"panaderia", "panadería", "pan ", "pasteleria", "pastelería", "reposteria", "repostería", "torta", "bakery"}, "a stylised loaf of bread or a wheat sheaf"},
+		{[]string{"cafe", "café", "tinto", "barista"}, "a stylised coffee cup with a steam wisp"},
+		{[]string{"pollo", "chicken", "broaster"}, "a stylised drumstick or a hen silhouette"},
+		{[]string{"hamburguesa", "burger"}, "a stylised hamburger silhouette"},
+		{[]string{"pizza"}, "a stylised pizza slice"},
+		{[]string{"jugo", "fruta", "smoothie", "juice"}, "a stylised glass with a fruit slice on the rim"},
+		{[]string{"licor", "cerveza", "bar", "ron", "aguardiente", "trago"}, "a stylised cocktail glass or beer bottle silhouette"},
+		{[]string{"flor", "florist", "ramo"}, "a stylised single flower or a small bouquet silhouette"},
+		{[]string{"mascota", "pet", "veterinaria"}, "a stylised dog or cat silhouette"},
+		{[]string{"libro", "papeleria", "papelería", "stationery"}, "a stylised open book and pencil pair"},
+		{[]string{"ropa", "moda", "boutique", "fashion"}, "a stylised hanger with a fashionable garment silhouette"},
+		{[]string{"llavero", "llave", "key"}, "a stylised key-ring with two crossed keys"},
+		{[]string{"accesori", "joyer", "joya"}, "a stylised gemstone or pendant silhouette"},
+		{[]string{"zapato", "calzado", "shoe", "tenis"}, "a stylised sneaker silhouette"},
+		{[]string{"juguete", "toy"}, "a stylised teddy bear or building-block silhouette"},
+		{[]string{"belleza", "salon", "salón", "peluquer", "barber"}, "a stylised pair of scissors and a comb"},
+		{[]string{"barbería", "barberia"}, "a stylised barber pole and razor"},
+		{[]string{"taller", "mecanic", "auto"}, "a stylised wrench and gear pair"},
+		{[]string{"tecnolog", "celular", "phone", "computad"}, "a stylised phone-and-charger or a circuit-leaf hybrid"},
+		{[]string{"farmaci", "drogu", "salud", "medic"}, "a stylised mortar-and-pestle or a green cross"},
+		{[]string{"verdura", "fruta", "vegetal", "organic"}, "a stylised basket of fresh produce"},
+		{[]string{"carne", "carnicer", "butcher"}, "a stylised cleaver and steak silhouette"},
+		{[]string{"queso", "lacte"}, "a stylised wedge of cheese with a milk drop"},
+		{[]string{"miel", "honey", "abeja"}, "a stylised honey jar with a honeycomb hexagon"},
+		{[]string{"costura", "modist", "sastre", "tailor", "ropa hecha"}, "a stylised needle threaded through cloth"},
+		{[]string{"madera", "carpinter", "muebles"}, "a stylised hammer crossed with a wood plank"},
+		{[]string{"jardin", "jardín", "planta", "vivero"}, "a stylised potted plant with a leaf accent"},
+		{[]string{"limpieza", "aseo", "cleaning"}, "a stylised spray bottle and a sparkle"},
+		{[]string{"helado artesanal"}, "a stylised artisanal ice cream cone with fruit accents"},
+		{[]string{"frutas naturales", "frutos"}, "a stylised cluster of three fruits"},
+	}
+	for _, m := range mapping {
+		for _, k := range m.keywords {
+			if strings.Contains(d, k) {
+				add(m.symbol)
+				break
+			}
+		}
+	}
+
+	if len(hits) == 0 {
+		// No keyword matched — model still gets the raw owner text
+		// inside contextNote, plus the rubro fallback as a fail-safe.
+		return rubro
+	}
+	if len(hits) == 1 {
+		return hits[0]
+	}
+	// Combine up to 2 distinct symbols so the icon stays readable.
+	if len(hits) > 2 {
+		hits = hits[:2]
+	}
+	return hits[0] + " together with " + hits[1]
+}
+
+// industryIconHint returns a SINGLE concrete subject for image gen.
+// Used as the fallback when the merchant didn't type any details —
+// resolveLogoSubject() takes precedence whenever the brand-tone box
+// has content. Image-generation models render one specific subject
+// far better than a menu of alternatives.
 func industryIconHint(businessType string) string {
 	switch businessType {
 	case "tienda_barrio":
-		return `Suggested symbols: a stylised storefront facade with awning, a paper grocery bag, a wicker basket of staples, or a small house silhouette with a window. Evokes "the corner store the whole neighbourhood trusts".`
+		return "a stylised neighbourhood corner storefront with a striped awning and a small basket of groceries in front"
 	case "minimercado":
-		return `Suggested symbols: a shopping cart with a few groceries, a stack of fresh produce, or a market stall icon. Evokes "fresh, organised, well-stocked".`
+		return "a stylised shopping cart filled with fresh produce silhouettes"
 	case "restaurante":
-		return `Suggested symbols: a crossed fork and knife, a covered plate with steam wisps, a chef's hat, or an open menu. Evokes "warm hospitality, good food".`
+		return "a stylised covered plate with steam wisps over a crossed fork and knife"
 	case "comidas_rapidas":
-		return `Suggested symbols: a burger silhouette, a paper bag of fries, a lightning bolt, or a take-away cup. Evokes "quick, satisfying, fun".`
+		return "a stylised hamburger silhouette with a small lightning bolt accent"
 	case "bar":
-		return `Suggested symbols: a cocktail glass, a beer mug silhouette, a wine bottle and glass pair, or a neon star. Evokes "vibrant nightlife, social".`
+		return "a stylised cocktail glass with an olive on a pick"
 	case "deposito_construccion":
-		return `Suggested symbols: a hard hat, a toolbox, a ruler and pencil crossed, or a stack of bricks. Evokes "reliable, builders' supply".`
+		return "a stylised hard hat resting on a wrench"
 	case "manufactura":
-		return `Suggested symbols: a single gear, a stylised factory roofline, or a stack of geometric shapes. Evokes "production, precision".`
+		return "a stylised gear with three bold teeth"
 	case "reparacion_muebles":
-		return `Suggested symbols: a wrench, a screwdriver and hammer crossed, a chair silhouette, or a sewing-needle-and-thread for upholstery. Evokes "skilled hands, restoration".`
+		return "a stylised wrench and screwdriver crossed in an X"
 	case "emprendimiento_general":
-		return `Suggested symbols: a rocket silhouette, a lightbulb, a mountain peak with sun, or a rising graph arrow. Evokes "ambition, growth, ideas".`
+		return "a stylised rocket silhouette taking off"
 	default:
-		return `Use a clean abstract geometric mark — circle + square or a stylised monogram silhouette — that conveys "professional small business".`
+		return "a clean abstract geometric mark of two interlocking shapes evoking a professional small business"
 	}
 }
 
