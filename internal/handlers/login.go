@@ -19,24 +19,28 @@ type LoginRequest struct {
 	Password string `json:"password" binding:"required"`
 }
 
-// Login resolves credentials across THREE sources, in priority order:
+// Login authenticates a phone+password pair and surfaces every
+// workspace the person belongs to.
 //
-//  1. users table (multi-workspace) — the canonical path. Returns the
-//     workspaces array when the user belongs to >1 tenant or a JWT
-//     directly for the single-workspace case.
-//  2. tenants table (legacy) — pre-multi-workspace owners that never
-//     migrated to a User row. Plain JWT.
-//  3. employees table (RBAC fallback, 2026-04-27) — when the OWNER
-//     handed a credential to a staff member but the User upsert
-//     never landed (legacy data, partial writes, manual DB edits).
-//     We authenticate against Employee.PasswordHash, then lazily
-//     UPSERT a User row + UserWorkspace so the next login flows
-//     through path #1 without the fallback.
+// Identity match (any one is sufficient):
+//   - users.password_hash (the user's canonical credential)
+//   - employees.password_hash (the credential a tenant owner issued
+//     for THAT specific tenant)
 //
-// Phone normalisation: we match the literal phone the caller typed
-// AND the digits-only version. A merchant who typed "+57 302 279
-// 8580" when they registered, and an employee who types "3022798580"
-// at login, both resolve to the same row without forcing a backfill.
+// One person can hold a User row PLUS multiple Employee rows across
+// tenants, each with a DIFFERENT password — Tienda A's owner sets a
+// hash for their cashier, Tienda B's owner sets a different hash for
+// the same cashier. Any one of those passwords proves the caller's
+// identity, so any one unlocks the workspace selector.
+//
+// The selector is permissive (shows every workspace the person
+// belongs to) but the JWT is per-workspace gated: /select-workspace
+// requires the password specific to the chosen tenant. That keeps
+// the credential boundary clean — Tienda A's password cannot mint a
+// JWT for Tienda B.
+//
+// Phone normalisation: literal phone first, then digits-only via
+// REPLACE chain so "+57 302 279 8580" matches "3022798580".
 func Login(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req LoginRequest
@@ -47,25 +51,58 @@ func Login(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 
 		phone := strings.TrimSpace(req.Phone)
 		digits := digitsOnly(phone)
+		password := []byte(req.Password)
 
-		// ── Path 1: users table ─────────────────────────────────
-		user, ok := lookupUserByPhone(db, phone, digits)
-		if ok {
+		user, userFound := lookupUserByPhone(db, phone, digits)
+		emps := lookupEmployeesByPhone(db, phone, digits)
+
+		var (
+			identityMatched bool
+			sawInactive     bool
+			sawNoPw         bool
+		)
+
+		if userFound && user.PasswordHash != "" {
 			if err := bcrypt.CompareHashAndPassword(
-				[]byte(user.PasswordHash), []byte(req.Password)); err == nil {
-				respondWithUser(c, db, user, jwtSecret)
-				return
+				[]byte(user.PasswordHash), password); err == nil {
+				identityMatched = true
 			}
-			// User row matches the phone, but the global password
-			// doesn't match. Don't 401 yet — the same person can
-			// own a tenant elsewhere AND have a different password
-			// assigned by another tenant's owner on their Employee
-			// row. Fall through to Path 3 so we still match on
-			// Employee.PasswordHash. If THAT also misses, the
-			// final 401 below trips.
 		}
 
-		// ── Path 2: tenants table (legacy owner) ─────────────────
+		for i := range emps {
+			e := &emps[i]
+			if !e.IsActive {
+				sawInactive = true
+				continue
+			}
+			if e.PasswordHash == "" {
+				sawNoPw = true
+				continue
+			}
+			if err := bcrypt.CompareHashAndPassword(
+				[]byte(e.PasswordHash), password); err == nil {
+				identityMatched = true
+				if !userFound {
+					lazyUser, err := upsertUserFromEmployee(db, *e, password)
+					if err != nil {
+						log.Printf("[LOGIN] employee upsert failed phone=%s: %v",
+							e.Phone, err)
+						continue
+					}
+					user = lazyUser
+					userFound = true
+				}
+			}
+		}
+
+		if identityMatched && userFound {
+			reconcileWorkspacesFromEmployees(db, user, emps)
+			respondAfterIdentityMatch(c, db, user, password, jwtSecret)
+			return
+		}
+
+		// Legacy Tenant fallback — pre-multi-workspace owners that
+		// never migrated to a User row. Plain JWT, single tenant.
 		var tenant models.Tenant
 		err := db.Where("phone = ?", phone).First(&tenant).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) && digits != "" {
@@ -73,97 +110,24 @@ func Login(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 				First(&tenant).Error
 		}
 		if err == nil {
-			if err := bcrypt.CompareHashAndPassword(
-				[]byte(tenant.PasswordHash), []byte(req.Password)); err != nil {
-				// Don't fall through to employees — the phone matched
-				// a tenant row, the password didn't. Returning 401 here
-				// avoids leaking "the password might match an employee
-				// row" via timing.
-				c.JSON(http.StatusUnauthorized, gin.H{
-					"error": "teléfono o contraseña incorrectos",
-				})
+			if cmp := bcrypt.CompareHashAndPassword(
+				[]byte(tenant.PasswordHash), password); cmp == nil {
+				resp, err := createTokenPair(db, tenant, jwtSecret)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "error al generar tokens"})
+					return
+				}
+				c.JSON(http.StatusOK, resp)
 				return
 			}
-			resp, err := createTokenPair(db, tenant, jwtSecret)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "error al generar tokens"})
-				return
-			}
-			c.JSON(http.StatusOK, resp)
-			return
-		}
-		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al consultar negocio"})
 			return
 		}
 
-		// ── Path 3: employees table (RBAC fallback) ──────────────
-		//
-		// One person can have multiple Employee rows (one per
-		// tenant they work for) and each row can have a DIFFERENT
-		// password — the dueño of every tenant assigns their own.
-		// We have to iterate every row and try the password against
-		// each, returning on the first match. The matching row
-		// scopes the resulting JWT to its tenant (NOT to the
-		// user's other workspaces) so the credential boundary
-		// stays clean: a password issued by Tienda A's owner
-		// only opens Tienda A.
-		emps := lookupEmployeesByPhone(db, phone, digits)
+		// Pick the most useful 401/403 we can without leaking the
+		// existence of a specific row.
 		if len(emps) > 0 {
-			// Track WHY no row matched so the response can give a
-			// specific hint when applicable (inactive / no-pw).
-			var (
-				sawInactive  bool
-				sawNoPw      bool
-				matchedEmp   *models.Employee
-			)
-			for i := range emps {
-				e := &emps[i]
-				if !e.IsActive {
-					sawInactive = true
-					continue
-				}
-				if e.PasswordHash == "" {
-					sawNoPw = true
-					continue
-				}
-				if err := bcrypt.CompareHashAndPassword(
-					[]byte(e.PasswordHash), []byte(req.Password)); err == nil {
-					matchedEmp = e
-					break
-				}
-			}
-
-			if matchedEmp != nil {
-				// Auth passed. Ensure a UserWorkspace exists for
-				// THIS tenant so the JWT carries the right role.
-				// upsertUserFromEmployee preserves any existing
-				// User.password_hash — we never overwrite the
-				// global credential the user uses to log in to
-				// OTHER tenants.
-				lazyUser, err := upsertUserFromEmployee(
-					db, *matchedEmp, []byte(req.Password))
-				if err != nil {
-					log.Printf("[LOGIN] employee upsert failed phone=%s: %v",
-						matchedEmp.Phone, err)
-					respondWithEmployeeFallback(c, db, *matchedEmp, jwtSecret)
-					return
-				}
-				// Workspace-scoped response: emit a JWT for the
-				// specific tenant whose password matched. We do
-				// NOT call respondWithUser here because that
-				// would surface every workspace the user belongs
-				// to, including tenants whose owners issued a
-				// different credential. The cashier in Tienda A
-				// must NOT pull JWTs for Tienda B by typing
-				// Tienda A's local password.
-				respondWithEmployeeWorkspace(c, db, lazyUser, *matchedEmp, jwtSecret)
-				return
-			}
-
-			// No password match across the rows. Surface the most
-			// helpful error we can without leaking which row was
-			// involved.
 			if sawInactive && !sawNoPw {
 				c.JSON(http.StatusForbidden, gin.H{
 					"error":      "tu cuenta fue desactivada por el dueño",
@@ -178,31 +142,21 @@ func Login(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 				})
 				return
 			}
-			// Mixed or all-with-passwords-but-wrong: canonical 401.
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"error": "teléfono o contraseña incorrectos",
-			})
-			return
 		}
-
-		// ── No match anywhere ────────────────────────────────────
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": "teléfono o contraseña incorrectos",
 		})
 	}
 }
 
-// phoneNormaliseSQL strips the most common non-digit decorations a
-// human types (spaces, dashes, +, parentheses) from a column value
-// so we can match a "+57 302 279 8580" stored phone against a
-// "3022798580" login attempt — and vice versa. Works on both
-// Postgres (production) and SQLite (tests) because REPLACE is the
-// SQL-92 spelling. Anything more exotic (regexp_replace, translate)
-// is engine-specific and pulls a worse portability story.
+// phoneNormaliseSQL strips spaces, dashes, +, and parentheses from a
+// stored phone column so the typed value matches regardless of the
+// formatting variant. SQL-92 REPLACE works on Postgres + SQLite
+// (tests) without engine-specific escapes.
 const phoneNormaliseSQL = `REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone, ' ', ''), '-', ''), '+', ''), '(', ''), ')', '')`
 
 // lookupUserByPhone tries the literal phone first, then the
-// digits-only normalisation. Returns the matched user + true.
+// digits-only normalisation.
 func lookupUserByPhone(db *gorm.DB, phone, digits string) (models.User, bool) {
 	var u models.User
 	if err := db.Where("phone = ?", phone).First(&u).Error; err == nil {
@@ -218,11 +172,10 @@ func lookupUserByPhone(db *gorm.DB, phone, digits string) (models.User, bool) {
 }
 
 // lookupEmployeesByPhone returns EVERY Employee row matching the
-// phone, across all tenants. Plural matters because the same
-// person can be cashier at Tienda A AND owner at Tienda B —
-// each tenant's owner sets a DIFFERENT password on their
-// respective Employee row, and the login flow needs to try every
-// hash, not just the first one ordered by the index.
+// phone across all tenants. The same person can be cashier at Tienda
+// A and owner at Tienda B with different per-row password hashes;
+// the login flow needs to test the typed password against every
+// hash, not just the first one.
 func lookupEmployeesByPhone(db *gorm.DB, phone, digits string) []models.Employee {
 	var rows []models.Employee
 	if err := db.Where("phone = ?", phone).Find(&rows).Error; err == nil &&
@@ -236,9 +189,10 @@ func lookupEmployeesByPhone(db *gorm.DB, phone, digits string) []models.Employee
 }
 
 // upsertUserFromEmployee creates a User + UserWorkspace pair when an
-// employee authenticates via the fallback path. Idempotent — if the
-// User already exists by some other path we just attach the
-// workspace (without touching the existing password hash).
+// employee authenticates without a pre-existing User row. Idempotent:
+// if the User row already exists we attach the workspace without
+// touching its password_hash — that's the user's canonical
+// credential, never overwritten by per-tenant employee hashes.
 func upsertUserFromEmployee(
 	db *gorm.DB,
 	emp models.Employee,
@@ -263,16 +217,7 @@ func upsertUserFromEmployee(
 		return user, err
 	}
 
-	// Workspace upsert — keep role + branch in sync with the
-	// Employee row.
-	wsRole := models.RoleWSCashier
-	switch {
-	case emp.IsOwner:
-		wsRole = models.RoleOwner
-	case emp.Role == models.RoleAdmin:
-		wsRole = models.RoleWSAdmin
-	}
-
+	wsRole := workspaceRoleFromEmployee(emp)
 	var ws models.UserWorkspace
 	wsErr := db.Where("user_id = ? AND tenant_id = ?", user.ID, emp.TenantID).
 		First(&ws).Error
@@ -298,10 +243,66 @@ func upsertUserFromEmployee(
 	return user, nil
 }
 
-// respondWithUser is the shared writer for paths 1 + 3. Loads the
-// user's workspaces and returns either the multi-workspace selector
-// payload OR the final JWT pair.
-func respondWithUser(c *gin.Context, db *gorm.DB, user models.User, jwtSecret string) {
+// reconcileWorkspacesFromEmployees ensures a UserWorkspace row exists
+// for every active Employee row tied to the user. Without this, a
+// person added as cashier to Tienda B AFTER their User row was
+// created would never see Tienda B in the selector — the User row
+// only knows about the workspaces that existed when it was made.
+// Inactive employees are skipped (we don't surface workspaces the
+// owner already revoked).
+func reconcileWorkspacesFromEmployees(
+	db *gorm.DB,
+	user models.User,
+	emps []models.Employee,
+) {
+	for _, e := range emps {
+		if !e.IsActive {
+			continue
+		}
+		wsRole := workspaceRoleFromEmployee(e)
+		var ws models.UserWorkspace
+		err := db.Where("user_id = ? AND tenant_id = ?", user.ID, e.TenantID).
+			First(&ws).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			_ = db.Create(&models.UserWorkspace{
+				UserID:   user.ID,
+				TenantID: e.TenantID,
+				BranchID: e.BranchID,
+				Role:     wsRole,
+			}).Error
+			continue
+		}
+		if err == nil {
+			db.Model(&ws).Updates(map[string]any{
+				"role":      wsRole,
+				"branch_id": e.BranchID,
+			})
+		}
+	}
+}
+
+func workspaceRoleFromEmployee(e models.Employee) models.WorkspaceRole {
+	switch {
+	case e.IsOwner:
+		return models.RoleOwner
+	case e.Role == models.RoleAdmin:
+		return models.RoleWSAdmin
+	default:
+		return models.RoleWSCashier
+	}
+}
+
+// respondAfterIdentityMatch loads every workspace for the user and
+// either mints a JWT (single workspace + per-workspace password
+// passes) or returns the selector that triggers the second password
+// prompt on the client.
+func respondAfterIdentityMatch(
+	c *gin.Context,
+	db *gorm.DB,
+	user models.User,
+	password []byte,
+	jwtSecret string,
+) {
 	var workspaces []models.UserWorkspace
 	db.Preload("Tenant").Preload("Branch").
 		Where("user_id = ?", user.ID).
@@ -314,24 +315,58 @@ func respondWithUser(c *gin.Context, db *gorm.DB, user models.User, jwtSecret st
 
 	if len(workspaces) == 1 {
 		ws := workspaces[0]
-		branchID := ""
-		if ws.BranchID != nil {
-			branchID = *ws.BranchID
-		}
-		businessName := ""
-		if ws.Tenant != nil {
-			businessName = ws.Tenant.BusinessName
-		}
-		resp, err := createWorkspaceTokenPair(
-			db, user, ws.TenantID, branchID, businessName, string(ws.Role), jwtSecret)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al generar tokens"})
+		// Even with a single workspace, the typed password must
+		// match THAT workspace's credential — not just any of the
+		// user's identity passwords. Prevents a user with one
+		// owner workspace and one cashier workspace from collapsing
+		// into a single-JWT shortcut after losing the cashier role.
+		if verifyPasswordForWorkspace(db, user, ws, password) {
+			emitWorkspaceJWT(c, db, user, ws, jwtSecret)
 			return
 		}
-		c.JSON(http.StatusOK, resp)
+		respondWithSelector(c, user, workspaces, jwtSecret)
 		return
 	}
 
+	respondWithSelector(c, user, workspaces, jwtSecret)
+}
+
+// emitWorkspaceJWT mints the final access+refresh pair scoped to a
+// specific tenant.
+func emitWorkspaceJWT(
+	c *gin.Context,
+	db *gorm.DB,
+	user models.User,
+	ws models.UserWorkspace,
+	jwtSecret string,
+) {
+	branchID := ""
+	if ws.BranchID != nil {
+		branchID = *ws.BranchID
+	}
+	businessName := ""
+	if ws.Tenant != nil {
+		businessName = ws.Tenant.BusinessName
+	}
+	resp, err := createWorkspaceTokenPair(
+		db, user, ws.TenantID, branchID, businessName, string(ws.Role), jwtSecret)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "error al generar tokens"})
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// respondWithSelector returns the workspace list + a temp_token the
+// client uses on /select-workspace. `requires_workspace_password`
+// signals to the Flutter app that it must prompt for a password
+// before completing the selection.
+func respondWithSelector(
+	c *gin.Context,
+	user models.User,
+	workspaces []models.UserWorkspace,
+	jwtSecret string,
+) {
 	type WorkspaceOption struct {
 		WorkspaceID string `json:"workspace_id"`
 		TenantID    string `json:"tenant_id"`
@@ -340,7 +375,7 @@ func respondWithUser(c *gin.Context, db *gorm.DB, user models.User, jwtSecret st
 		BranchName  string `json:"branch_name,omitempty"`
 		Role        string `json:"role"`
 	}
-	var options []WorkspaceOption
+	options := make([]WorkspaceOption, 0, len(workspaces))
 	for _, ws := range workspaces {
 		opt := WorkspaceOption{
 			WorkspaceID: ws.ID,
@@ -358,68 +393,52 @@ func respondWithUser(c *gin.Context, db *gorm.DB, user models.User, jwtSecret st
 		}
 		options = append(options, opt)
 	}
-
 	tempToken, _ := auth.GenerateToken(user.ID, user.Phone, "", jwtSecret)
 	c.JSON(http.StatusOK, gin.H{
-		"workspaces": options,
-		"temp_token": tempToken,
-		"user_id":    user.ID,
-		"user_name":  user.Name,
+		"workspaces":                  options,
+		"temp_token":                  tempToken,
+		"user_id":                     user.ID,
+		"user_name":                   user.Name,
+		"requires_workspace_password": true,
 	})
 }
 
-// respondWithEmployeeWorkspace emits a JWT scoped to the SINGLE
-// tenant whose Employee row matched the password. We deliberately
-// don't surface other workspaces the same person might belong to —
-// a credential issued by Tienda A's owner cannot mint JWTs for
-// Tienda B even though the underlying User row may link to both.
-func respondWithEmployeeWorkspace(
-	c *gin.Context,
+// verifyPasswordForWorkspace tests the typed password against the
+// credential authoritative for THIS workspace.
+//
+// Order:
+//  1. Employee row for (user.phone, ws.tenant_id) — if present and
+//     active and has a password, the per-tenant credential is
+//     binding. We do NOT fall back to User.password_hash here: the
+//     tenant owner deliberately set a tenant-specific password and
+//     the global one must not bypass it.
+//  2. User.password_hash — fallback for workspaces without an
+//     Employee row (legacy / owner-only setups).
+//
+// Returns true if the typed password matches the binding credential.
+func verifyPasswordForWorkspace(
 	db *gorm.DB,
 	user models.User,
-	emp models.Employee,
-	jwtSecret string,
-) {
-	var tenant models.Tenant
-	if err := db.First(&tenant, "id = ?", emp.TenantID).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "error al cargar negocio"})
-		return
+	ws models.UserWorkspace,
+	password []byte,
+) bool {
+	var emp models.Employee
+	err := db.Where("phone = ? AND tenant_id = ?", user.Phone, ws.TenantID).
+		First(&emp).Error
+	if err == nil {
+		if !emp.IsActive {
+			return false
+		}
+		if emp.PasswordHash != "" {
+			return bcrypt.CompareHashAndPassword(
+				[]byte(emp.PasswordHash), password) == nil
+		}
 	}
-	branchID := ""
-	if emp.BranchID != nil {
-		branchID = *emp.BranchID
+	if user.PasswordHash != "" {
+		return bcrypt.CompareHashAndPassword(
+			[]byte(user.PasswordHash), password) == nil
 	}
-	wsRole := string(models.RoleWSCashier)
-	if emp.IsOwner {
-		wsRole = string(models.RoleOwner)
-	} else if emp.Role == models.RoleAdmin {
-		wsRole = string(models.RoleWSAdmin)
-	}
-	resp, err := createWorkspaceTokenPair(
-		db, user, emp.TenantID, branchID, tenant.BusinessName, wsRole, jwtSecret)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "error al generar tokens"})
-		return
-	}
-	c.JSON(http.StatusOK, resp)
-}
-
-// respondWithEmployeeFallback is the safety net for the rare case
-// where the User upsert failed mid-flight (e.g. unique-index race).
-// We mint a workspace JWT directly from the Employee row so the
-// cashier can keep working; the next login retries the upsert.
-func respondWithEmployeeFallback(
-	c *gin.Context,
-	db *gorm.DB,
-	emp models.Employee,
-	jwtSecret string,
-) {
-	pseudo := models.User{
-		BaseModel: models.BaseModel{ID: emp.ID},
-		Phone:     emp.Phone,
-		Name:      emp.Name,
-	}
-	respondWithEmployeeWorkspace(c, db, pseudo, emp, jwtSecret)
+	return false
 }
 
 func digitsOnly(s string) string {

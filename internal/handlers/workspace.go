@@ -57,16 +57,26 @@ func createWorkspaceTokenPair(db *gorm.DB, user models.User, tenantID, branchID,
 	}, nil
 }
 
-// SelectWorkspace selects a workspace and returns the final JWT.
+// SelectWorkspace exchanges the temp_token + a per-workspace password
+// for the final access+refresh JWT pair.
+//
 // POST /api/v1/auth/select-workspace
+//
+// The password gate is what enforces the credential boundary across
+// tenants: a user holding multiple workspaces (e.g. owner of Tienda A
+// + cashier at Tienda B) proves identity once at /login but must
+// re-enter the password specific to the chosen tenant before getting
+// a JWT for it. Tienda A's password cannot mint a JWT for Tienda B.
 func SelectWorkspace(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 	type Request struct {
 		WorkspaceID string `json:"workspace_id" binding:"required"`
+		Password    string `json:"password"     binding:"required"`
 	}
 
 	return func(c *gin.Context) {
-		// The user authenticated with temp_token, so tenant_id = user_id in temp token
-		userID := middleware.GetTenantID(c) // temp token stores user_id as tenant_id
+		// Temp token stores user_id as tenant_id (see Login's
+		// auth.GenerateToken call in respondWithSelector).
+		userID := middleware.GetTenantID(c)
 
 		var req Request
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -85,6 +95,14 @@ func SelectWorkspace(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 		var user models.User
 		if err := db.First(&user, "id = ?", userID).Error; err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "usuario no encontrado"})
+			return
+		}
+
+		if !verifyPasswordForWorkspace(db, user, ws, []byte(req.Password)) {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error":      "esa clave no abre este negocio",
+				"error_code": "workspace_password_mismatch",
+			})
 			return
 		}
 
