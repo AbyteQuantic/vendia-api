@@ -67,11 +67,7 @@ func (s *GeminiService) recordTokenUsage(ctx context.Context, feature, modelName
 	if tid == "" {
 		return
 	}
-	in := gr.UsageMetadata.PromptTokenCount
-	out := gr.UsageMetadata.CandidatesTokenCount
-	if in == 0 && out == 0 && gr.UsageMetadata.TotalTokenCount > 0 {
-		out = gr.UsageMetadata.TotalTokenCount
-	}
+	in, out := gr.UsageMetadata.InputOutput()
 	if in == 0 && out == 0 {
 		return
 	}
@@ -298,28 +294,64 @@ func (s *GeminiService) GenerateLogo(
 			details)
 	}
 
+	// Brand identity — initial or short name. Image-gen models render
+	// a SINGLE bold capital letter much more reliably than a word, so
+	// we lift the first letter (or the full name when ≤ 5 chars) and
+	// instruct the model to integrate it as a subtle, ornamental
+	// element of the silhouette — NOT as a banner. This grounds the
+	// pictogram in the merchant's actual brand instead of producing a
+	// pure symbol that could belong to any tienda. The "subtle"
+	// framing is on purpose: heavy text typically renders garbled.
+	identityHint := ""
+	trimmed := strings.TrimSpace(businessName)
+	if trimmed != "" {
+		// Use the full name if very short, else just the initial.
+		marker := ""
+		runes := []rune(trimmed)
+		if len(runes) <= 5 {
+			marker = strings.ToUpper(trimmed)
+		} else {
+			marker = strings.ToUpper(string(runes[0]))
+		}
+		identityHint = fmt.Sprintf(`
+
+BRAND IDENTITY MARKER: integrate the bold capital letter%s "%s" as a SUBTLE structural element of the icon (e.g. shaped into the negative space, woven into the silhouette, or carved into one of the symbol's strokes). The letter must NOT appear as a banner or floating text — it should feel inseparable from the symbol, almost hidden in the shape, so the logo carries identity without becoming a typographic monogram.`,
+			ifPlural(len(runes) <= 5), marker)
+	}
+
 	// Single-paragraph "describe-the-picture" brief. Image generation
-	// models (Imagen / gemini-2.5-flash-image) follow this format far
-	// better than multi-rule UI/UX checklists. The subject statement
-	// goes first so the model has its anchor before any style rules.
+	// models (Imagen / gemini-2.5-flash-image, a.k.a. Nano Banana 2)
+	// follow this format far better than multi-rule UI/UX checklists.
+	// Subject FIRST, identity marker SECOND, style rules LAST.
 	prompt := fmt.Sprintf(`A flat vector logo icon. Subject: %s. Render it as a single, centered pictogram filling about 60%%%% of the canvas, with generous padding all around so a circular crop never clips the subject.
 
 Style: modern, minimalist, geometric flat-vector design. Bold solid colours, 2 to 3 colours total, high contrast. Examples of palettes that work: deep indigo + warm cream, terracotta + ivory, sage green + bone, charcoal + mustard, navy + amber. The background must be ONE solid colour — pure white or a single saturated tone — never transparent, never a gradient, never patterned.
 
 The whole logo must be instantly readable at 24 pixels (mobile app icon size) and still look great at 512 pixels (storefront banner). Use consistent stroke weights. No photorealism. No 3D. No drop shadows. No textures.
 
-ABSOLUTE PROHIBITION: do NOT render any letters, numbers, words, or text characters anywhere in the image — not even decorative ones, not even the brand name. The logo is pure symbol. Any text-like marks ruin the design and must be replaced with shapes.
+TEXT RULE: do NOT render any text, words, sentences, taglines, signatures, or watermarks. The ONLY exception is the brand-identity marker described below — a single short letterform woven into the symbol — and even that is optional. If you can't integrate it cleanly, fall back to a pure symbol.
 
-The brand is "%s", a small business in Colombia (%s).%s
+The brand is "%s", a small business in Colombia (%s).%s%s
 
 Output ONLY the finished logo image as a 1024x1024 square. No mockups, no signatures, no border frames, no watermarks.`,
-		subject, businessName, businessTypeLabel(businessType), contextNote)
+		subject, businessName, businessTypeLabel(businessType), contextNote, identityHint)
 
 	results, err := s.callImageGeneration(ctx, models.AIFeatureLogoGen, prompt, 1)
 	if err != nil {
 		return nil, err
 	}
 	return results, nil
+}
+
+// ifPlural appends "s" to the word "letter" when we're embedding the
+// full short business name (more than one character). A tiny helper
+// that keeps the prompt grammatically correct without branching the
+// whole sentence.
+func ifPlural(plural bool) string {
+	if plural {
+		return "s"
+	}
+	return ""
 }
 
 // resolveLogoSubject picks the concrete pictogram the model should
@@ -984,12 +1016,7 @@ func (s *GeminiService) callImageGeneration(ctx context.Context, feature, prompt
 
 type geminiResponse struct {
 	// UsageMetadata is set by the Generative Language API on success.
-	// See: https://ai.google.dev/api/generate-content#UsageMetadata
-	UsageMetadata struct {
-		PromptTokenCount     int `json:"promptTokenCount"`
-		CandidatesTokenCount int `json:"candidatesTokenCount"`
-		TotalTokenCount      int `json:"totalTokenCount"`
-	} `json:"usageMetadata"`
+	UsageMetadata GemUsageMetadata `json:"usageMetadata"`
 	Candidates []struct {
 		Content struct {
 			Parts []struct {
