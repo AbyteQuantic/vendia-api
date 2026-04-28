@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 	"vendia-backend/internal/aiusage"
 	"vendia-backend/internal/middleware"
@@ -15,6 +16,11 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+// minLogoDetailsLength mirrors the UI threshold in step_logo.dart so
+// frontend and backend agree on what "enough description" means.
+// Counted in runes (not bytes) so accented characters count as one.
+const minLogoDetailsLength = 12
 
 func GenerateLogo(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -41,6 +47,20 @@ func GenerateLogo(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc ser
 			Details string `json:"details"`
 		}
 		_ = c.ShouldBindJSON(&req)
+
+		// Reject calls without a meaningful brand tone — the UI gate is
+		// the friendlier first line of defense, this is the contract
+		// at the API boundary so a stale client / curl probe can't
+		// burn a Gemini credit on an empty prompt.
+		details := strings.TrimSpace(req.Details)
+		if len([]rune(details)) < minLogoDetailsLength {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "describa su negocio (mínimo 12 caracteres) para que la IA acierte",
+				"error_code": "logo_details_required",
+			})
+			return
+		}
+		req.Details = details
 
 		// Fallback to tenant data if not provided
 		if req.BusinessName == "" || req.BusinessType == "" {
