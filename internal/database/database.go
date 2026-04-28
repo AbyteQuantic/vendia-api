@@ -103,6 +103,10 @@ func Migrate(db *gorm.DB) error {
 		&models.PartialPayment{},
 		&models.AIUsageLog{},
 		&models.SubscriptionPayment{},
+		// Cart-session lock (2026-04-28): tracks who is currently
+		// editing each POS cart slot so a second device can't
+		// stomp the cashier's work in real time.
+		&models.CartSession{},
 	)
 	if err != nil {
 		return err

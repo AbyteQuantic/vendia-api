@@ -396,6 +396,14 @@ func main() {
 		v1.GET("/support/tickets", handlers.ListTenantTickets(db))
 		v1.GET("/support/tickets/:id", handlers.GetTenantTicket(db))
 		v1.POST("/support/tickets/:id/messages", handlers.AddTenantMessage(db))
+
+		// Cart-session locks — surface which device is holding each
+		// POS cart slot so multi-employee tenants don't race on the
+		// same cuenta. See handlers/cart_sessions.go.
+		v1.GET("/carts/sessions", handlers.ListCartSessions(db))
+		v1.POST("/carts/sessions/claim", handlers.ClaimCartSession(db))
+		v1.POST("/carts/sessions/heartbeat", handlers.HeartbeatCartSession(db))
+		v1.POST("/carts/sessions/release", handlers.ReleaseCartSession(db))
 	}
 
 	// ── Premium routes (JWT + PremiumAuth: TRIAL activo o PRO_ACTIVE) ────────
