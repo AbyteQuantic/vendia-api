@@ -276,31 +276,50 @@ type LogoResult struct {
 // clips the subject.
 func (s *GeminiService) GenerateLogo(
 	ctx context.Context,
-	businessName, businessType string,
+	businessName, businessType, details string,
 ) ([]LogoResult, error) {
 	industryHint := industryIconHint(businessType)
 	typeLabel := businessTypeLabel(businessType)
+
+	// Brand-tone line. When the merchant wrote a description in the
+	// onboarding logo step ("vendo helados artesanales con sabores de
+	// frutas") we fold it in verbatim so the model picks symbology /
+	// palette accents matching what they actually sell. Empty string
+	// → omit the line entirely so the rubro hint stays the dominant
+	// signal.
+	detailsLine := ""
+	details = strings.TrimSpace(details)
+	if details != "" {
+		// Cap at 240 chars — same as the client UI — so a malicious
+		// caller can't pad the prompt with thousands of tokens.
+		if len(details) > 240 {
+			details = details[:240]
+		}
+		detailsLine = fmt.Sprintf(`
+- Owner's brand tone (verbatim — fold into the symbol choice and palette accents): "%s"`,
+			details)
+	}
 
 	prompt := fmt.Sprintf(`Generate a single, professional, BRAND LOGO for a small business in Colombia. Output: a 1024x1024 square image, suitable as a mobile app icon, WhatsApp avatar, and public-catalog hero.
 
 BUSINESS CONTEXT
 - Brand name: "%s"
-- Industry: %s
+- Industry: %s%s
 - Audience: adults 50+ running an informal neighbourhood business in Latin America. The logo must read as TRUSTED and HONEST, not flashy or trendy.
 
 UI/UX DESIGN REQUIREMENTS (mandatory — violations are unacceptable)
 1. STYLE: Flat vector illustration. Geometric, modern, minimalist. NO photorealism, NO 3D, NO gradients, NO drop shadows, NO film grain, NO sketchy lines.
-2. COLOR PALETTE: 2 to 3 colours maximum (subject + accent + background). Bold and saturated, NOT pastel. Pick a warm, professional combination — examples that work: deep indigo + warm cream, terracotta + ivory, charcoal + mustard, sage green + bone, navy + amber.
+2. COLOR PALETTE: 2 to 3 colours maximum (subject + accent + background). Bold and saturated, NOT pastel. Pick a warm, professional combination — examples that work: deep indigo + warm cream, terracotta + ivory, charcoal + mustard, sage green + bone, navy + amber. If the owner mentioned a colour preference in the brand-tone line above, weight the palette toward it.
 3. BACKGROUND: SOLID single colour or pure white (#FFFFFF). NEVER transparent, NEVER gradient, NEVER patterned, NEVER textured paper.
 4. COMPOSITION: Subject perfectly centred. Reserve 10-15%% safe-area padding on all four sides so a circular crop never amputates the subject. Balance positive and negative space.
 5. NO TEXT WHATSOEVER. No letters, no words, no logograms, no monograms, no decorative typography. The model renders text poorly and any garbled glyph would destroy the brand. The brand name appears alongside the logo in the app — the logo itself is purely a symbol.
-6. SUBJECT: A SINGLE, recognisable iconographic mark for the industry. %s
+6. SUBJECT: A SINGLE, recognisable iconographic mark. %s If the brand-tone line mentions a specific product (e.g. "helados", "ropa de niños", "panadería con horno de leña"), bias the symbol toward that product over the generic industry icon — that's what makes THIS business different.
 7. SCALABILITY: Must remain instantly recognisable at 24px (app icon size) AND impressive at 512px (catalog header). Avoid any detail finer than 1/40th of the canvas.
 8. STROKE WEIGHTS: Consistent. If using outlines, all strokes should share one of at most two thicknesses.
 
 OUTPUT
 Return ONLY the image. No watermarks, no text overlays, no signatures, no annotations, no border frames.`,
-		businessName, typeLabel, industryHint)
+		businessName, typeLabel, detailsLine, industryHint)
 
 	results, err := s.callImageGeneration(ctx, models.AIFeatureLogoGen, prompt, 1)
 	if err != nil {

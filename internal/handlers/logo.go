@@ -29,10 +29,16 @@ func GenerateLogo(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc ser
 			return
 		}
 
-		// Accept JSON body with business_name / business_type
+		// Accept JSON body with business_name / business_type / details
 		var req struct {
 			BusinessName string `json:"business_name"`
 			BusinessType string `json:"business_type"`
+			// Details — free-text the merchant typed in the onboarding
+			// logo step describing what makes their business special.
+			// Folded into the IA prompt as a "Brand tone" line so the
+			// model picks symbology / palette accents that match what
+			// they actually sell, instead of a generic rubro icon.
+			Details string `json:"details"`
 		}
 		_ = c.ShouldBindJSON(&req)
 
@@ -57,7 +63,8 @@ func GenerateLogo(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc ser
 		)
 		defer cancel()
 
-		logos, err := geminiSvc.GenerateLogo(ctx, req.BusinessName, req.BusinessType)
+		logos, err := geminiSvc.GenerateLogo(ctx,
+			req.BusinessName, req.BusinessType, req.Details)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al generar logo: %v", err)})
 			return
