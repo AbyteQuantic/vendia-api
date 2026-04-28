@@ -145,6 +145,14 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		Name              *string  `json:"name"`
 		Price             *float64 `json:"price"`
 		Stock             *int     `json:"stock"`
+		// Barcode was missing from this struct, so PATCH /products/:id
+		// silently dropped the field. Two real workflows broke because
+		// of it: (1) "Crear producto" via the scanner flow that pre-fills
+		// the SKU but PATCHes after the IA-photo step (the product ended
+		// up with an empty barcode column), (2) the cashier-side
+		// "asociar código a un producto existente" recovery action.
+		// Both depend on this column being writable.
+		Barcode           *string  `json:"barcode"`
 		CatalogImageID    *string  `json:"catalog_image_id"`
 		IsAvailable       *bool    `json:"is_available"`
 		RequiresContainer *bool    `json:"requires_container"`
@@ -181,6 +189,9 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		}
 		if req.Stock != nil {
 			updates["stock"] = *req.Stock
+		}
+		if req.Barcode != nil {
+			updates["barcode"] = strings.TrimSpace(*req.Barcode)
 		}
 		if req.IsAvailable != nil {
 			updates["is_available"] = *req.IsAvailable
