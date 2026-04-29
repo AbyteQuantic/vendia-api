@@ -261,10 +261,9 @@ type LogoResult struct {
 }
 
 // GenerateLogo asks Gemini for a single brand mark for a small
-// Colombian business. The prompt is intentionally prescriptive — the
-// model is good at rendering shapes and bad at rendering text + 3D
-// effects, so we steer it hard toward flat vector iconography that
-// works as a 24px app icon AND a 512px hero on the public catalog.
+// Colombian business. The prompt steers toward premium 3D-rendered
+// icons with realistic materials (metal, enamel, glass, wood) that
+// look professional at both 24px app-icon and 512px storefront sizes.
 //
 // The output lands in `store-logos`/Cloudflare R2 (handler side) and
 // must therefore be square, on a solid background, with generous
@@ -319,21 +318,28 @@ BRAND IDENTITY MARKER: integrate the bold capital letter%s "%s" as a SUBTLE stru
 			ifPlural(len(runes) <= 5), marker)
 	}
 
-	// Single-paragraph "describe-the-picture" brief. Image generation
-	// models (Imagen / gemini-2.5-flash-image, a.k.a. Nano Banana 2)
-	// follow this format far better than multi-rule UI/UX checklists.
-	// Subject FIRST, identity marker SECOND, style rules LAST.
-	prompt := fmt.Sprintf(`A flat vector logo icon. Subject: %s. Render it as a single, centered pictogram filling about 60%%%% of the canvas, with generous padding all around so a circular crop never clips the subject.
+	// Professional 3D logo brief. Gemini image models (Nano Banana 2)
+	// respond well to concrete scene descriptions with material/lighting
+	// cues. Subject FIRST, style rules SECOND, identity marker LAST.
+	prompt := fmt.Sprintf(`A premium 3D-rendered logo icon for a real business. Subject: %s. Render it as a single, centered 3D object or sculptural emblem filling about 65%%%% of the canvas, with generous padding all around so a circular crop never clips the subject.
 
-Style: modern, minimalist, geometric flat-vector design. Bold solid colours, 2 to 3 colours total, high contrast. Examples of palettes that work: deep indigo + warm cream, terracotta + ivory, sage green + bone, charcoal + mustard, navy + amber. The background must be ONE solid colour — pure white or a single saturated tone — never transparent, never a gradient, never patterned.
+STYLE (critical — follow precisely):
+- Hyper-polished 3D render with studio lighting: one soft key light from the upper left, a subtle rim light on the right edge, and a gentle ambient fill.
+- Materials must feel REAL and tactile: brushed metal, glossy enamel, matte ceramic, polished wood, frosted glass, or embossed leather — pick the 1-2 materials that best match the business type.
+- Subtle depth: soft drop shadows beneath the icon, gentle ambient occlusion where surfaces meet, slight bevel on edges. The icon should feel like a physical badge you could pick up.
+- Rich but controlled palette: 2-3 colours maximum. Use saturated, professional tones — deep emerald, royal cobalt, warm amber, burgundy, charcoal, ivory, copper, or gold accents. Colour choices should DIRECTLY reflect the business identity (e.g. greens for organic/natural, warm reds for food, blues for trust/services).
+- Background: ONE solid colour — either pure white (#FFFFFF) or a deep matte tone that contrasts with the icon. Never transparent, never a gradient, never patterned.
+- The overall feel should be: Apple App Store featured icon quality — clean, modern, premium, instantly recognizable.
 
-The whole logo must be instantly readable at 24 pixels (mobile app icon size) and still look great at 512 pixels (storefront banner). Use consistent stroke weights. No photorealism. No 3D. No drop shadows. No textures.
-
-TEXT RULE: do NOT render any text, words, sentences, taglines, signatures, or watermarks. The ONLY exception is the brand-identity marker described below — a single short letterform woven into the symbol — and even that is optional. If you can't integrate it cleanly, fall back to a pure symbol.
+CRITICAL RULES:
+- The icon must be DIRECTLY related to what the business actually sells or does. A bakery gets bread/wheat, a key shop gets keys, a bar gets cocktails — NEVER generic abstract shapes.
+- Must be instantly readable at 24px (mobile app icon) and stunning at 512px (storefront banner).
+- Do NOT render any text, words, taglines, or watermarks. The ONLY exception is the brand-identity marker below — and even that is optional.
+- No flat vector art. No clipart. No cartoon style. No watercolour. Think premium product rendering.
 
 The brand is "%s", a small business in Colombia (%s).%s%s
 
-Output ONLY the finished logo image as a 1024x1024 square. No mockups, no signatures, no border frames, no watermarks.`,
+Output ONLY the finished logo as a 1024x1024 square image. No mockups, no frames, no signatures.`,
 		subject, businessName, businessTypeLabel(businessType), contextNote, identityHint)
 
 	results, err := s.callImageGeneration(ctx, models.AIFeatureLogoGen, prompt, 1)
@@ -388,37 +394,37 @@ func resolveLogoSubject(businessType, details string) string {
 		symbol   string
 	}
 	mapping := []kw{
-		{[]string{"helado", "ice cream", "nieve"}, "a stylised ice cream cone with a generous scoop"},
-		{[]string{"panaderia", "panadería", "pan ", "pasteleria", "pastelería", "reposteria", "repostería", "torta", "bakery"}, "a stylised loaf of bread or a wheat sheaf"},
-		{[]string{"cafe", "café", "tinto", "barista"}, "a stylised coffee cup with a steam wisp"},
-		{[]string{"pollo", "chicken", "broaster"}, "a stylised drumstick or a hen silhouette"},
-		{[]string{"hamburguesa", "burger"}, "a stylised hamburger silhouette"},
-		{[]string{"pizza"}, "a stylised pizza slice"},
-		{[]string{"jugo", "fruta", "smoothie", "juice"}, "a stylised glass with a fruit slice on the rim"},
-		{[]string{"licor", "cerveza", "bar", "ron", "aguardiente", "trago"}, "a stylised cocktail glass or beer bottle silhouette"},
-		{[]string{"flor", "florist", "ramo"}, "a stylised single flower or a small bouquet silhouette"},
-		{[]string{"mascota", "pet", "veterinaria"}, "a stylised dog or cat silhouette"},
-		{[]string{"libro", "papeleria", "papelería", "stationery"}, "a stylised open book and pencil pair"},
-		{[]string{"ropa", "moda", "boutique", "fashion"}, "a stylised hanger with a fashionable garment silhouette"},
-		{[]string{"llavero", "llave", "key"}, "a stylised key-ring with two crossed keys"},
-		{[]string{"accesori", "joyer", "joya"}, "a stylised gemstone or pendant silhouette"},
-		{[]string{"zapato", "calzado", "shoe", "tenis"}, "a stylised sneaker silhouette"},
-		{[]string{"juguete", "toy"}, "a stylised teddy bear or building-block silhouette"},
-		{[]string{"belleza", "salon", "salón", "peluquer", "barber"}, "a stylised pair of scissors and a comb"},
-		{[]string{"barbería", "barberia"}, "a stylised barber pole and razor"},
-		{[]string{"taller", "mecanic", "auto"}, "a stylised wrench and gear pair"},
-		{[]string{"tecnolog", "celular", "phone", "computad"}, "a stylised phone-and-charger or a circuit-leaf hybrid"},
-		{[]string{"farmaci", "drogu", "salud", "medic"}, "a stylised mortar-and-pestle or a green cross"},
-		{[]string{"verdura", "fruta", "vegetal", "organic"}, "a stylised basket of fresh produce"},
-		{[]string{"carne", "carnicer", "butcher"}, "a stylised cleaver and steak silhouette"},
-		{[]string{"queso", "lacte"}, "a stylised wedge of cheese with a milk drop"},
-		{[]string{"miel", "honey", "abeja"}, "a stylised honey jar with a honeycomb hexagon"},
-		{[]string{"costura", "modist", "sastre", "tailor", "ropa hecha"}, "a stylised needle threaded through cloth"},
-		{[]string{"madera", "carpinter", "muebles"}, "a stylised hammer crossed with a wood plank"},
-		{[]string{"jardin", "jardín", "planta", "vivero"}, "a stylised potted plant with a leaf accent"},
-		{[]string{"limpieza", "aseo", "cleaning"}, "a stylised spray bottle and a sparkle"},
-		{[]string{"helado artesanal"}, "a stylised artisanal ice cream cone with fruit accents"},
-		{[]string{"frutas naturales", "frutos"}, "a stylised cluster of three fruits"},
+		{[]string{"helado", "ice cream", "nieve"}, "a 3D ice cream cone with a glossy swirl scoop, waffle texture on the cone, and a drip of melted cream"},
+		{[]string{"panaderia", "panadería", "pan ", "pasteleria", "pastelería", "reposteria", "repostería", "torta", "bakery"}, "a 3D golden-crusted artisan bread loaf with a wheat sheaf, warm ceramic texture"},
+		{[]string{"cafe", "café", "tinto", "barista"}, "a 3D glossy ceramic coffee cup with realistic steam wisps and a coffee bean accent"},
+		{[]string{"pollo", "chicken", "broaster"}, "a 3D crispy golden fried chicken drumstick with realistic breading texture"},
+		{[]string{"hamburguesa", "burger"}, "a 3D gourmet hamburger with glossy bun, melted cheese, and fresh lettuce layers"},
+		{[]string{"pizza"}, "a 3D pizza slice with stretchy melted cheese, pepperoni, and a golden crust"},
+		{[]string{"jugo", "fruta", "smoothie", "juice"}, "a 3D frosted glass filled with vibrant juice and a fresh fruit slice on the rim"},
+		{[]string{"licor", "cerveza", "bar", "ron", "aguardiente", "trago"}, "a 3D elegant cocktail glass with ice cubes and a citrus garnish, polished glass material"},
+		{[]string{"flor", "florist", "ramo"}, "a 3D bouquet of roses and wildflowers with dewy petals and a wrapped stem"},
+		{[]string{"mascota", "pet", "veterinaria"}, "a 3D friendly dog and cat sitting together, soft fur texture, warm lighting"},
+		{[]string{"libro", "papeleria", "papelería", "stationery"}, "a 3D open hardcover book with a glossy pencil, embossed leather texture on the cover"},
+		{[]string{"ropa", "moda", "boutique", "fashion"}, "a 3D elegant dress on a polished chrome hanger, silk fabric draping naturally"},
+		{[]string{"llavero", "llave", "key"}, "a 3D ornate brass key-ring with two polished vintage keys crossed, metallic sheen and engraved details"},
+		{[]string{"accesori", "joyer", "joya"}, "a 3D sparkling gemstone pendant on a polished gold chain, faceted crystal reflections"},
+		{[]string{"zapato", "calzado", "shoe", "tenis"}, "a 3D premium sneaker with detailed stitching, rubber sole texture, and fabric mesh"},
+		{[]string{"juguete", "toy"}, "a 3D plush teddy bear with soft velvet texture and colourful building blocks beside it"},
+		{[]string{"belleza", "salon", "salón", "peluquer", "barber"}, "a 3D rose-gold scissors and a polished comb crossed elegantly, metallic sheen"},
+		{[]string{"barbería", "barberia"}, "a 3D classic barber pole with red-white-blue spirals and a chrome straight razor"},
+		{[]string{"taller", "mecanic", "auto"}, "a 3D chrome wrench and brushed-steel gear interlocked, industrial metallic finish"},
+		{[]string{"tecnolog", "celular", "phone", "computad"}, "a 3D sleek smartphone with a glowing screen and a circuit-board pattern accent"},
+		{[]string{"farmaci", "drogu", "salud", "medic"}, "a 3D marble mortar and pestle with a glowing green cross, clean medical aesthetic"},
+		{[]string{"verdura", "fruta", "vegetal", "organic"}, "a 3D woven basket overflowing with vibrant fresh produce — tomatoes, bananas, lettuce"},
+		{[]string{"carne", "carnicer", "butcher"}, "a 3D polished steel cleaver beside a premium marbled steak on a wooden cutting board"},
+		{[]string{"queso", "lacte"}, "a 3D golden wedge of aged cheese with realistic holes and a glossy milk drop"},
+		{[]string{"miel", "honey", "abeja"}, "a 3D glass honey jar with golden dripping honey and a honeycomb hexagon accent"},
+		{[]string{"costura", "modist", "sastre", "tailor", "ropa hecha"}, "a 3D silver sewing needle with thread looping through luxurious fabric"},
+		{[]string{"madera", "carpinter", "muebles"}, "a 3D polished hammer crossed with a wood plank showing natural grain texture"},
+		{[]string{"jardin", "jardín", "planta", "vivero"}, "a 3D terracotta pot with a lush green plant, detailed leaf veins and soil texture"},
+		{[]string{"limpieza", "aseo", "cleaning"}, "a 3D spray bottle with a sparkle burst effect and chrome nozzle"},
+		{[]string{"helado artesanal"}, "a 3D artisanal ice cream cone with fruit toppings, waffle texture, and a glossy glaze"},
+		{[]string{"frutas naturales", "frutos"}, "a 3D cluster of three tropical fruits with dewy skin and vibrant colours"},
 	}
 	for _, m := range mapping {
 		for _, k := range m.keywords {
@@ -452,25 +458,25 @@ func resolveLogoSubject(businessType, details string) string {
 func industryIconHint(businessType string) string {
 	switch businessType {
 	case "tienda_barrio":
-		return "a stylised neighbourhood corner storefront with a striped awning and a small basket of groceries in front"
+		return "a 3D miniature corner storefront with a striped awning, warm wooden shelves, and a small basket of groceries — brick and wood textures"
 	case "minimercado":
-		return "a stylised shopping cart filled with fresh produce silhouettes"
+		return "a 3D polished shopping cart filled with vibrant fresh produce, chrome metal cart with glossy fruits"
 	case "restaurante":
-		return "a stylised covered plate with steam wisps over a crossed fork and knife"
+		return "a 3D silver cloche lid lifting with steam wisps, crossed fork and knife in brushed steel beneath"
 	case "comidas_rapidas":
-		return "a stylised hamburger silhouette with a small lightning bolt accent"
+		return "a 3D gourmet burger with glossy bun and melted cheese, a small neon lightning bolt accent"
 	case "bar":
-		return "a stylised cocktail glass with an olive on a pick"
+		return "a 3D crystal cocktail glass with ice cubes, a citrus garnish, and polished glass reflections"
 	case "deposito_construccion":
-		return "a stylised hard hat resting on a wrench"
+		return "a 3D yellow hard hat resting on a chrome wrench, industrial textures with concrete and steel"
 	case "manufactura":
-		return "a stylised gear with three bold teeth"
+		return "a 3D brushed-steel gear mechanism with interlocking teeth, industrial metallic finish"
 	case "reparacion_muebles":
-		return "a stylised wrench and screwdriver crossed in an X"
+		return "a 3D chrome wrench and screwdriver crossed, with a polished wooden furniture accent"
 	case "emprendimiento_general":
-		return "a stylised rocket silhouette taking off"
+		return "a 3D sleek rocket with metallic body and flame exhaust, launching upward with energy trails"
 	default:
-		return "a clean abstract geometric mark of two interlocking shapes evoking a professional small business"
+		return "a 3D polished emblem of two interlocking geometric shapes in brushed metal and enamel, evoking a professional brand"
 	}
 }
 
