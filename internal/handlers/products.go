@@ -68,6 +68,29 @@ func ListProducts(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// LookupProductByBarcode searches across the ENTIRE tenant catalog
+// (no branch filter) for a product matching the given barcode. Used
+// by the barcode scanner in the POS — a cashier in branch A should
+// still find products that live in branch B so they can be added to
+// the cart or associated.
+func LookupProductByBarcode(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		code := c.Query("code")
+		if code == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "parámetro 'code' requerido"})
+			return
+		}
+		var product models.Product
+		err := db.Where("tenant_id = ? AND barcode = ?", tenantID, code).First(&product).Error
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "producto no encontrado con ese código"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": product})
+	}
+}
+
 func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.HandlerFunc {
 	type Request struct {
 		ID                string  `json:"id"`

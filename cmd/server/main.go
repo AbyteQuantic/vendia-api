@@ -210,6 +210,7 @@ func main() {
 
 		// Products
 		v1.GET("/products", handlers.ListProducts(db))
+		v1.GET("/products/by-barcode", handlers.LookupProductByBarcode(db))
 		v1.POST("/products", handlers.CreateProduct(db, catalogSvc))
 		v1.PATCH("/products/:id", handlers.UpdateProduct(db, catalogSvc))
 		v1.DELETE("/products/:id", handlers.DeleteProduct(db))
