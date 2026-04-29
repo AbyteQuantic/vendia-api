@@ -993,13 +993,20 @@ func (s *GeminiService) callImageGeneration(ctx context.Context, feature, prompt
 		return nil, fmt.Errorf("failed to read image gen response: %w", err)
 	}
 
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("gemini API returned %d: %s", resp.StatusCode, string(respBody[:min(len(respBody), 200)]))
+	}
+
 	var geminiResp geminiResponse
 	if err := json.Unmarshal(respBody, &geminiResp); err != nil {
 		return nil, fmt.Errorf("failed to parse image gen response: %w", err)
 	}
-	if geminiResp.Error == nil {
-		s.recordTokenUsage(ctx, feature, s.imageModel, &geminiResp)
+
+	if geminiResp.Error != nil {
+		return nil, fmt.Errorf("gemini error %d: %s", geminiResp.Error.Code, geminiResp.Error.Message)
 	}
+
+	s.recordTokenUsage(ctx, feature, s.imageModel, &geminiResp)
 
 	var results []LogoResult
 	for _, candidate := range geminiResp.Candidates {

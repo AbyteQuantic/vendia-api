@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -76,6 +77,10 @@ func ListProducts(db *gorm.DB) gin.HandlerFunc {
 func LookupProductByBarcode(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+		if tenantID == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "token sin tenant"})
+			return
+		}
 		code := c.Query("code")
 		if code == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "parámetro 'code' requerido"})
@@ -84,7 +89,11 @@ func LookupProductByBarcode(db *gorm.DB) gin.HandlerFunc {
 		var product models.Product
 		err := db.Where("tenant_id = ? AND barcode = ?", tenantID, code).First(&product).Error
 		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "producto no encontrado con ese código"})
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "producto no encontrado con ese código"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al buscar producto"})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"data": product})
