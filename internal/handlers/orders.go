@@ -95,9 +95,10 @@ func CreateOrder(db *gorm.DB) gin.HandlerFunc {
 func ListOrders(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+		scope := ResolveBranchScope(c, db)
 		status := c.Query("status")
 
-		query := db.Where("tenant_id = ?", tenantID)
+		query := ApplyBranchScope(db.Where("tenant_id = ?", tenantID), scope)
 		if status != "" {
 			query = query.Where("status = ?", status)
 		}
@@ -198,13 +199,14 @@ func UpdateOrderStatus(db *gorm.DB) gin.HandlerFunc {
 func OpenAccounts(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+		scope := ResolveBranchScope(c, db)
 
 		var orders []models.OrderTicket
-		if err := db.Preload("Items").
+		q := ApplyBranchScope(db.Preload("Items"), scope).
 			Where("tenant_id = ? AND status IN (?, ?, ?)", tenantID,
 				models.OrderStatusNuevo, models.OrderStatusPreparando, models.OrderStatusListo).
-			Order("created_at ASC").
-			Find(&orders).Error; err != nil {
+			Order("created_at ASC")
+		if err := q.Find(&orders).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al obtener cuentas abiertas"})
 			return
 		}

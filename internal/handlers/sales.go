@@ -315,6 +315,7 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 func TodayStats(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+		scope := ResolveBranchScope(c, db)
 
 		now := time.Now()
 		startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
@@ -323,14 +324,14 @@ func TodayStats(db *gorm.DB) gin.HandlerFunc {
 		var totalSales float64
 		var transactionCount int64
 
-		db.Model(&models.Sale{}).
+		ApplyBranchScope(db.Model(&models.Sale{}), scope).
 			Where("tenant_id = ? AND created_at >= ? AND deleted_at IS NULL", tenantID, startOfToday).
 			Count(&transactionCount).
 			Select("COALESCE(SUM(total), 0)").
 			Scan(&totalSales)
 
 		var yesterdaySales float64
-		db.Model(&models.Sale{}).
+		ApplyBranchScope(db.Model(&models.Sale{}), scope).
 			Where("tenant_id = ? AND created_at >= ? AND created_at < ? AND deleted_at IS NULL",
 				tenantID, startOfYesterday, startOfToday).
 			Select("COALESCE(SUM(total), 0)").

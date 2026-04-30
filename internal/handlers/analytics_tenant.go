@@ -14,36 +14,37 @@ import (
 func AnalyticsDashboard(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+		scope := ResolveBranchScope(c, db)
 
 		now := time.Now()
 		startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 
 		var totalSales float64
 		var transactionCount int64
-		db.Model(&models.Sale{}).
+		ApplyBranchScope(db.Model(&models.Sale{}), scope).
 			Where("tenant_id = ? AND created_at >= ? AND deleted_at IS NULL", tenantID, startOfToday).
 			Count(&transactionCount).
 			Select("COALESCE(SUM(total), 0)").
 			Scan(&totalSales)
 
 		var totalCredit float64
-		db.Model(&models.CreditAccount{}).
+		ApplyBranchScope(db.Model(&models.CreditAccount{}), scope).
 			Where("tenant_id = ? AND status IN ('open', 'partial')", tenantID).
 			Select("COALESCE(SUM(total_amount - paid_amount), 0)").
 			Scan(&totalCredit)
 
 		var productCount int64
-		db.Model(&models.Product{}).
+		ApplyBranchScope(db.Model(&models.Product{}), scope).
 			Where("tenant_id = ? AND is_available = true", tenantID).
 			Count(&productCount)
 
 		var lowStockCount int64
-		db.Model(&models.Product{}).
+		ApplyBranchScope(db.Model(&models.Product{}), scope).
 			Where("tenant_id = ? AND is_available = true AND stock <= min_stock AND min_stock > 0", tenantID).
 			Count(&lowStockCount)
 
 		var pendingOrders int64
-		db.Model(&models.OrderTicket{}).
+		ApplyBranchScope(db.Model(&models.OrderTicket{}), scope).
 			Where("tenant_id = ? AND status IN ('nuevo', 'preparando')", tenantID).
 			Count(&pendingOrders)
 
@@ -94,8 +95,9 @@ func FinancialSummary(db *gorm.DB) gin.HandlerFunc {
 		// in a closure keeps the WHERE clauses identical across slices
 		// — cheaper than re-typing the same predicates for each query
 		// and means a new filter only needs to be added once.
+		scope := ResolveBranchScope(c, db)
 		baseSales := func() *gorm.DB {
-			q := db.Model(&models.Sale{}).
+			q := ApplyBranchScope(db.Model(&models.Sale{}), scope).
 				Where("tenant_id = ? AND deleted_at IS NULL", tenantID).
 				Where("created_at >= ?", since)
 			// `until` is implied by the period upper bound for today
@@ -410,6 +412,7 @@ func weekdayLabel(dow int) string {
 func SalesHistoryByPeriod(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+		scope := ResolveBranchScope(c, db)
 		period := c.DefaultQuery("period", "today")
 		p := parsePagination(c)
 
@@ -425,12 +428,12 @@ func SalesHistoryByPeriod(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		var total int64
-		db.Model(&models.Sale{}).
+		ApplyBranchScope(db.Model(&models.Sale{}), scope).
 			Where("tenant_id = ? AND created_at >= ? AND deleted_at IS NULL", tenantID, since).
 			Count(&total)
 
 		var sales []models.Sale
-		db.Preload("Items").
+		ApplyBranchScope(db.Preload("Items"), scope).
 			Where("tenant_id = ? AND created_at >= ? AND deleted_at IS NULL", tenantID, since).
 			Order("created_at DESC").
 			Offset((p.Page - 1) * p.PerPage).
@@ -450,6 +453,7 @@ func SalesHistoryByPeriod(db *gorm.DB) gin.HandlerFunc {
 func ProductInsights(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+		scope := ResolveBranchScope(c, db)
 		period := c.DefaultQuery("period", "30d")
 
 		var since time.Time
@@ -474,7 +478,7 @@ func ProductInsights(db *gorm.DB) gin.HandlerFunc {
 			Stock     int     `json:"stock"`
 		}
 		var topSellers []TopSeller
-		db.Table("sale_items si").
+		qTop := db.Table("sale_items si").
 			Select(`si.product_id,
 				MAX(si.name) AS name,
 				SUM(si.quantity) AS quantity,
@@ -485,8 +489,11 @@ func ProductInsights(db *gorm.DB) gin.HandlerFunc {
 			Joins("LEFT JOIN products p ON p.id = si.product_id").
 			Where("s.tenant_id = ? AND s.created_at >= ? AND s.deleted_at IS NULL",
 				tenantID, since).
-			Where("si.product_id IS NOT NULL AND si.product_id <> ''").
-			Group("si.product_id").
+			Where("si.product_id IS NOT NULL AND si.product_id <> ''")
+		if scope.BranchID != "" {
+			qTop = qTop.Where("s.branch_id = ?", scope.BranchID)
+		}
+		qTop.Group("si.product_id").
 			Order("quantity DESC").
 			Limit(10).
 			Scan(&topSellers)
@@ -505,7 +512,7 @@ func ProductInsights(db *gorm.DB) gin.HandlerFunc {
 			LastSaleAt *string `json:"last_sale_at,omitempty"`
 		}
 		var slowMovers []SlowMover
-		db.Table("products p").
+		qSlow := db.Table("products p").
 			Select(`p.id AS product_id,
 				p.name,
 				p.stock,
@@ -519,8 +526,11 @@ func ProductInsights(db *gorm.DB) gin.HandlerFunc {
 				AND s.deleted_at IS NULL
 				AND s.created_at >= ?`, since).
 			Where("p.tenant_id = ? AND p.is_available = true AND p.deleted_at IS NULL AND p.stock > 0",
-				tenantID).
-			Group("p.id, p.name, p.stock, p.price, p.image_url").
+				tenantID)
+		if scope.BranchID != "" {
+			qSlow = qSlow.Where("p.branch_id = ?", scope.BranchID)
+		}
+		qSlow.Group("p.id, p.name, p.stock, p.price, p.image_url").
 			Having("COALESCE(SUM(si.quantity), 0) < 3").
 			Order("quantity ASC, p.updated_at ASC").
 			Limit(15).
@@ -540,7 +550,7 @@ func ProductInsights(db *gorm.DB) gin.HandlerFunc {
 		}
 		var expiring []Expiring
 		thirtyDaysAhead := time.Now().AddDate(0, 0, 30).Format("2006-01-02")
-		db.Table("products p").
+		qExp := db.Table("products p").
 			Select(`p.id AS product_id, p.name, p.stock, p.price,
 				COALESCE(p.purchase_price, 0) AS purchase_price,
 				COALESCE(p.image_url, '') AS image_url,
@@ -548,8 +558,11 @@ func ProductInsights(db *gorm.DB) gin.HandlerFunc {
 				EXTRACT(DAY FROM (p.expiry_date::timestamp - NOW()))::int AS days_left`).
 			Where("p.tenant_id = ? AND p.is_available = true AND p.deleted_at IS NULL AND p.stock > 0",
 				tenantID).
-			Where("p.expiry_date IS NOT NULL AND p.expiry_date <= ?", thirtyDaysAhead).
-			Order("p.expiry_date ASC").
+			Where("p.expiry_date IS NOT NULL AND p.expiry_date <= ?", thirtyDaysAhead)
+		if scope.BranchID != "" {
+			qExp = qExp.Where("p.branch_id = ?", scope.BranchID)
+		}
+		qExp.Order("p.expiry_date ASC").
 			Limit(20).
 			Scan(&expiring)
 
@@ -569,6 +582,7 @@ func ProductInsights(db *gorm.DB) gin.HandlerFunc {
 func TopProducts(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+		scope := ResolveBranchScope(c, db)
 		period := c.DefaultQuery("period", "7d")
 
 		var since time.Time
@@ -591,11 +605,14 @@ func TopProducts(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		var top []TopProduct
-		db.Model(&models.SaleItem{}).
+		q := db.Model(&models.SaleItem{}).
 			Select("sale_items.product_id, sale_items.name, SUM(sale_items.quantity) as quantity, SUM(sale_items.subtotal) as revenue").
 			Joins("JOIN sales ON sales.id = sale_items.sale_id").
-			Where("sales.tenant_id = ? AND sales.created_at >= ? AND sales.deleted_at IS NULL", tenantID, since).
-			Group("sale_items.product_id, sale_items.name").
+			Where("sales.tenant_id = ? AND sales.created_at >= ? AND sales.deleted_at IS NULL", tenantID, since)
+		if scope.BranchID != "" {
+			q = q.Where("sales.branch_id = ?", scope.BranchID)
+		}
+		q.Group("sale_items.product_id, sale_items.name").
 			Order("quantity DESC").
 			Limit(20).
 			Scan(&top)
@@ -607,14 +624,15 @@ func TopProducts(db *gorm.DB) gin.HandlerFunc {
 func PhotoCoverage(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+		scope := ResolveBranchScope(c, db)
 
 		var totalProducts int64
-		db.Model(&models.Product{}).
+		ApplyBranchScope(db.Model(&models.Product{}), scope).
 			Where("tenant_id = ? AND is_available = true", tenantID).
 			Count(&totalProducts)
 
 		var withPhoto int64
-		db.Model(&models.Product{}).
+		ApplyBranchScope(db.Model(&models.Product{}), scope).
 			Where("tenant_id = ? AND is_available = true AND (photo_url != '' OR image_url != '')", tenantID).
 			Count(&withPhoto)
 
@@ -637,6 +655,7 @@ func PhotoCoverage(db *gorm.DB) gin.HandlerFunc {
 func SalesByEmployee(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+		scope := ResolveBranchScope(c, db)
 
 		now := time.Now()
 		startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
@@ -649,7 +668,7 @@ func SalesByEmployee(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		var result []EmployeeSales
-		db.Model(&models.Sale{}).
+		ApplyBranchScope(db.Model(&models.Sale{}), scope).
 			Select("employee_uuid, employee_name, COUNT(*) as sale_count, SUM(total) as total_amount").
 			Where("tenant_id = ? AND created_at >= ? AND deleted_at IS NULL AND employee_uuid != ''",
 				tenantID, startOfToday).
@@ -664,32 +683,33 @@ func SalesByEmployee(db *gorm.DB) gin.HandlerFunc {
 func InventoryHealth(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+		scope := ResolveBranchScope(c, db)
 
 		var totalValue float64
-		db.Model(&models.Product{}).
+		ApplyBranchScope(db.Model(&models.Product{}), scope).
 			Where("tenant_id = ? AND is_available = true AND stock > 0", tenantID).
 			Select("COALESCE(SUM(purchase_price * stock), 0)").
 			Scan(&totalValue)
 
 		var totalRetailValue float64
-		db.Model(&models.Product{}).
+		ApplyBranchScope(db.Model(&models.Product{}), scope).
 			Where("tenant_id = ? AND is_available = true AND stock > 0", tenantID).
 			Select("COALESCE(SUM(price * stock), 0)").
 			Scan(&totalRetailValue)
 
 		var lowStockCount int64
-		db.Model(&models.Product{}).
+		ApplyBranchScope(db.Model(&models.Product{}), scope).
 			Where("tenant_id = ? AND is_available = true AND stock <= min_stock AND min_stock > 0", tenantID).
 			Count(&lowStockCount)
 
 		var outOfStockCount int64
-		db.Model(&models.Product{}).
+		ApplyBranchScope(db.Model(&models.Product{}), scope).
 			Where("tenant_id = ? AND is_available = true AND stock = 0", tenantID).
 			Count(&outOfStockCount)
 
 		sevenDays := time.Now().AddDate(0, 0, 7).Format("2006-01-02")
 		var expiringCount int64
-		db.Model(&models.Product{}).
+		ApplyBranchScope(db.Model(&models.Product{}), scope).
 			Where("tenant_id = ? AND is_available = true AND expiry_date IS NOT NULL AND expiry_date <= ?", tenantID, sevenDays).
 			Count(&expiringCount)
 
@@ -709,6 +729,7 @@ func InventoryHealth(db *gorm.DB) gin.HandlerFunc {
 func IngestionMethod(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+		scope := ResolveBranchScope(c, db)
 
 		type MethodCount struct {
 			Method string `json:"method"`
@@ -716,7 +737,7 @@ func IngestionMethod(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		var result []MethodCount
-		db.Model(&models.Product{}).
+		ApplyBranchScope(db.Model(&models.Product{}), scope).
 			Select("ingestion_method as method, COUNT(*) as count").
 			Where("tenant_id = ? AND is_available = true", tenantID).
 			Group("ingestion_method").

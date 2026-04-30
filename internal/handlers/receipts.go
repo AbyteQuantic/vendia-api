@@ -41,7 +41,8 @@ func SalesHistory(db *gorm.DB) gin.HandlerFunc {
 		source := c.Query("source")
 		query := c.Query("query")
 
-		dbQuery := db.Model(&models.Sale{}).Where("tenant_id = ?", tenantID)
+		scope := ResolveBranchScope(c, db)
+		dbQuery := ApplyBranchScope(db.Model(&models.Sale{}), scope).Where("tenant_id = ?", tenantID)
 
 		switch {
 		case dateStr != "":
