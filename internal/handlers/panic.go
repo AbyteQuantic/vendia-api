@@ -17,7 +17,8 @@ func GetPanicConfig(db *gorm.DB) gin.HandlerFunc {
 		tenantID := middleware.GetTenantID(c)
 
 		var tenant models.Tenant
-		if err := db.Select("panic_message").First(&tenant, "id = ?", tenantID).Error; err != nil {
+		if err := db.Select("panic_message, panic_include_address, panic_include_gps").
+			First(&tenant, "id = ?", tenantID).Error; err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "negocio no encontrado"})
 			return
 		}

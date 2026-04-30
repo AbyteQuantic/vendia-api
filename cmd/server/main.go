@@ -296,6 +296,7 @@ func main() {
 		v1.PATCH("/store/slug", handlers.UpdateStoreSlug(db))
 
 		// Panic button
+		v1.GET("/store/panic-config", handlers.GetPanicConfig(db))
 		v1.PATCH("/store/panic-config", handlers.UpdatePanicMessage(db))
 		v1.POST("/store/panic-config/contacts", handlers.CreateEmergencyContact(db))
 		v1.DELETE("/store/panic-config/contacts/:id", handlers.DeleteEmergencyContact(db))
