@@ -1,6 +1,7 @@
 package services
 
 import (
+	"fmt"
 	"strings"
 	"vendia-backend/internal/models"
 
@@ -84,9 +85,17 @@ func LogInventoryMovement(tx *gorm.DB, p MovementParams) error {
 	}
 
 	err := tx.Create(&mov).Error
-	// Idempotency: if the key already exists, silently skip the duplicate.
+	// Idempotency: if the key already exists, skip the duplicate and
+	// return ErrDuplicateMovement so the caller can also skip the
+	// stock update.
 	if err != nil && p.IdempotencyKey != nil && strings.Contains(err.Error(), "duplicate key") {
-		return nil
+		return ErrDuplicateMovement
 	}
 	return err
 }
+
+// ErrDuplicateMovement signals that a movement with the same
+// idempotency key already exists. Callers should skip the
+// corresponding stock update.
+var ErrDuplicateMovement = fmt.Errorf("movimiento duplicado ignorado")
+

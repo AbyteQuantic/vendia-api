@@ -198,16 +198,8 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 			}
 
 			if matched {
-				merchUpdates := map[string]any{
-					"stock":          gorm.Expr("stock + ?", pr.Quantity),
-					"purchase_price": pr.UnitPrice,
-				}
-				if expiryForDB != nil {
-					merchUpdates["expiry_date"] = *expiryForDB
-				}
-				db.Model(&existing).Updates(merchUpdates)
 				idempKey := fmt.Sprintf("%s:%s:%d", imageHash, existing.ID, pr.Quantity)
-				services.LogInventoryMovement(db, services.MovementParams{
+				err := services.LogInventoryMovement(db, services.MovementParams{
 					TenantID:       tenantID,
 					ProductID:      existing.ID,
 					ProductName:    existing.Name,
@@ -217,6 +209,21 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 					UserID:         middleware.UUIDPtr(middleware.GetUserID(c)),
 					IdempotencyKey: &idempKey,
 				})
+				if err == services.ErrDuplicateMovement {
+					// Same invoice scanned twice — skip stock update
+					pr.Status = "duplicado_ignorado"
+					products = append(products, pr)
+					continue
+				}
+				// Not a duplicate — apply stock update
+				merchUpdates := map[string]any{
+					"stock":          gorm.Expr("stock + ?", pr.Quantity),
+					"purchase_price": pr.UnitPrice,
+				}
+				if expiryForDB != nil {
+					merchUpdates["expiry_date"] = *expiryForDB
+				}
+				db.Model(&existing).Updates(merchUpdates)
 				pr.Status = "actualizado"
 				products = append(products, pr)
 				continue
