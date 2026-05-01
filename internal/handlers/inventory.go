@@ -98,8 +98,15 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 				expiryForResponse = *expiryForDB
 			}
 
+			// Append content to name so references don't look like duplicates
+			// e.g. "Coca Cola" + "1.5L" → "Coca Cola 1.5L"
+			displayName := p.Name
+			if p.Content != "" {
+				displayName += " " + p.Content
+			}
+
 			pr := ProductResult{
-				Name:         p.Name,
+				Name:         displayName,
 				Presentation: p.Presentation,
 				Content:      p.Content,
 				Quantity:     p.Quantity,
@@ -124,7 +131,7 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 			product := models.Product{
 				BaseModel:       models.BaseModel{ID: uuid.NewString()},
 				TenantID:        tenantID,
-				Name:            pr.Name,
+				Name:            displayName,
 				Presentation:    pr.Presentation,
 				Content:         pr.Content,
 				PurchasePrice:   pr.UnitPrice,
