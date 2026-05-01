@@ -13,7 +13,6 @@ import (
 	"vendia-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -50,8 +49,6 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 			return
 		}
 
-		imageHash := services.ImageIdempotencyKey(data)
-
 		ctx, cancel := context.WithTimeout(
 			aiusage.WithTenantID(c.Request.Context(), tenantID),
 			30*time.Second,
@@ -76,17 +73,20 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 		}
 
 		type ProductResult struct {
-			Name         string  `json:"name"`
-			Presentation string  `json:"presentation,omitempty"`
-			Content      string  `json:"content,omitempty"`
-			Quantity     int     `json:"quantity"`
-			UnitPrice    float64 `json:"unit_price"`
-			TotalPrice   float64 `json:"total_price"`
-			Barcode      string  `json:"barcode,omitempty"`
-			ImageURL     string  `json:"image_url,omitempty"`
-			ExpiryDate   string  `json:"expiry_date,omitempty"`
-			Confidence   float64 `json:"confidence"`
-			Status       string  `json:"status"`
+			Name           string  `json:"name"`
+			Presentation   string  `json:"presentation,omitempty"`
+			Content        string  `json:"content,omitempty"`
+			Quantity       int     `json:"quantity"`
+			UnitPrice      float64 `json:"unit_price"`
+			TotalPrice     float64 `json:"total_price"`
+			Barcode        string  `json:"barcode,omitempty"`
+			ImageURL       string  `json:"image_url,omitempty"`
+			ExpiryDate     string  `json:"expiry_date,omitempty"`
+			Confidence     float64 `json:"confidence"`
+			Status         string  `json:"status"`
+			MatchProductID string  `json:"match_product_id,omitempty"`
+			MatchMethod    string  `json:"match_method,omitempty"`
+			SupplierID     string  `json:"supplier_id,omitempty"`
 		}
 
 		// Auto-link supplier: if Gemini detected a provider name, try to
@@ -145,32 +145,17 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 				}
 			}
 
-			product := models.Product{
-				BaseModel:       models.BaseModel{ID: uuid.NewString()},
-				TenantID:        tenantID,
-				Name:            displayName,
-				Presentation:    pr.Presentation,
-				Content:         pr.Content,
-				PurchasePrice:   pr.UnitPrice,
-				Stock:           pr.Quantity,
-				Barcode:         pr.Barcode,
-				ImageURL:        pr.ImageURL,
-				ExpiryDate:      expiryForDB,
-				IsAvailable:     true,
-				IngestionMethod: "ia_factura",
-				PriceStatus:     "pending",
-				SupplierID:      matchedSupplierID,
-			}
-
-			// 3-level dedup: barcode > normalized name > fuzzy
+			// 3-level dedup: return match info without modifying DB
 			var existing models.Product
 			matched := false
+			matchMethod := ""
 
 			// Level 1: barcode exact
 			if pr.Barcode != "" {
 				if err := db.Where("barcode = ? AND tenant_id = ?", pr.Barcode, tenantID).
 					First(&existing).Error; err == nil {
 					matched = true
+					matchMethod = "barcode"
 				}
 			}
 
@@ -188,12 +173,13 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 					if cKey == normKey {
 						existing = cand
 						matched = true
+						matchMethod = "normalized"
 						break
 					}
 				}
 			}
 
-			// Level 3: pg_trgm fuzzy (threshold 0.6 to avoid false merges)
+			// Level 3: pg_trgm fuzzy
 			if !matched && displayName != "" {
 				normName := services.NormalizeText(displayName)
 				var fuzzy struct {
@@ -210,58 +196,22 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 				`, normName, tenantID, normName).Scan(&fuzzy).Error; err == nil && fuzzy.Product.ID != "" {
 					existing = fuzzy.Product
 					matched = true
+					matchMethod = "fuzzy"
 				}
 			}
 
 			if matched {
-				idempKey := fmt.Sprintf("%s:%s:%d", imageHash, existing.ID, pr.Quantity)
-				err := services.LogInventoryMovement(db, services.MovementParams{
-					TenantID:       tenantID,
-					ProductID:      existing.ID,
-					ProductName:    existing.Name,
-					MovementType:   models.MovementInvoiceScan,
-					Quantity:       pr.Quantity,
-					ReferenceType:  "invoice",
-					UserID:         middleware.UUIDPtr(middleware.GetUserID(c)),
-					IdempotencyKey: &idempKey,
-				})
-				if err == services.ErrDuplicateMovement {
-					// Same invoice scanned twice — skip stock update
-					pr.Status = "duplicado_ignorado"
-					products = append(products, pr)
-					continue
-				}
-				// Not a duplicate — apply stock update
-				merchUpdates := map[string]any{
-					"stock":          gorm.Expr("stock + ?", pr.Quantity),
-					"purchase_price": pr.UnitPrice,
-				}
-				if expiryForDB != nil {
-					merchUpdates["expiry_date"] = *expiryForDB
-				}
-				// Link supplier if not already set
-				if matchedSupplierID != nil && (existing.SupplierID == nil || *existing.SupplierID == "") {
-					merchUpdates["supplier_id"] = *matchedSupplierID
-				}
-				db.Model(&existing).Updates(merchUpdates)
-				pr.Status = "actualizado"
-				products = append(products, pr)
-				continue
+				pr.Status = "match_encontrado"
+				pr.MatchProductID = existing.ID
+				pr.MatchMethod = matchMethod
+			} else {
+				pr.Status = "nuevo"
 			}
-
-			db.Create(&product)
-			idempKeyNew := fmt.Sprintf("%s:new:%s", imageHash, product.ID)
-			services.LogInventoryMovement(db, services.MovementParams{
-				TenantID:       tenantID,
-				ProductID:      product.ID,
-				ProductName:    product.Name,
-				MovementType:   models.MovementInvoiceScan,
-				Quantity:       pr.Quantity,
-				ReferenceType:  "invoice",
-				UserID:         middleware.UUIDPtr(middleware.GetUserID(c)),
-				IdempotencyKey: &idempKeyNew,
-			})
+			if matchedSupplierID != nil {
+				pr.SupplierID = *matchedSupplierID
+			}
 			products = append(products, pr)
+
 
 		}
 
