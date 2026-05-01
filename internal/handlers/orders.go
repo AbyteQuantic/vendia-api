@@ -240,20 +240,20 @@ func OpenAccounts(db *gorm.DB) gin.HandlerFunc {
 			orderIDs[i] = o.ID
 		}
 		type PaidSum struct {
-			OrderTicketID string  `gorm:"column:order_ticket_id"`
-			Paid          float64 `gorm:"column:paid"`
+			OrderID string  `gorm:"column:order_id"`
+			Paid    float64 `gorm:"column:paid"`
 		}
 		var sums []PaidSum
 		if len(orderIDs) > 0 {
 			db.Model(&models.PartialPayment{}).
-				Select("order_ticket_id, COALESCE(SUM(amount), 0) AS paid").
-				Where("order_ticket_id IN ? AND status = 'APPROVED'", orderIDs).
-				Group("order_ticket_id").
+				Select("order_id, COALESCE(SUM(amount), 0) AS paid").
+				Where("order_id IN ? AND status = 'APPROVED'", orderIDs).
+				Group("order_id").
 				Scan(&sums)
 		}
 		paidMap := map[string]float64{}
 		for _, s := range sums {
-			paidMap[s.OrderTicketID] = s.Paid
+			paidMap[s.OrderID] = s.Paid
 		}
 
 		type OrderWithBalance struct {
