@@ -237,6 +237,7 @@ func main() {
 		v1.GET("/inventory/kardex", handlers.ProductKardex(db))
 		v1.GET("/inventory/report", handlers.InventoryReport(db))
 		v1.POST("/inventory/match-products", handlers.MatchProductsHandler(db))
+		v1.GET("/inventory/reorder-suggestions", handlers.ReorderSuggestions(db))
 
 		// Sales (POS)
 		v1.POST("/sales", handlers.CreateSale(db))

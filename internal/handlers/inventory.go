@@ -89,6 +89,21 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 			Status       string  `json:"status"`
 		}
 
+		// Auto-link supplier: if Gemini detected a provider name, try to
+		// match it against existing suppliers so new products get supplier_id.
+		var matchedSupplierID *string
+		if result.Provider != "" && result.Provider != "Desconocido" {
+			normProvider := services.NormalizeText(result.Provider)
+			var suppliers []models.Supplier
+			db.Where("tenant_id = ?", tenantID).Find(&suppliers)
+			for _, s := range suppliers {
+				if services.NormalizeText(s.CompanyName) == normProvider {
+					matchedSupplierID = &s.ID
+					break
+				}
+			}
+		}
+
 		var products []ProductResult
 		for _, p := range result.Products {
 			// Validate the expiry_date that Gemini extracted. Bad formats
@@ -144,6 +159,7 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 				IsAvailable:     true,
 				IngestionMethod: "ia_factura",
 				PriceStatus:     "pending",
+				SupplierID:      matchedSupplierID,
 			}
 
 			// 3-level dedup: barcode > normalized name > fuzzy
@@ -222,6 +238,10 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 				}
 				if expiryForDB != nil {
 					merchUpdates["expiry_date"] = *expiryForDB
+				}
+				// Link supplier if not already set
+				if matchedSupplierID != nil && (existing.SupplierID == nil || *existing.SupplierID == "") {
+					merchUpdates["supplier_id"] = *matchedSupplierID
 				}
 				db.Model(&existing).Updates(merchUpdates)
 				pr.Status = "actualizado"
@@ -679,16 +699,148 @@ func SetProductPrice(db *gorm.DB) gin.HandlerFunc {
 func InventoryAlerts(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+		scope := ResolveBranchScope(c, db)
 
 		var products []models.Product
-		if err := db.Where("tenant_id = ? AND is_available = true AND stock <= min_stock AND min_stock > 0", tenantID).
-			Order("stock ASC").
-			Find(&products).Error; err != nil {
+		q := db.Where("tenant_id = ? AND is_available = true AND stock <= min_stock AND min_stock > 0", tenantID)
+		q = ApplyBranchScope(q, scope)
+		if err := q.Order("stock ASC").Find(&products).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al obtener alertas"})
 			return
 		}
 
-		c.JSON(http.StatusOK, gin.H{"data": products})
+		// Collect supplier IDs to batch-load names
+		supplierIDs := map[string]bool{}
+		for _, p := range products {
+			if p.SupplierID != nil && *p.SupplierID != "" {
+				supplierIDs[*p.SupplierID] = true
+			}
+		}
+		supplierMap := map[string]models.Supplier{}
+		if len(supplierIDs) > 0 {
+			ids := make([]string, 0, len(supplierIDs))
+			for id := range supplierIDs {
+				ids = append(ids, id)
+			}
+			var suppliers []models.Supplier
+			db.Where("id IN ?", ids).Find(&suppliers)
+			for _, s := range suppliers {
+				supplierMap[s.ID] = s
+			}
+		}
+
+		type AlertItem struct {
+			models.Product
+			SupplierName  string `json:"supplier_name,omitempty"`
+			SupplierPhone string `json:"supplier_phone,omitempty"`
+			SupplierEmoji string `json:"supplier_emoji,omitempty"`
+		}
+
+		items := make([]AlertItem, 0, len(products))
+		for _, p := range products {
+			item := AlertItem{Product: p}
+			if p.SupplierID != nil {
+				if s, ok := supplierMap[*p.SupplierID]; ok {
+					item.SupplierName = s.CompanyName
+					item.SupplierPhone = s.Phone
+					item.SupplierEmoji = s.Emoji
+				}
+			}
+			items = append(items, item)
+		}
+
+		c.JSON(http.StatusOK, gin.H{"data": items})
+	}
+}
+
+// ReorderSuggestions groups low-stock products by supplier for easy
+// one-tap ordering. Products without a supplier go into an "unlinked" group.
+// GET /api/v1/inventory/reorder-suggestions
+func ReorderSuggestions(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		scope := ResolveBranchScope(c, db)
+
+		var products []models.Product
+		q := db.Where("tenant_id = ? AND is_available = true AND stock <= min_stock AND min_stock > 0", tenantID)
+		q = ApplyBranchScope(q, scope)
+		if err := q.Order("stock ASC").Find(&products).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al obtener sugerencias"})
+			return
+		}
+
+		// Load all suppliers for this tenant
+		var suppliers []models.Supplier
+		db.Where("tenant_id = ?", tenantID).Find(&suppliers)
+		supplierMap := map[string]models.Supplier{}
+		for _, s := range suppliers {
+			supplierMap[s.ID] = s
+		}
+
+		type ProductLine struct {
+			ID           string `json:"id"`
+			Name         string `json:"name"`
+			Stock        int    `json:"stock"`
+			MinStock     int    `json:"min_stock"`
+			SuggestOrder int    `json:"suggest_order"` // min_stock - stock (how many to reorder)
+		}
+		type SupplierGroup struct {
+			SupplierID    string        `json:"supplier_id"`
+			SupplierName  string        `json:"supplier_name"`
+			SupplierPhone string        `json:"supplier_phone"`
+			SupplierEmoji string        `json:"supplier_emoji"`
+			Products      []ProductLine `json:"products"`
+			TotalItems    int           `json:"total_items"`
+		}
+
+		groups := map[string]*SupplierGroup{}
+		unlinked := &SupplierGroup{
+			SupplierName: "Sin proveedor asignado",
+		}
+
+		for _, p := range products {
+			line := ProductLine{
+				ID:           p.ID,
+				Name:         p.Name,
+				Stock:        p.Stock,
+				MinStock:     p.MinStock,
+				SuggestOrder: p.MinStock - p.Stock,
+			}
+			if line.SuggestOrder < 1 {
+				line.SuggestOrder = 1
+			}
+
+			sid := ""
+			if p.SupplierID != nil {
+				sid = *p.SupplierID
+			}
+			if sid != "" {
+				if _, ok := groups[sid]; !ok {
+					s := supplierMap[sid]
+					groups[sid] = &SupplierGroup{
+						SupplierID:    s.ID,
+						SupplierName:  s.CompanyName,
+						SupplierPhone: s.Phone,
+						SupplierEmoji: s.Emoji,
+					}
+				}
+				groups[sid].Products = append(groups[sid].Products, line)
+				groups[sid].TotalItems += line.SuggestOrder
+			} else {
+				unlinked.Products = append(unlinked.Products, line)
+				unlinked.TotalItems += line.SuggestOrder
+			}
+		}
+
+		result := make([]SupplierGroup, 0, len(groups)+1)
+		for _, g := range groups {
+			result = append(result, *g)
+		}
+		if len(unlinked.Products) > 0 {
+			result = append(result, *unlinked)
+		}
+
+		c.JSON(http.StatusOK, gin.H{"data": result})
 	}
 }
 
