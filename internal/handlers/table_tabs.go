@@ -257,6 +257,191 @@ func UpsertTableTab(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// AddItemsToTableTab serves POST /api/v1/tables/tab/add-items.
+// Accumulate-only: appends items to an existing open tab without
+// removing anything. If the product already exists in the tab, its
+// quantity is incremented. Creates the tab if none exists.
+func AddItemsToTableTab(db *gorm.DB) gin.HandlerFunc {
+	type ItemRequest struct {
+		ProductUUID string  `json:"product_uuid" binding:"required"`
+		ProductName string  `json:"product_name" binding:"required"`
+		Quantity    int     `json:"quantity"      binding:"required,min=1"`
+		UnitPrice   float64 `json:"unit_price"    binding:"required,gt=0"`
+	}
+	type Request struct {
+		Label        string        `json:"label"  binding:"required"`
+		Items        []ItemRequest `json:"items"  binding:"required"`
+		CustomerName string        `json:"customer_name"`
+		EmployeeName string        `json:"employee_name"`
+	}
+
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		userID := middleware.GetUserID(c)
+		branchID := middleware.GetBranchID(c)
+
+		var req Request
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		label := strings.TrimSpace(req.Label)
+		if label == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "label vacío"})
+			return
+		}
+
+		var result models.OrderTicket
+		txErr := db.Transaction(func(tx *gorm.DB) error {
+			var existing models.OrderTicket
+			err := tx.Set("gorm:query_option", "FOR UPDATE").
+				Preload("Items").
+				Where("tenant_id = ? AND label = ? AND status IN ?",
+					tenantID, label, []models.OrderStatus{
+						models.OrderStatusNuevo,
+						models.OrderStatusPreparando,
+						models.OrderStatusListo,
+					}).
+				Order("created_at DESC").
+				First(&existing).Error
+
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				// No open tab — create one with these items
+				var items []models.OrderItem
+				var total float64
+				for _, it := range req.Items {
+					total += it.UnitPrice * float64(it.Quantity)
+					items = append(items, models.OrderItem{
+						ProductUUID: it.ProductUUID,
+						ProductName: it.ProductName,
+						Quantity:    it.Quantity,
+						UnitPrice:   it.UnitPrice,
+					})
+				}
+				created := models.OrderTicket{
+					TenantID:     tenantID,
+					CreatedBy:    middleware.UUIDPtr(userID),
+					BranchID:     middleware.UUIDPtr(branchID),
+					Label:        label,
+					CustomerName: req.CustomerName,
+					EmployeeName: req.EmployeeName,
+					Status:       models.OrderStatusNuevo,
+					Type:         models.OrderTypeMesa,
+					Total:        total,
+					Items:        items,
+				}
+				if err := tx.Create(&created).Error; err != nil {
+					return err
+				}
+				for _, it := range items {
+					if it.ProductUUID != "" && it.Quantity > 0 {
+						services.LogInventoryMovement(tx, services.MovementParams{
+							TenantID:      tenantID,
+							BranchID:      middleware.UUIDPtr(branchID),
+							ProductID:     it.ProductUUID,
+							ProductName:   it.ProductName,
+							MovementType:  models.MovementTableTab,
+							Quantity:      -it.Quantity,
+							ReferenceID:   &created.ID,
+							ReferenceType: "order",
+							UserID:        middleware.UUIDPtr(userID),
+						})
+						tx.Model(&models.Product{}).
+							Where("id = ? AND tenant_id = ?", it.ProductUUID, tenantID).
+							UpdateColumn("stock", gorm.Expr("GREATEST(stock - ?, 0)", it.Quantity))
+					}
+				}
+				result = created
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+
+			// Existing tab — accumulate items
+			// Build map of existing quantities
+			existingQty := map[string]int{}
+			for _, oi := range existing.Items {
+				existingQty[oi.ProductUUID] += oi.Quantity
+			}
+
+			var addedTotal float64
+			for _, it := range req.Items {
+				addedTotal += it.UnitPrice * float64(it.Quantity)
+
+				// Check if product already in the tab
+				found := false
+				for idx, oi := range existing.Items {
+					if oi.ProductUUID == it.ProductUUID {
+						// Increment quantity on existing row
+						newQty := oi.Quantity + it.Quantity
+						tx.Model(&existing.Items[idx]).Update("quantity", newQty)
+						found = true
+						break
+					}
+				}
+				if !found {
+					// Add new item row
+					newItem := models.OrderItem{
+						OrderUUID:   existing.ID,
+						ProductUUID: it.ProductUUID,
+						ProductName: it.ProductName,
+						Quantity:    it.Quantity,
+						UnitPrice:   it.UnitPrice,
+					}
+					tx.Create(&newItem)
+				}
+
+				// Deduct stock for the added quantity
+				if it.ProductUUID != "" && it.Quantity > 0 {
+					services.LogInventoryMovement(tx, services.MovementParams{
+						TenantID:      tenantID,
+						BranchID:      middleware.UUIDPtr(branchID),
+						ProductID:     it.ProductUUID,
+						ProductName:   it.ProductName,
+						MovementType:  models.MovementTableTab,
+						Quantity:      -it.Quantity,
+						ReferenceID:   &existing.ID,
+						ReferenceType: "order",
+						UserID:        middleware.UUIDPtr(userID),
+					})
+					tx.Model(&models.Product{}).
+						Where("id = ? AND tenant_id = ?", it.ProductUUID, tenantID).
+						UpdateColumn("stock", gorm.Expr("GREATEST(stock - ?, 0)", it.Quantity))
+				}
+			}
+
+			// Update total
+			tx.Model(&existing).Update("total", existing.Total+addedTotal)
+
+			// Reload
+			tx.Preload("Items").First(&existing, "id = ?", existing.ID)
+			result = existing
+			return nil
+		})
+
+		if txErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":  "no se pudo agregar items",
+				"detail": txErr.Error(),
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"data": gin.H{
+				"order_id":      result.ID,
+				"session_token": result.SessionToken,
+				"label":         result.Label,
+				"status":        result.Status,
+				"total":         result.Total,
+				"type":          result.Type,
+				"items":         result.Items,
+			},
+		})
+	}
+}
+
 // GetTableTab serves GET /api/v1/tables/tab/:label.
 func GetTableTab(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {

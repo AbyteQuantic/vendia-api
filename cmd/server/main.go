@@ -287,6 +287,7 @@ func main() {
 		// stable session_token across rounds. See handlers/
 		// table_tabs.go for the full rationale.
 		v1.PUT("/tables/tab", handlers.UpsertTableTab(db))
+		v1.POST("/tables/tab/add-items", handlers.AddItemsToTableTab(db))
 		v1.GET("/tables/tab/:label", handlers.GetTableTab(db))
 
 		// Notifications
