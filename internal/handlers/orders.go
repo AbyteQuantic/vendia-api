@@ -233,7 +233,45 @@ func OpenAccounts(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		c.JSON(http.StatusOK, gin.H{"data": orders})
+		// Enrich with paid_amount so the POS banner shows the real
+		// outstanding balance (total - abonos) instead of the gross total.
+		orderIDs := make([]string, len(orders))
+		for i, o := range orders {
+			orderIDs[i] = o.ID
+		}
+		type PaidSum struct {
+			OrderTicketID string  `gorm:"column:order_ticket_id"`
+			Paid          float64 `gorm:"column:paid"`
+		}
+		var sums []PaidSum
+		if len(orderIDs) > 0 {
+			db.Model(&models.PartialPayment{}).
+				Select("order_ticket_id, COALESCE(SUM(amount), 0) AS paid").
+				Where("order_ticket_id IN ? AND status = 'APPROVED'", orderIDs).
+				Group("order_ticket_id").
+				Scan(&sums)
+		}
+		paidMap := map[string]float64{}
+		for _, s := range sums {
+			paidMap[s.OrderTicketID] = s.Paid
+		}
+
+		type OrderWithBalance struct {
+			models.OrderTicket
+			PaidAmount     float64 `json:"paid_amount"`
+			PendingBalance float64 `json:"pending_balance"`
+		}
+		result := make([]OrderWithBalance, len(orders))
+		for i, o := range orders {
+			paid := paidMap[o.ID]
+			result[i] = OrderWithBalance{
+				OrderTicket:    o,
+				PaidAmount:     paid,
+				PendingBalance: o.Total - paid,
+			}
+		}
+
+		c.JSON(http.StatusOK, gin.H{"data": result})
 	}
 }
 
