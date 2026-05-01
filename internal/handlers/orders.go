@@ -156,9 +156,9 @@ func UpdateOrderStatus(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		validTransitions := map[models.OrderStatus][]models.OrderStatus{
-			models.OrderStatusNuevo:     {models.OrderStatusPreparando, models.OrderStatusCancelado},
+			models.OrderStatusNuevo:      {models.OrderStatusPreparando, models.OrderStatusCancelado},
 			models.OrderStatusPreparando: {models.OrderStatusListo, models.OrderStatusCancelado},
-			models.OrderStatusListo:     {models.OrderStatusCobrado},
+			models.OrderStatusListo:      {models.OrderStatusCobrado, models.OrderStatusCancelado},
 		}
 
 		allowed, ok := validTransitions[order.Status]
