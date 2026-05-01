@@ -54,10 +54,26 @@ func UpsertTableTab(db *gorm.DB) gin.HandlerFunc {
 			req.Type = models.OrderTypeMesa
 		}
 
+		// Consolidate items by product_uuid to prevent duplicate rows.
+		// The client should already send consolidated items, but rapid
+		// syncs or buggy clients may send duplicates.
+		merged := map[string]*ItemRequest{}
+		var mergeOrder []string
+		for i := range req.Items {
+			it := &req.Items[i]
+			if existing, ok := merged[it.ProductUUID]; ok {
+				existing.Quantity += it.Quantity
+			} else {
+				merged[it.ProductUUID] = it
+				mergeOrder = append(mergeOrder, it.ProductUUID)
+			}
+		}
+
 		// Recompute total server-side — never trust the client.
 		var total float64
-		newItems := make([]models.OrderItem, 0, len(req.Items))
-		for _, it := range req.Items {
+		newItems := make([]models.OrderItem, 0, len(mergeOrder))
+		for _, uuid := range mergeOrder {
+			it := merged[uuid]
 			total += it.UnitPrice * float64(it.Quantity)
 			newItems = append(newItems, models.OrderItem{
 				ProductUUID: it.ProductUUID,
@@ -76,7 +92,9 @@ func UpsertTableTab(db *gorm.DB) gin.HandlerFunc {
 				models.OrderStatusPreparando,
 				models.OrderStatusListo,
 			}
-			err := tx.Preload("Items").
+			// FOR UPDATE lock prevents concurrent syncs from racing
+			err := tx.Set("gorm:query_option", "FOR UPDATE").
+				Preload("Items").
 				Where("tenant_id = ? AND label = ? AND status IN ?",
 					tenantID, label, openStatuses).
 				Order("created_at DESC").
