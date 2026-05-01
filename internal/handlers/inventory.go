@@ -451,12 +451,19 @@ func GenerateProductImage(db *gorm.DB, geminiSvc *services.GeminiService, storag
 		if content == "" {
 			content = product.Content
 		}
+		barcode := c.Query("barcode")
+		if barcode == "" {
+			barcode = product.Barcode
+		}
 		productInfo := name
 		if pres != "" {
 			productInfo += " " + pres
 		}
 		if content != "" {
 			productInfo += " " + content
+		}
+		if barcode != "" {
+			productInfo += " (codigo de barras: " + barcode + ")"
 		}
 
 		ctx, cancel := context.WithTimeout(
