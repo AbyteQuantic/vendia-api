@@ -1,6 +1,7 @@
 package services
 
 import (
+	"strings"
 	"vendia-backend/internal/models"
 
 	"github.com/google/uuid"
@@ -82,5 +83,10 @@ func LogInventoryMovement(tx *gorm.DB, p MovementParams) error {
 		IdempotencyKey: p.IdempotencyKey,
 	}
 
-	return tx.Create(&mov).Error
+	err := tx.Create(&mov).Error
+	// Idempotency: if the key already exists, silently skip the duplicate.
+	if err != nil && p.IdempotencyKey != nil && strings.Contains(err.Error(), "duplicate key") {
+		return nil
+	}
+	return err
 }

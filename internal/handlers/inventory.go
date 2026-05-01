@@ -50,6 +50,8 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 			return
 		}
 
+		imageHash := services.ImageIdempotencyKey(data)
+
 		ctx, cancel := context.WithTimeout(
 			aiusage.WithTenantID(c.Request.Context(), tenantID),
 			30*time.Second,
@@ -144,38 +146,96 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 				PriceStatus:     "pending",
 			}
 
+			// 3-level dedup: barcode > normalized name > fuzzy
 			var existing models.Product
+			matched := false
+
+			// Level 1: barcode exact
 			if pr.Barcode != "" {
 				if err := db.Where("barcode = ? AND tenant_id = ?", pr.Barcode, tenantID).
 					First(&existing).Error; err == nil {
-					merchUpdates := map[string]any{
-						"stock":          gorm.Expr("stock + ?", pr.Quantity),
-						"purchase_price": pr.UnitPrice,
-					}
-					if expiryForDB != nil {
-						// Preserve the most recent expiration for restocked SKUs —
-						// FEFO still needs to pick the oldest lot, but at the
-						// product level the write-path is "last wins".
-						merchUpdates["expiry_date"] = *expiryForDB
-					}
-					db.Model(&existing).Updates(merchUpdates)
-					services.LogInventoryMovement(db, services.MovementParams{
-						TenantID:      tenantID,
-						ProductID:     existing.ID,
-						ProductName:   existing.Name,
-						MovementType:  models.MovementInvoiceScan,
-						Quantity:      pr.Quantity,
-						ReferenceType: "invoice",
-						UserID:        middleware.UUIDPtr(middleware.GetUserID(c)),
-					})
-					pr.Status = "actualizado"
-					products = append(products, pr)
-					continue
+					matched = true
 				}
 			}
 
+			// Level 2: normalized name+presentation+content
+			if !matched {
+				normKey := services.NormalizeText(displayName) + "|" +
+					services.NormalizeText(pr.Presentation) + "|" +
+					services.NormalizeText(pr.Content)
+				var candidates []models.Product
+				db.Where("tenant_id = ? AND is_available = true", tenantID).Find(&candidates)
+				for _, cand := range candidates {
+					cKey := services.NormalizeText(cand.Name) + "|" +
+						services.NormalizeText(cand.Presentation) + "|" +
+						services.NormalizeText(cand.Content)
+					if cKey == normKey {
+						existing = cand
+						matched = true
+						break
+					}
+				}
+			}
+
+			// Level 3: pg_trgm fuzzy (threshold 0.6 to avoid false merges)
+			if !matched && displayName != "" {
+				normName := services.NormalizeText(displayName)
+				var fuzzy struct {
+					models.Product
+					Similarity float64
+				}
+				if err := db.Raw(`
+					SELECT p.*, similarity(LOWER(p.name), ?) AS similarity
+					FROM products p
+					WHERE p.tenant_id = ? AND p.is_available = true
+					  AND p.deleted_at IS NULL
+					  AND similarity(LOWER(p.name), ?) > 0.6
+					ORDER BY similarity DESC LIMIT 1
+				`, normName, tenantID, normName).Scan(&fuzzy).Error; err == nil && fuzzy.Product.ID != "" {
+					existing = fuzzy.Product
+					matched = true
+				}
+			}
+
+			if matched {
+				merchUpdates := map[string]any{
+					"stock":          gorm.Expr("stock + ?", pr.Quantity),
+					"purchase_price": pr.UnitPrice,
+				}
+				if expiryForDB != nil {
+					merchUpdates["expiry_date"] = *expiryForDB
+				}
+				db.Model(&existing).Updates(merchUpdates)
+				idempKey := fmt.Sprintf("%s:%s:%d", imageHash, existing.ID, pr.Quantity)
+				services.LogInventoryMovement(db, services.MovementParams{
+					TenantID:       tenantID,
+					ProductID:      existing.ID,
+					ProductName:    existing.Name,
+					MovementType:   models.MovementInvoiceScan,
+					Quantity:       pr.Quantity,
+					ReferenceType:  "invoice",
+					UserID:         middleware.UUIDPtr(middleware.GetUserID(c)),
+					IdempotencyKey: &idempKey,
+				})
+				pr.Status = "actualizado"
+				products = append(products, pr)
+				continue
+			}
+
 			db.Create(&product)
+			idempKeyNew := fmt.Sprintf("%s:new:%s", imageHash, product.ID)
+			services.LogInventoryMovement(db, services.MovementParams{
+				TenantID:       tenantID,
+				ProductID:      product.ID,
+				ProductName:    product.Name,
+				MovementType:   models.MovementInvoiceScan,
+				Quantity:       pr.Quantity,
+				ReferenceType:  "invoice",
+				UserID:         middleware.UUIDPtr(middleware.GetUserID(c)),
+				IdempotencyKey: &idempKeyNew,
+			})
 			products = append(products, pr)
+
 		}
 
 		c.JSON(http.StatusOK, gin.H{
