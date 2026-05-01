@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
+	"vendia-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -195,6 +196,16 @@ func UpdateOrderStatus(db *gorm.DB) gin.HandlerFunc {
 		if req.Status == models.OrderStatusCancelado {
 			for _, item := range order.Items {
 				if item.ProductUUID != "" && item.Quantity > 0 {
+					services.LogInventoryMovement(db, services.MovementParams{
+						TenantID:      tenantID,
+						ProductID:     item.ProductUUID,
+						ProductName:   item.ProductName,
+						MovementType:  models.MovementOrderCancel,
+						Quantity:      item.Quantity,
+						ReferenceID:   &order.ID,
+						ReferenceType: "order",
+						UserID:        middleware.UUIDPtr(middleware.GetUserID(c)),
+					})
 					db.Model(&models.Product{}).
 						Where("id = ? AND tenant_id = ?", item.ProductUUID, tenantID).
 						UpdateColumn("stock", gorm.Expr("stock + ?", item.Quantity))

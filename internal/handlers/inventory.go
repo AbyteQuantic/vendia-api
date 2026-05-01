@@ -159,6 +159,14 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 						merchUpdates["expiry_date"] = *expiryForDB
 					}
 					db.Model(&existing).Updates(merchUpdates)
+					services.LogInventoryMovement(db, services.MovementParams{
+						TenantID:      tenantID,
+						ProductID:     existing.ID,
+						ProductName:   existing.Name,
+						MovementType:  models.MovementInvoiceScan,
+						Quantity:      pr.Quantity,
+						ReferenceType: "invoice",
+					})
 					pr.Status = "actualizado"
 					products = append(products, pr)
 					continue

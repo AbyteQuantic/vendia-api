@@ -6,6 +6,7 @@ import (
 	"time"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
+	"vendia-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -220,6 +221,16 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 				}
 
 				if product.Stock > 0 {
+					services.LogInventoryMovement(tx, services.MovementParams{
+						TenantID:      tenantID,
+						BranchID:      middleware.UUIDPtr(branchID),
+						ProductID:     product.ID,
+						ProductName:   product.Name,
+						MovementType:  models.MovementSale,
+						Quantity:      -item.Quantity,
+						ReferenceType: "sale",
+						UserID:        middleware.UUIDPtr(userID),
+					})
 					tx.Model(&product).UpdateColumn("stock", gorm.Expr("stock - ?", item.Quantity))
 				}
 			}

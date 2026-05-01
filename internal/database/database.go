@@ -56,6 +56,9 @@ func Migrate(db *gorm.DB) error {
 	if _, err := sqlDB.Exec(`CREATE EXTENSION IF NOT EXISTS "pgcrypto"`); err != nil {
 		log.Printf("[DB] warning: could not create pgcrypto extension: %v", err)
 	}
+	if _, err := sqlDB.Exec(`CREATE EXTENSION IF NOT EXISTS "pg_trgm"`); err != nil {
+		log.Printf("[DB] warning: could not create pg_trgm extension: %v", err)
+	}
 
 	err = db.AutoMigrate(
 		&models.Tenant{},
@@ -107,6 +110,8 @@ func Migrate(db *gorm.DB) error {
 		// editing each POS cart slot so a second device can't
 		// stomp the cashier's work in real time.
 		&models.CartSession{},
+		// Kardex — inventory movement log for full traceability.
+		&models.InventoryMovement{},
 	)
 	if err != nil {
 		return err

@@ -233,6 +233,10 @@ func main() {
 		v1.POST("/inventory/scan-invoice", handlers.ScanInvoice(db, geminiSvc, offSvc))
 		v1.GET("/inventory/alerts", handlers.InventoryAlerts(db))
 		v1.GET("/inventory/expiring", handlers.ExpiringProducts(db))
+		// Kardex & Smart Dedup
+		v1.GET("/inventory/kardex", handlers.ProductKardex(db))
+		v1.GET("/inventory/report", handlers.InventoryReport(db))
+		v1.POST("/inventory/match-products", handlers.MatchProductsHandler(db))
 
 		// Sales (POS)
 		v1.POST("/sales", handlers.CreateSale(db))

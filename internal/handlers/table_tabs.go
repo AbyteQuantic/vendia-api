@@ -7,6 +7,7 @@ import (
 
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
+	"vendia-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -121,6 +122,17 @@ func UpsertTableTab(db *gorm.DB) gin.HandlerFunc {
 				// Deduct stock for all new items
 				for _, it := range newItems {
 					if it.ProductUUID != "" && it.Quantity > 0 {
+						services.LogInventoryMovement(tx, services.MovementParams{
+							TenantID:      tenantID,
+							BranchID:      middleware.UUIDPtr(branchID),
+							ProductID:     it.ProductUUID,
+							ProductName:   it.ProductName,
+							MovementType:  models.MovementTableTab,
+							Quantity:      -it.Quantity,
+							ReferenceID:   &created.ID,
+							ReferenceType: "order",
+							UserID:        middleware.UUIDPtr(userID),
+						})
 						tx.Model(&models.Product{}).
 							Where("id = ? AND tenant_id = ?", it.ProductUUID, tenantID).
 							UpdateColumn("stock", gorm.Expr("GREATEST(stock - ?, 0)", it.Quantity))
@@ -175,12 +187,30 @@ func UpsertTableTab(db *gorm.DB) gin.HandlerFunc {
 				}
 				diff := newQty[uuid] - oldQty[uuid]
 				if diff > 0 {
-					// More items ordered → deduct stock
+					services.LogInventoryMovement(tx, services.MovementParams{
+						TenantID:      tenantID,
+						BranchID:      middleware.UUIDPtr(branchID),
+						ProductID:     uuid,
+						MovementType:  models.MovementTableTab,
+						Quantity:      -diff,
+						ReferenceID:   &existing.ID,
+						ReferenceType: "order",
+						UserID:        middleware.UUIDPtr(userID),
+					})
 					tx.Model(&models.Product{}).
 						Where("id = ? AND tenant_id = ?", uuid, tenantID).
 						UpdateColumn("stock", gorm.Expr("GREATEST(stock - ?, 0)", diff))
 				} else if diff < 0 {
-					// Items removed → restore stock
+					services.LogInventoryMovement(tx, services.MovementParams{
+						TenantID:      tenantID,
+						BranchID:      middleware.UUIDPtr(branchID),
+						ProductID:     uuid,
+						MovementType:  models.MovementTableTab,
+						Quantity:      -diff,
+						ReferenceID:   &existing.ID,
+						ReferenceType: "order",
+						UserID:        middleware.UUIDPtr(userID),
+					})
 					tx.Model(&models.Product{}).
 						Where("id = ? AND tenant_id = ?", uuid, tenantID).
 						UpdateColumn("stock", gorm.Expr("stock + ?", -diff))

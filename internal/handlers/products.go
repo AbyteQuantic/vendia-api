@@ -163,6 +163,18 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			return
 		}
 
+		if product.Stock > 0 {
+			services.LogInventoryMovement(db, services.MovementParams{
+				TenantID:     tenantID,
+				BranchID:     middleware.UUIDPtr(branchID),
+				ProductID:    product.ID,
+				ProductName:  product.Name,
+				MovementType: models.MovementInitialStock,
+				Quantity:     product.Stock,
+				UserID:       middleware.UUIDPtr(userID),
+			})
+		}
+
 		// Accept catalog image if provided
 		if req.CatalogImageID != "" && catalogSvc != nil {
 			catalogSvc.AcceptImage(req.CatalogImageID)
@@ -219,6 +231,7 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		if req.Price != nil {
 			updates["price"] = *req.Price
 		}
+		oldStock := product.Stock
 		if req.Stock != nil {
 			updates["stock"] = *req.Stock
 		}
@@ -256,6 +269,18 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		if err := db.Model(&product).Updates(updates).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al actualizar producto"})
 			return
+		}
+
+		if req.Stock != nil && *req.Stock != oldStock {
+			services.LogInventoryMovement(db, services.MovementParams{
+				TenantID:     tenantID,
+				ProductID:    product.ID,
+				ProductName:  product.Name,
+				MovementType: models.MovementManualAdjust,
+				Quantity:     *req.Stock - oldStock,
+				UserID:       middleware.UUIDPtr(middleware.GetUserID(c)),
+				Notes:        "ajuste manual desde edición de producto",
+			})
 		}
 
 		// Accept catalog image if provided

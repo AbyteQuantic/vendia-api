@@ -161,6 +161,15 @@ func CancelCredit(db *gorm.DB) gin.HandlerFunc {
 						continue
 					}
 					pid := *item.ProductID
+					services.LogInventoryMovement(tx, services.MovementParams{
+						TenantID:      tenantID,
+						ProductID:     pid,
+						ProductName:   item.Name,
+						MovementType:  models.MovementSaleCancel,
+						Quantity:      item.Quantity,
+						ReferenceID:   &credit.ID,
+						ReferenceType: "credit",
+					})
 					if err := tx.Model(&models.Product{}).
 						Where("id = ? AND tenant_id = ?", pid, tenantID).
 						UpdateColumn("stock", gorm.Expr("stock + ?", item.Quantity)).Error; err != nil {

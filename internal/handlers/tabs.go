@@ -6,6 +6,7 @@ import (
 	"time"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
+	"vendia-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -159,6 +160,14 @@ func CloseTab(db *gorm.DB) gin.HandlerFunc {
 					Subtotal:  subtotal,
 				})
 
+				services.LogInventoryMovement(tx, services.MovementParams{
+					TenantID:      tenantID,
+					ProductID:     item.ProductID,
+					ProductName:   item.Name,
+					MovementType:  models.MovementTabClose,
+					Quantity:      -item.Quantity,
+					ReferenceType: "tab",
+				})
 				tx.Model(&models.Product{}).
 					Where("id = ? AND tenant_id = ? AND stock > 0", item.ProductID, tenantID).
 					UpdateColumn("stock", gorm.Expr("stock - ?", item.Quantity))
