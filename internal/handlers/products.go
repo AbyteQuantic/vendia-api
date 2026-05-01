@@ -304,7 +304,18 @@ func DeleteProduct(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		if err := db.Delete(&product).Error; err != nil {
+		err := db.Transaction(func(tx *gorm.DB) error {
+			// Hard-delete all kardex movements for this product so
+			// inventory math stays clean — a soft-deleted product's
+			// movements should not count toward totals.
+			if err := tx.Unscoped().
+				Where("product_id = ? AND tenant_id = ?", productID, tenantID).
+				Delete(&models.InventoryMovement{}).Error; err != nil {
+				return err
+			}
+			return tx.Delete(&product).Error
+		})
+		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al eliminar producto"})
 			return
 		}
