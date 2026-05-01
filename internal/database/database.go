@@ -112,6 +112,8 @@ func Migrate(db *gorm.DB) error {
 		&models.CartSession{},
 		// Kardex — inventory movement log for full traceability.
 		&models.InventoryMovement{},
+		// Invoice scan audit trail for the owner.
+		&models.InvoiceLog{},
 	)
 	if err != nil {
 		return err

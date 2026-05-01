@@ -238,6 +238,8 @@ func main() {
 		v1.GET("/inventory/report", handlers.InventoryReport(db))
 		v1.POST("/inventory/match-products", handlers.MatchProductsHandler(db))
 		v1.GET("/inventory/reorder-suggestions", handlers.ReorderSuggestions(db))
+		v1.POST("/inventory/invoice-logs", handlers.LogInvoiceSave(db))
+		v1.GET("/inventory/invoice-logs", handlers.ListInvoiceLogs(db))
 
 		// Sales (POS)
 		v1.POST("/sales", handlers.CreateSale(db))
