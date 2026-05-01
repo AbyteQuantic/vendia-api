@@ -143,7 +143,7 @@ func UpdateOrderStatus(db *gorm.DB) gin.HandlerFunc {
 		uuid := c.Param("uuid")
 
 		var order models.OrderTicket
-		if err := db.Where("id = ? AND tenant_id = ?", uuid, tenantID).
+		if err := db.Preload("Items").Where("id = ? AND tenant_id = ?", uuid, tenantID).
 			First(&order).Error; err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "pedido no encontrado"})
 			return
@@ -189,6 +189,17 @@ func UpdateOrderStatus(db *gorm.DB) gin.HandlerFunc {
 		if err := db.Model(&order).Updates(updates).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al actualizar pedido"})
 			return
+		}
+
+		// Restore stock when cancelling — return all items to inventory
+		if req.Status == models.OrderStatusCancelado {
+			for _, item := range order.Items {
+				if item.ProductUUID != "" && item.Quantity > 0 {
+					db.Model(&models.Product{}).
+						Where("id = ? AND tenant_id = ?", item.ProductUUID, tenantID).
+						UpdateColumn("stock", gorm.Expr("stock + ?", item.Quantity))
+				}
+			}
 		}
 
 		order.Status = req.Status

@@ -14,23 +14,10 @@ import (
 
 // UpsertTableTab serves PUT /api/v1/tables/tab.
 //
-// Why this endpoint exists separately from POST /orders:
-//
-//   POST /orders creates a NEW ticket every time. That works for
-//   "para_llevar" and one-shot mostrador sales, but for a table
-//   tab the cashier accumulates items across multiple POS rounds
-//   and needs a STABLE session_token for the live-tab QR to stay
-//   valid between rounds. A fresh ticket per round would:
-//     - issue a new session_token each time (broken QR posters),
-//     - scatter the same "Mesa 1" across many rows in the KDS,
-//     - prevent "Cobrar y enviar" from rolling one total.
-//
-// So this endpoint does a tenant-scoped upsert keyed by table
-// label: if an open (nuevo / preparando / listo) ticket exists
-// for (tenant, label), we replace its items and recompute the
-// total; otherwise we create a new one. In both cases we return
-// the SAME session_token the ticket has owned since its first
-// creation — that's the whole point.
+// Upserts a table tab with stock management:
+//   - CREATE: deducts stock for all items
+//   - UPDATE: computes diff (old vs new) and adjusts stock accordingly
+//     (deduct for increases, restore for decreases/removals)
 func UpsertTableTab(db *gorm.DB) gin.HandlerFunc {
 	type ItemRequest struct {
 		ProductUUID string  `json:"product_uuid" binding:"required"`
@@ -81,13 +68,8 @@ func UpsertTableTab(db *gorm.DB) gin.HandlerFunc {
 			})
 		}
 
-		// Single DB transaction so the replace-items-then-update-total
-		// sequence can't land in a torn state mid-flight.
 		var result models.OrderTicket
 		txErr := db.Transaction(func(tx *gorm.DB) error {
-			// Look for an OPEN ticket for this exact label. Status
-			// whitelist matches OpenAccounts() so the two endpoints
-			// agree on what "open" means.
 			var existing models.OrderTicket
 			openStatuses := []models.OrderStatus{
 				models.OrderStatusNuevo,
@@ -101,8 +83,7 @@ func UpsertTableTab(db *gorm.DB) gin.HandlerFunc {
 				First(&existing).Error
 
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				// First save for this table → CREATE. BeforeCreate
-				// takes care of the UUID + session_token in one go.
+				// ── CREATE new ticket ──
 				created := models.OrderTicket{
 					TenantID:     tenantID,
 					CreatedBy:    middleware.UUIDPtr(userID),
@@ -119,6 +100,14 @@ func UpsertTableTab(db *gorm.DB) gin.HandlerFunc {
 				if err := tx.Create(&created).Error; err != nil {
 					return err
 				}
+				// Deduct stock for all new items
+				for _, it := range newItems {
+					if it.ProductUUID != "" && it.Quantity > 0 {
+						tx.Model(&models.Product{}).
+							Where("id = ? AND tenant_id = ?", it.ProductUUID, tenantID).
+							UpdateColumn("stock", gorm.Expr("GREATEST(stock - ?, 0)", it.Quantity))
+					}
+				}
 				result = created
 				return nil
 			}
@@ -126,14 +115,15 @@ func UpsertTableTab(db *gorm.DB) gin.HandlerFunc {
 				return err
 			}
 
-			// Ticket exists → REPLACE items atomically. We delete the
-			// rows instead of doing a diff-merge because:
-			//   a) the client is the source of truth (it holds the
-			//      whole local cart),
-			//   b) OrderItem has no per-line state we care about
-			//      beyond price / qty, which we're about to re-send.
-			// session_token stays the same because we never touch
-			// the parent row's ID.
+			// ── UPDATE existing ticket with stock diff ──
+
+			// 1. Old quantities by product UUID
+			oldQty := map[string]int{}
+			for _, oi := range existing.Items {
+				oldQty[oi.ProductUUID] += oi.Quantity
+			}
+
+			// 2. Replace items atomically
 			if err := tx.Where("order_uuid = ?", existing.ID).
 				Delete(&models.OrderItem{}).Error; err != nil {
 				return err
@@ -146,7 +136,40 @@ func UpsertTableTab(db *gorm.DB) gin.HandlerFunc {
 					return err
 				}
 			}
-			// Update total + any metadata the client refreshed.
+
+			// 3. New quantities by product UUID
+			newQty := map[string]int{}
+			for _, ni := range newItems {
+				newQty[ni.ProductUUID] += ni.Quantity
+			}
+
+			// 4. Apply stock diff
+			allUUIDs := map[string]bool{}
+			for k := range oldQty {
+				allUUIDs[k] = true
+			}
+			for k := range newQty {
+				allUUIDs[k] = true
+			}
+			for uuid := range allUUIDs {
+				if uuid == "" {
+					continue
+				}
+				diff := newQty[uuid] - oldQty[uuid]
+				if diff > 0 {
+					// More items ordered → deduct stock
+					tx.Model(&models.Product{}).
+						Where("id = ? AND tenant_id = ?", uuid, tenantID).
+						UpdateColumn("stock", gorm.Expr("GREATEST(stock - ?, 0)", diff))
+				} else if diff < 0 {
+					// Items removed → restore stock
+					tx.Model(&models.Product{}).
+						Where("id = ? AND tenant_id = ?", uuid, tenantID).
+						UpdateColumn("stock", gorm.Expr("stock + ?", -diff))
+				}
+			}
+
+			// 5. Update total + metadata
 			updates := map[string]any{"total": total}
 			if req.CustomerName != "" {
 				updates["customer_name"] = req.CustomerName
@@ -157,7 +180,6 @@ func UpsertTableTab(db *gorm.DB) gin.HandlerFunc {
 			if err := tx.Model(&existing).Updates(updates).Error; err != nil {
 				return err
 			}
-			// Reload so the caller receives the fresh items.
 			if err := tx.Preload("Items").First(&existing, "id = ?", existing.ID).Error; err != nil {
 				return err
 			}
@@ -188,13 +210,6 @@ func UpsertTableTab(db *gorm.DB) gin.HandlerFunc {
 }
 
 // GetTableTab serves GET /api/v1/tables/tab/:label.
-//
-// Authenticated sibling of the public live-tab endpoint. The
-// cashier uses this to look up the session_token on demand —
-// e.g. when the QR sheet opens but the local POS hasn't yet
-// seen the ticket (reinstalled app, different device).
-//
-// Returns 404 when there is no open ticket for the label.
 func GetTableTab(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
