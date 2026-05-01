@@ -292,6 +292,76 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 	}
 }
 
+// RestockProduct atomically increments stock and logs the kardex movement.
+// POST /api/v1/products/:id/restock
+func RestockProduct(db *gorm.DB) gin.HandlerFunc {
+	type Request struct {
+		Quantity      int     `json:"quantity"       binding:"required,min=1"`
+		PurchasePrice float64 `json:"purchase_price"`
+		Price         float64 `json:"price"`
+		ImageURL      string  `json:"image_url"`
+		ExpiryDate    string  `json:"expiry_date"`
+	}
+
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		userID := middleware.GetUserID(c)
+		productID := c.Param("id")
+
+		var product models.Product
+		if err := db.Where("id = ? AND tenant_id = ?", productID, tenantID).
+			First(&product).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "producto no encontrado"})
+			return
+		}
+
+		var req Request
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		err := db.Transaction(func(tx *gorm.DB) error {
+			services.LogInventoryMovement(tx, services.MovementParams{
+				TenantID:      tenantID,
+				ProductID:     product.ID,
+				ProductName:   product.Name,
+				MovementType:  models.MovementInvoiceScan,
+				Quantity:      req.Quantity,
+				ReferenceType: "invoice",
+				UserID:        middleware.UUIDPtr(userID),
+			})
+
+			updates := map[string]any{
+				"stock": gorm.Expr("stock + ?", req.Quantity),
+			}
+			if req.PurchasePrice > 0 {
+				updates["purchase_price"] = req.PurchasePrice
+			}
+			if req.Price > 0 {
+				updates["price"] = req.Price
+			}
+			if req.ImageURL != "" {
+				updates["image_url"] = req.ImageURL
+			}
+			expiry, _ := normaliseExpiryDate(req.ExpiryDate)
+			if expiry != nil {
+				updates["expiry_date"] = *expiry
+			}
+
+			return tx.Model(&product).Updates(updates).Error
+		})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al reabastecer"})
+			return
+		}
+
+		// Reload to return updated stock
+		db.First(&product, "id = ?", productID)
+		c.JSON(http.StatusOK, gin.H{"data": product})
+	}
+}
+
 func DeleteProduct(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)

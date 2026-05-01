@@ -213,6 +213,7 @@ func main() {
 		v1.GET("/products/by-barcode", handlers.LookupProductByBarcode(db))
 		v1.POST("/products", handlers.CreateProduct(db, catalogSvc))
 		v1.PATCH("/products/:id", handlers.UpdateProduct(db, catalogSvc))
+		v1.POST("/products/:id/restock", handlers.RestockProduct(db))
 		v1.DELETE("/products/:id", handlers.DeleteProduct(db))
 		v1.POST("/products/seed", middleware.DevOnly(cfg.Env), handlers.SeedProducts(db))
 		v1.GET("/products/lookup", handlers.LookupBarcode(offSvc))
