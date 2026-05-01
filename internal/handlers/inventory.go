@@ -104,6 +104,10 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 			}
 		}
 
+		// Resolve branch scope for dedup queries — products in branch A
+		// must not match products in branch B.
+		branchID := middleware.GetBranchID(c)
+
 		var products []ProductResult
 		for _, p := range result.Products {
 			// Validate the expiry_date that Gemini extracted. Bad formats
@@ -150,22 +154,29 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 			matched := false
 			matchMethod := ""
 
-			// Level 1: barcode exact
+			// Level 1: barcode exact (branch-scoped)
 			if pr.Barcode != "" {
-				if err := db.Where("barcode = ? AND tenant_id = ?", pr.Barcode, tenantID).
-					First(&existing).Error; err == nil {
+				barcodeQ := db.Where("barcode = ? AND tenant_id = ?", pr.Barcode, tenantID)
+				if branchID != "" {
+					barcodeQ = barcodeQ.Where("branch_id = ?", branchID)
+				}
+				if err := barcodeQ.First(&existing).Error; err == nil {
 					matched = true
 					matchMethod = "barcode"
 				}
 			}
 
-			// Level 2: normalized name+presentation+content
+			// Level 2: normalized name+presentation+content (branch-scoped)
 			if !matched {
 				normKey := services.NormalizeText(displayName) + "|" +
 					services.NormalizeText(pr.Presentation) + "|" +
 					services.NormalizeText(pr.Content)
 				var candidates []models.Product
-				db.Where("tenant_id = ? AND is_available = true", tenantID).Find(&candidates)
+				candQ := db.Where("tenant_id = ? AND is_available = true", tenantID)
+				if branchID != "" {
+					candQ = candQ.Where("branch_id = ?", branchID)
+				}
+				candQ.Find(&candidates)
 				for _, cand := range candidates {
 					cKey := services.NormalizeText(cand.Name) + "|" +
 						services.NormalizeText(cand.Presentation) + "|" +
@@ -179,21 +190,26 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 				}
 			}
 
-			// Level 3: pg_trgm fuzzy
+			// Level 3: pg_trgm fuzzy (branch-scoped)
 			if !matched && displayName != "" {
 				normName := services.NormalizeText(displayName)
 				var fuzzy struct {
 					models.Product
 					Similarity float64
 				}
-				if err := db.Raw(`
+				fuzzySQL := `
 					SELECT p.*, similarity(LOWER(p.name), ?) AS similarity
 					FROM products p
 					WHERE p.tenant_id = ? AND p.is_available = true
 					  AND p.deleted_at IS NULL
-					  AND similarity(LOWER(p.name), ?) > 0.6
-					ORDER BY similarity DESC LIMIT 1
-				`, normName, tenantID, normName).Scan(&fuzzy).Error; err == nil && fuzzy.Product.ID != "" {
+					  AND similarity(LOWER(p.name), ?) > 0.6`
+				fuzzyArgs := []any{normName, tenantID, normName}
+				if branchID != "" {
+					fuzzySQL += ` AND p.branch_id = ?`
+					fuzzyArgs = append(fuzzyArgs, branchID)
+				}
+				fuzzySQL += ` ORDER BY similarity DESC LIMIT 1`
+				if err := db.Raw(fuzzySQL, fuzzyArgs...).Scan(&fuzzy).Error; err == nil && fuzzy.Product.ID != "" {
 					existing = fuzzy.Product
 					matched = true
 					matchMethod = "fuzzy"
