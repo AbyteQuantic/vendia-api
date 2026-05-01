@@ -74,15 +74,17 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 		}
 
 		type ProductResult struct {
-			Name       string  `json:"name"`
-			Quantity   int     `json:"quantity"`
-			UnitPrice  float64 `json:"unit_price"`
-			TotalPrice float64 `json:"total_price"`
-			Barcode    string  `json:"barcode,omitempty"`
-			ImageURL   string  `json:"image_url,omitempty"`
-			ExpiryDate string  `json:"expiry_date,omitempty"`
-			Confidence float64 `json:"confidence"`
-			Status     string  `json:"status"`
+			Name         string  `json:"name"`
+			Presentation string  `json:"presentation,omitempty"`
+			Content      string  `json:"content,omitempty"`
+			Quantity     int     `json:"quantity"`
+			UnitPrice    float64 `json:"unit_price"`
+			TotalPrice   float64 `json:"total_price"`
+			Barcode      string  `json:"barcode,omitempty"`
+			ImageURL     string  `json:"image_url,omitempty"`
+			ExpiryDate   string  `json:"expiry_date,omitempty"`
+			Confidence   float64 `json:"confidence"`
+			Status       string  `json:"status"`
 		}
 
 		var products []ProductResult
@@ -97,14 +99,16 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 			}
 
 			pr := ProductResult{
-				Name:       p.Name,
-				Quantity:   p.Quantity,
-				UnitPrice:  p.UnitPrice,
-				TotalPrice: p.TotalPrice,
-				Barcode:    p.Barcode,
-				ExpiryDate: expiryForResponse,
-				Confidence: p.Confidence,
-				Status:     "precio_pendiente",
+				Name:         p.Name,
+				Presentation: p.Presentation,
+				Content:      p.Content,
+				Quantity:     p.Quantity,
+				UnitPrice:    p.UnitPrice,
+				TotalPrice:   p.TotalPrice,
+				Barcode:      p.Barcode,
+				ExpiryDate:   expiryForResponse,
+				Confidence:   p.Confidence,
+				Status:       "precio_pendiente",
 			}
 
 			if p.Barcode != "" && offSvc != nil {
@@ -121,6 +125,8 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 				BaseModel:       models.BaseModel{ID: uuid.NewString()},
 				TenantID:        tenantID,
 				Name:            pr.Name,
+				Presentation:    pr.Presentation,
+				Content:         pr.Content,
 				PurchasePrice:   pr.UnitPrice,
 				Stock:           pr.Quantity,
 				Barcode:         pr.Barcode,

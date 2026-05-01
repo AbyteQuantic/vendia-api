@@ -168,16 +168,15 @@ func (s *GeminiService) discoverModels() (string, string) {
 }
 
 type InvoiceProduct struct {
-	Name       string  `json:"name"`
-	Quantity   int     `json:"quantity"`
-	UnitPrice  float64 `json:"unit_price"`
-	TotalPrice float64 `json:"total_price"`
-	Barcode    string  `json:"barcode,omitempty"`
-	// ExpiryDate is the best-before/expiration date printed next to the
-	// line item, if any. Normalised to ISO-8601 (YYYY-MM-DD) by the
-	// model. Empty when absent, unreadable, or uncertain.
-	ExpiryDate string  `json:"expiry_date,omitempty"`
-	Confidence float64 `json:"confidence"`
+	Name         string  `json:"name"`
+	Presentation string  `json:"presentation,omitempty"`
+	Content      string  `json:"content,omitempty"`
+	Quantity     int     `json:"quantity"`
+	UnitPrice    float64 `json:"unit_price"`
+	TotalPrice   float64 `json:"total_price"`
+	Barcode      string  `json:"barcode,omitempty"`
+	ExpiryDate   string  `json:"expiry_date,omitempty"`
+	Confidence   float64 `json:"confidence"`
 }
 
 type InvoiceScanResult struct {
@@ -192,21 +191,31 @@ func (s *GeminiService) ScanInvoice(ctx context.Context, imageData []byte, mimeT
 REGLAS CRÍTICAS (violarlas es inaceptable):
 1. EXTRAE SOLO lo que está escrito TEXTUALMENTE en la tabla/lista de la factura.
 2. PROHIBIDO inventar, deducir o suponer nombres de productos, marcas o cantidades que NO estén impresas en la imagen.
-3. Si una fila está borrosa, cortada o no se puede leer con certeza, IGNÓRALA completamente. Prefiere menos productos correctos a más productos inventados.
-4. El campo "name" debe contener el TEXTO EXACTO tal como aparece impreso en la factura (incluyendo abreviaciones como "PACA X12", "CJA", "UND").
-5. Los precios deben ser los números EXACTOS impresos. No calcules ni redondees.
-6. Si ves un nombre de proveedor en el encabezado, extráelo. Si no, pon "Desconocido".
-7. El campo "confidence" debe reflejar tu certeza real (0.0 a 1.0). Si dudas de una lectura, pon confidence < 0.7.
+3. Si una fila está borrosa, cortada o no se puede leer con certeza, IGNÓRALA completamente.
+4. Los precios deben ser los números EXACTOS impresos. No calcules ni redondees.
+5. Si ves un nombre de proveedor en el encabezado, extráelo. Si no, pon "Desconocido".
+6. El campo "confidence" debe reflejar tu certeza real (0.0 a 1.0). Si dudas, pon < 0.7.
+
+REGLA DE CAMPOS DEL PRODUCTO — DEBES SEPARAR INTELIGENTEMENTE:
+- "name": SOLO el nombre comercial limpio del producto (ej: "Speed Max", "Coca Cola", "Arroz Diana"). SIN medidas, SIN presentación, SIN cantidades de empaque.
+- "presentation": tipo de empaque/envase extraído del texto (ej: "PET", "botella", "lata", "bolsa", "caja", "paca", "sobre"). Si dice "PET X 12", la presentación es "PET". Si no se indica, dejar "".
+- "content": medida/volumen/peso del producto (ej: "250ml", "500g", "1.5L", "1kg"). Extraerlo del nombre si aparece ahí. Si no se indica, dejar "".
+- "quantity": cantidad de UNIDADES compradas. Si dice "X 12" o "PACA X12", la cantidad es 12. Si dice "2 UND", la cantidad es 2. Si solo hay una línea sin multiplicador, es 1.
+- "barcode": si la factura muestra un código de barras, EAN o SKU numérico junto al ítem, extráelo. Si no, dejar "".
+
+EJEMPLO de separación correcta:
+Texto en factura: "SPEED MAX 250 ML PET X 12"  →  name: "Speed Max", presentation: "PET", content: "250ml", quantity: 12
+Texto en factura: "ARROZ DIANA BOLSA 500G"     →  name: "Arroz Diana", presentation: "bolsa", content: "500g", quantity: 1
+Texto en factura: "COCA COLA 1.5L PET X6"      →  name: "Coca Cola", presentation: "PET", content: "1.5L", quantity: 6
 
 REGLA DE FECHA DE VENCIMIENTO ("expiry_date"):
-- Busca explícitamente etiquetas como "VENCE", "VENCIMIENTO", "CADUCIDAD", "FECHA VTO", "EXP", "BEST BEFORE", "CONSUMIR ANTES DE", "F.V.", "FV", "VTO" cerca de cada ítem.
-- Si encuentras una fecha asociada a la línea, NORMALÍZALA a formato ISO "YYYY-MM-DD" sin importar cómo esté escrita en la factura (DD/MM/YYYY, MM-YY, etc.). Para formatos de solo mes/año (ej. "12/26"), asume el último día del mes (ej. "2026-12-31").
-- Si NO hay fecha visible para esa línea, deja "expiry_date" como cadena vacía "". NO inventes fechas.
-- Si hay una única fecha de vencimiento global para toda la factura (común en mayoristas), aplícala a TODAS las líneas.
-- Si la fecha está borrosa o dudas de la lectura, deja "" — es preferible vacío que incorrecto.
+- Busca etiquetas como "VENCE", "VENCIMIENTO", "CADUCIDAD", "EXP", "F.V.", "VTO" cerca de cada ítem.
+- Normaliza a "YYYY-MM-DD". Para mes/año (ej. "12/26"), usa último día del mes ("2026-12-31").
+- Si NO hay fecha visible, deja "". NO inventes fechas.
+- Si hay una fecha global para toda la factura, aplícala a TODAS las líneas.
 
 Retorna JSON estricto sin markdown:
-{"provider":"nombre del proveedor","products":[{"name":"texto exacto de factura","quantity":0,"unit_price":0,"total_price":0,"barcode":"","expiry_date":"YYYY-MM-DD","confidence":0.95}],"invoice_total":0}
+{"provider":"nombre del proveedor","products":[{"name":"nombre limpio","presentation":"tipo envase","content":"medida","quantity":0,"unit_price":0,"total_price":0,"barcode":"","expiry_date":"","confidence":0.95}],"invoice_total":0}
 
 Si la imagen NO es una factura o no contiene productos, retorna: {"provider":"","products":[],"invoice_total":0}
 
