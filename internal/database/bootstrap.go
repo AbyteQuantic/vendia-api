@@ -116,7 +116,26 @@ func BackfillBranchIDs(db *gorm.DB) {
 		}
 	}
 
+	// Backfill user_workspaces: owners/cashiers without a branch
+	// get the oldest active branch for their tenant.
 	res := db.Exec(`
+		UPDATE user_workspaces AS uw
+		   SET branch_id = sub.id
+		  FROM (
+		      SELECT DISTINCT ON (tenant_id) tenant_id, id
+		        FROM branches
+		       WHERE deleted_at IS NULL
+		       ORDER BY tenant_id, created_at ASC
+		  ) sub
+		 WHERE uw.tenant_id = sub.tenant_id
+		   AND uw.branch_id IS NULL`)
+	if res.Error != nil {
+		log.Printf("[BOOTSTRAP] backfill user_workspaces skipped: %v", res.Error)
+	} else if res.RowsAffected > 0 {
+		log.Printf("[BOOTSTRAP] backfilled %d rows in user_workspaces", res.RowsAffected)
+	}
+
+	res = db.Exec(`
 		UPDATE credit_payments cp
 		   SET branch_id = ca.branch_id
 		  FROM credit_accounts ca

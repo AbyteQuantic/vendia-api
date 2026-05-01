@@ -96,6 +96,35 @@ func RefreshToken(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 			return
 		}
 
+		// If the refresh token has a user_id, restore the full workspace
+		// context (branch_id, role) so the new JWT keeps the same sede.
+		// Without this, the refresh would lose branch isolation and
+		// products/sales would land on the wrong branch.
+		if rt.UserID != nil && *rt.UserID != "" {
+			var user models.User
+			if err := db.First(&user, "id = ?", *rt.UserID).Error; err == nil {
+				var ws models.UserWorkspace
+				if err := db.Where("user_id = ? AND tenant_id = ?",
+					user.ID, tenant.ID).First(&ws).Error; err == nil {
+					branchID := ""
+					if ws.BranchID != nil {
+						branchID = *ws.BranchID
+					}
+					resp, err := createWorkspaceTokenPair(
+						db, user, tenant.ID, branchID,
+						tenant.BusinessName, string(ws.Role), jwtSecret,
+					)
+					if err != nil {
+						c.JSON(http.StatusInternalServerError, gin.H{"error": "error al generar tokens"})
+						return
+					}
+					c.JSON(http.StatusOK, resp)
+					return
+				}
+			}
+		}
+
+		// Fallback: legacy single-tenant token (no user context)
 		resp, err := createTokenPair(db, tenant, jwtSecret)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al generar tokens"})
