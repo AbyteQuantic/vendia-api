@@ -169,6 +169,7 @@ func CancelCredit(db *gorm.DB) gin.HandlerFunc {
 						Quantity:      item.Quantity,
 						ReferenceID:   &credit.ID,
 						ReferenceType: "credit",
+						UserID:        middleware.UUIDPtr(middleware.GetUserID(c)),
 					})
 					if err := tx.Model(&models.Product{}).
 						Where("id = ? AND tenant_id = ?", pid, tenantID).

@@ -167,6 +167,7 @@ func CloseTab(db *gorm.DB) gin.HandlerFunc {
 					MovementType:  models.MovementTabClose,
 					Quantity:      -item.Quantity,
 					ReferenceType: "tab",
+					UserID:        middleware.UUIDPtr(middleware.GetUserID(c)),
 				})
 				tx.Model(&models.Product{}).
 					Where("id = ? AND tenant_id = ? AND stock > 0", item.ProductID, tenantID).

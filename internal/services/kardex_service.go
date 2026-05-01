@@ -30,6 +30,9 @@ type MovementParams struct {
 // records the before/after snapshot. The caller is responsible for
 // actually modifying the stock on the Product row — this function
 // only records the movement.
+//
+// When UserName is empty but UserID is set, the function resolves the
+// name from the users table so the kardex always shows who did it.
 func LogInventoryMovement(tx *gorm.DB, p MovementParams) error {
 	// Read current stock inside the same transaction.
 	var currentStock int
@@ -38,6 +41,25 @@ func LogInventoryMovement(tx *gorm.DB, p MovementParams) error {
 		Where("id = ?", p.ProductID).
 		Scan(&currentStock).Error; err != nil {
 		return err
+	}
+
+	// Auto-resolve user name when the caller only passed UserID.
+	userName := p.UserName
+	if userName == "" && p.UserID != nil && *p.UserID != "" {
+		var u struct{ Name string }
+		if err := tx.Table("users").Select("name").
+			Where("id = ?", *p.UserID).Scan(&u).Error; err == nil && u.Name != "" {
+			userName = u.Name
+		}
+		// Fallback: check employees table (legacy single-tenant tokens
+		// may carry an employee UUID instead of a user UUID).
+		if userName == "" {
+			var e struct{ Name string }
+			if err := tx.Table("employees").Select("name").
+				Where("id = ?", *p.UserID).Scan(&e).Error; err == nil && e.Name != "" {
+				userName = e.Name
+			}
+		}
 	}
 
 	after := currentStock + p.Quantity
@@ -49,13 +71,13 @@ func LogInventoryMovement(tx *gorm.DB, p MovementParams) error {
 		ProductID:      p.ProductID,
 		ProductName:    p.ProductName,
 		MovementType:   p.MovementType,
-		Quantity:        p.Quantity,
+		Quantity:       p.Quantity,
 		StockBefore:    currentStock,
 		StockAfter:     after,
 		ReferenceID:    p.ReferenceID,
 		ReferenceType:  p.ReferenceType,
 		UserID:         p.UserID,
-		UserName:       p.UserName,
+		UserName:       userName,
 		Notes:          p.Notes,
 		IdempotencyKey: p.IdempotencyKey,
 	}

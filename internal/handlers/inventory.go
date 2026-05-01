@@ -166,6 +166,7 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 						MovementType:  models.MovementInvoiceScan,
 						Quantity:      pr.Quantity,
 						ReferenceType: "invoice",
+						UserID:        middleware.UUIDPtr(middleware.GetUserID(c)),
 					})
 					pr.Status = "actualizado"
 					products = append(products, pr)
