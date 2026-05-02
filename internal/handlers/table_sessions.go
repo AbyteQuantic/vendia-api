@@ -64,6 +64,7 @@ type PublicTableSession struct {
 }
 
 type PublicTableItem struct {
+	ID          string    `json:"id"`
 	ProductName string    `json:"product_name"`
 	Quantity    int       `json:"quantity"`
 	UnitPrice   float64   `json:"unit_price"`
@@ -155,6 +156,7 @@ func GetPublicTableSession(db *gorm.DB) gin.HandlerFunc {
 		items := make([]PublicTableItem, 0, len(order.Items))
 		for _, it := range order.Items {
 			items = append(items, PublicTableItem{
+				ID:          it.ID,
 				ProductName: it.ProductName,
 				Quantity:    it.Quantity,
 				UnitPrice:   it.UnitPrice,

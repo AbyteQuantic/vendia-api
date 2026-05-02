@@ -487,3 +487,86 @@ func GetTableTab(db *gorm.DB) gin.HandlerFunc {
 		})
 	}
 }
+
+// RemoveItemFromTab removes or decrements a single item from an open tab.
+// DELETE /api/v1/orders/:uuid/items/:item_id
+// Restores stock for the removed quantity.
+func RemoveItemFromTab(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		userID := middleware.GetUserID(c)
+		orderUUID := c.Param("uuid")
+		itemID := c.Param("item_id")
+
+		var order models.OrderTicket
+		if err := db.Where("id = ? AND tenant_id = ? AND status IN ?",
+			orderUUID, tenantID, []models.OrderStatus{
+				models.OrderStatusNuevo,
+				models.OrderStatusPreparando,
+				models.OrderStatusListo,
+			}).First(&order).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "cuenta no encontrada o ya cerrada"})
+			return
+		}
+
+		var item models.OrderItem
+		if err := db.Where("id = ? AND order_uuid = ?", itemID, orderUUID).
+			First(&item).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "item no encontrado"})
+			return
+		}
+
+		err := db.Transaction(func(tx *gorm.DB) error {
+			// Restore stock
+			if item.ProductUUID != "" && item.Quantity > 0 {
+				services.LogInventoryMovement(tx, services.MovementParams{
+					TenantID:      tenantID,
+					ProductID:     item.ProductUUID,
+					ProductName:   item.ProductName,
+					MovementType:  models.MovementOrderCancel,
+					Quantity:      item.Quantity,
+					ReferenceID:   &order.ID,
+					ReferenceType: "order",
+					UserID:        middleware.UUIDPtr(userID),
+					Notes:         "item eliminado de cuenta abierta",
+				})
+				tx.Model(&models.Product{}).
+					Where("id = ? AND tenant_id = ?", item.ProductUUID, tenantID).
+					UpdateColumn("stock", gorm.Expr("stock + ?", item.Quantity))
+			}
+
+			// Remove the item
+			if err := tx.Unscoped().Delete(&item).Error; err != nil {
+				return err
+			}
+
+			// Recalculate total from remaining items
+			var newTotal float64
+			tx.Model(&models.OrderItem{}).
+				Select("COALESCE(SUM(unit_price * quantity), 0)").
+				Where("order_uuid = ?", orderUUID).
+				Scan(&newTotal)
+
+			return tx.Model(&order).Update("total", newTotal).Error
+		})
+
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al eliminar item"})
+			return
+		}
+
+		// Reload and return updated order
+		db.Preload("Items").First(&order, "id = ?", orderUUID)
+
+		c.JSON(http.StatusOK, gin.H{
+			"data": gin.H{
+				"order_id":      order.ID,
+				"session_token": order.SessionToken,
+				"label":         order.Label,
+				"status":        order.Status,
+				"total":         order.Total,
+				"items":         order.Items,
+			},
+		})
+	}
+}

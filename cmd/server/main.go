@@ -289,6 +289,7 @@ func main() {
 		v1.PUT("/tables/tab", handlers.UpsertTableTab(db))
 		v1.POST("/tables/tab/add-items", handlers.AddItemsToTableTab(db))
 		v1.GET("/tables/tab/:label", handlers.GetTableTab(db))
+		v1.DELETE("/orders/:uuid/items/:item_id", handlers.RemoveItemFromTab(db))
 
 		// Notifications
 		v1.GET("/notifications", handlers.ListNotifications(db))
