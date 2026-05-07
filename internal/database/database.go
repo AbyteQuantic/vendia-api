@@ -118,6 +118,20 @@ func Migrate(db *gorm.DB) error {
 	if err != nil {
 		return err
 	}
+
+	// ── Ledger constraints (Postgres-only; SQLite test driver no-ops) ──
+	// Runs after AutoMigrate so the columns exist. Idempotent — uses
+	// IF NOT EXISTS. Backfill MUST run BEFORE the unique index so
+	// existing rows with denormalized phones don't fail the constraint.
+	if IsPostgres(db) {
+		if err := backfillNormalizedPhones(db); err != nil {
+			log.Printf("[bootstrap] phone backfill: %v", err)
+		}
+		if err := applyLedgerIndexes(db); err != nil {
+			log.Printf("[bootstrap] ledger indexes: %v", err)
+		}
+	}
+
 	log.Println("[DB] auto-migrations completed")
 	return nil
 }

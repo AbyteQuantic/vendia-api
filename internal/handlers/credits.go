@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
 	"vendia-backend/internal/services"
@@ -17,6 +18,7 @@ func ListCredits(db *gorm.DB) gin.HandlerFunc {
 		tenantID := middleware.GetTenantID(c)
 		p := parsePagination(c)
 		status := c.Query("status")
+		groupBy := c.Query("group_by")
 
 		scope := ResolveBranchScope(c, db)
 		if scope.NotOwned {
@@ -24,6 +26,15 @@ func ListCredits(db *gorm.DB) gin.HandlerFunc {
 				"error":      "la sucursal no pertenece al negocio",
 				"error_code": "branch_not_owned",
 			})
+			return
+		}
+
+		// /credits?group_by=customer collapses every open-shape ledger
+		// account into one row per customer with rolled-up balances.
+		// Powers the cuaderno's main list — one entry per debtor, not
+		// one per fiado event.
+		if groupBy == "customer" {
+			listCreditsGroupedByCustomer(db, c, tenantID, scope)
 			return
 		}
 
@@ -36,10 +47,20 @@ func ListCredits(db *gorm.DB) gin.HandlerFunc {
 		var total int64
 		query.Count(&total)
 
+		// Pagados (status='paid') sorts by when the account closed —
+		// most recent settlement first — instead of creation date,
+		// because what the cashier wants to see is "qué se pagó hoy?".
+		// NULLS LAST keeps legacy paid rows (closed before this column
+		// existed) at the bottom rather than scrambling the top.
+		listQuery := query.Preload("Customer")
+		if status == "paid" {
+			listQuery = listQuery.Order("closed_at DESC NULLS LAST")
+		} else {
+			listQuery = listQuery.Order("created_at DESC")
+		}
+
 		var credits []models.CreditAccount
-		if err := query.
-			Preload("Customer").
-			Order("created_at DESC").
+		if err := listQuery.
 			Offset((p.Page - 1) * p.PerPage).
 			Limit(p.PerPage).
 			Find(&credits).Error; err != nil {
@@ -49,6 +70,74 @@ func ListCredits(db *gorm.DB) gin.HandlerFunc {
 
 		c.JSON(http.StatusOK, newPaginatedResponse(credits, total, p))
 	}
+}
+
+// listCreditsGroupedByCustomer rolls every open-shape ledger account
+// into a single row per customer. The cuaderno screen renders one
+// entry per debtor, not one per fiado event — without this rollup the
+// list could show three "Viviana — $50.000" rows for the same
+// customer. We return all open / partial / pending accounts because
+// they all count as "live debt" the tendero needs to see.
+//
+// "Worst-case" status priority: open > partial > pending. If any of
+// the customer's accounts are open the row reads as open even if a
+// pending one also exists; the UI shows the worst (most actionable)
+// state.
+func listCreditsGroupedByCustomer(db *gorm.DB, c *gin.Context, tenantID string, scope BranchScopeResolution) {
+	// LatestAt is intentionally a string. Postgres returns a
+	// time.Time for MAX(updated_at), but the SQLite test driver
+	// surfaces it as text — keeping it as a string makes the
+	// query portable and lets the client parse if it cares (the
+	// cuaderno screen only shows "balance ↓" sort today; this
+	// field is informational).
+	type Row struct {
+		CustomerID    string `json:"customer_id"`
+		CustomerName  string `json:"customer_name"`
+		CustomerPhone string `json:"customer_phone"`
+		TotalAmount   int64  `json:"total_amount"`
+		PaidAmount    int64  `json:"paid_amount"`
+		Balance       int64  `json:"balance"`
+		AccountsCount int64  `json:"accounts_count"`
+		LatestAt      string `json:"latest_activity_at"`
+		Status        string `json:"status"`
+	}
+
+	// MAX(CASE ...) instead of BOOL_OR keeps the query portable
+	// across Postgres (production) and SQLite (unit tests). The
+	// numeric collation 'open'(2) > 'partial'(1) > 'pending'(0)
+	// means MAX picks the worst-case status alphabetically the
+	// way we want.
+	q := db.Table("credit_accounts AS ca").
+		Select(`
+			ca.customer_id,
+			COALESCE(c.name, '') AS customer_name,
+			COALESCE(c.phone, '') AS customer_phone,
+			COALESCE(SUM(ca.total_amount), 0) AS total_amount,
+			COALESCE(SUM(ca.paid_amount), 0) AS paid_amount,
+			COALESCE(SUM(ca.total_amount - ca.paid_amount), 0) AS balance,
+			COUNT(*) AS accounts_count,
+			MAX(ca.updated_at) AS latest_at,
+			CASE
+			  WHEN MAX(CASE WHEN ca.status = 'open'    THEN 1 ELSE 0 END) = 1 THEN 'open'
+			  WHEN MAX(CASE WHEN ca.status = 'partial' THEN 1 ELSE 0 END) = 1 THEN 'partial'
+			  ELSE 'pending'
+			END AS status
+		`).
+		Joins("LEFT JOIN customers c ON c.id = ca.customer_id AND c.deleted_at IS NULL").
+		Where("ca.tenant_id = ? AND ca.deleted_at IS NULL", tenantID).
+		Where("ca.status IN ?", []string{"open", "partial", "pending"}).
+		Group("ca.customer_id, c.name, c.phone").
+		Order("balance DESC")
+
+	q = ApplyBranchScope(q, scope)
+
+	var rows []Row
+	if err := q.Find(&rows).Error; err != nil {
+		log.Printf("[list-credits] group_by=customer tenant=%s: %v", tenantID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo agrupar"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": rows})
 }
 
 func CreateCredit(db *gorm.DB) gin.HandlerFunc {
@@ -264,9 +353,9 @@ func CloseCredit(db *gorm.DB) gin.HandlerFunc {
 		// "Cerrar cuenta" taps that would erase a real balance.
 		if remaining > 0 && !req.Force {
 			c.JSON(http.StatusConflict, gin.H{
-				"error":     "la cuenta aún tiene saldo pendiente",
-				"balance":   remaining,
-				"hint":      "registre abonos hasta saldar, o use force=true para condonar el saldo",
+				"error":   "la cuenta aún tiene saldo pendiente",
+				"balance": remaining,
+				"hint":    "registre abonos hasta saldar, o use force=true para condonar el saldo",
 			})
 			return
 		}
@@ -287,6 +376,7 @@ func CloseCredit(db *gorm.DB) gin.HandlerFunc {
 			branchPtr = &branchID
 		}
 
+		now := time.Now()
 		err := db.Transaction(func(tx *gorm.DB) error {
 			if remaining > 0 {
 				writeOff := map[string]any{
@@ -305,9 +395,13 @@ func CloseCredit(db *gorm.DB) gin.HandlerFunc {
 					return err
 				}
 			}
+			// Stamp closed_at so "Pagados" tab can order by it. The
+			// status flip alone wouldn't tell us WHEN the customer
+			// settled vs when they originally opened the fiado.
 			return tx.Model(&credit).Updates(map[string]any{
 				"paid_amount": credit.TotalAmount,
 				"status":      "paid",
+				"closed_at":   now,
 			}).Error
 		})
 
@@ -323,11 +417,11 @@ func CloseCredit(db *gorm.DB) gin.HandlerFunc {
 
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{
-				"credit_id":     credit.ID,
-				"status":        "paid",
-				"written_off":   remaining,
-				"total_amount":  credit.TotalAmount,
-				"reason":        note,
+				"credit_id":    credit.ID,
+				"status":       "paid",
+				"written_off":  remaining,
+				"total_amount": credit.TotalAmount,
+				"reason":       note,
 			},
 		})
 	}

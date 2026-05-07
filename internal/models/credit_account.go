@@ -16,6 +16,11 @@ type CreditAccount struct {
 	Status      string     `gorm:"default:'open'" json:"status"`
 	DueDate     *time.Time `json:"due_date"`
 
+	// ClosedAt records the moment the account reached zero balance
+	// (whether by payment, write-off, or full settlement). Drives the
+	// "Pagados" tab order on the cuaderno screen — never gets reset.
+	ClosedAt *time.Time `json:"closed_at,omitempty"`
+
 	// Fiado handshake fields
 	FiadoToken  string     `gorm:"type:uuid;uniqueIndex" json:"fiado_token,omitempty"`
 	FiadoStatus string     `gorm:"default:'none'" json:"fiado_status"`

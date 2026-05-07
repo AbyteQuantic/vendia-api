@@ -2,6 +2,7 @@ package services
 
 import (
 	"errors"
+	"time"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
 
@@ -9,8 +10,8 @@ import (
 )
 
 var (
-	ErrCreditNotFound  = errors.New("crédito no encontrado")
-	ErrPaymentExceeds  = errors.New("el abono excede el saldo pendiente")
+	ErrCreditNotFound    = errors.New("crédito no encontrado")
+	ErrPaymentExceeds    = errors.New("el abono excede el saldo pendiente")
 	ErrCreditAlreadyPaid = errors.New("el crédito ya está pagado")
 )
 
@@ -65,14 +66,20 @@ func (s *CreditService) RegisterPaymentWithActor(tenantID, creditID, userID, bra
 
 		newPaid := credit.PaidAmount + amount
 		newStatus := "partial"
-		if newPaid >= credit.TotalAmount {
-			newStatus = "paid"
-		}
-
-		return tx.Model(&credit).Updates(map[string]any{
+		updates := map[string]any{
 			"paid_amount": newPaid,
 			"status":      newStatus,
-		}).Error
+		}
+		if newPaid >= credit.TotalAmount {
+			// Stamp closed_at when the account hits zero balance via
+			// payments. Drives "Pagados" tab ordering on the cuaderno
+			// screen — never reset, never overwritten.
+			now := time.Now()
+			updates["status"] = "paid"
+			updates["closed_at"] = now
+		}
+
+		return tx.Model(&credit).Updates(updates).Error
 	})
 
 	if err != nil {
