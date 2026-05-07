@@ -100,9 +100,9 @@ type Tenant struct {
 	HasShowcases bool     `gorm:"not null;default:false" json:"has_showcases"`
 	HasTables    bool     `gorm:"not null;default:false" json:"has_tables"`
 
-	ChargeMode    string  `gorm:"default:'pre_payment'" json:"charge_mode"`
-	EnableFiados  bool    `gorm:"default:true" json:"enable_fiados"`
-	DefaultMargin float64 `gorm:"default:20" json:"default_margin"`
+	ChargeMode          string  `gorm:"default:'pre_payment'" json:"charge_mode"`
+	EnableFiados        bool    `gorm:"default:true" json:"enable_fiados"`
+	DefaultMargin       float64 `gorm:"default:20" json:"default_margin"`
 	PanicMessage        string  `gorm:"default:''" json:"panic_message"`
 	PanicIncludeAddress bool    `gorm:"default:true" json:"panic_include_address"`
 	PanicIncludeGPS     bool    `gorm:"default:true" json:"panic_include_gps"`
@@ -137,6 +137,27 @@ type Tenant struct {
 	DeliveryCost   float64 `gorm:"default:0" json:"delivery_cost"`
 	MinOrderAmount float64 `gorm:"default:0" json:"min_order_amount"`
 	LogoURL        string  `json:"logo_url,omitempty"`
+
+	// ── IVA / Growth Radar (epic Safe Tax Flow) ───────────────────
+	// VATEnabled is the master switch for IVA flow. Frontend reads this
+	// to drive the snapshot population on closed sales.
+	VATEnabled *bool `gorm:"default:false" json:"vat_enabled"`
+
+	// VATRate is the VAT rate as a decimal (0.19 = 19%). Nullable so a
+	// never-activated tenant has no value at all.
+	VATRate *float64 `json:"vat_rate"`
+
+	// VATInclusivePricing controls whether stored prices already
+	// include VAT (Colombia default = true) or VAT is added at checkout.
+	VATInclusivePricing *bool `json:"vat_inclusive_pricing"`
+
+	// VATActivatedAt records when the merchant first turned VAT on.
+	// Used for audit + the "una vez activado, siempre activo" rule.
+	VATActivatedAt *time.Time `json:"vat_activated_at"`
+
+	// DIANThresholdCOP overrides the per-tenant Growth Radar threshold.
+	// Nullable — when null, frontend uses the global default (160_000_000).
+	DIANThresholdCOP *int64 `json:"dian_threshold_cop"`
 
 	Employees []Employee `gorm:"foreignKey:TenantID" json:"employees,omitempty"`
 }
