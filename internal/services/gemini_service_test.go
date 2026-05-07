@@ -77,3 +77,85 @@ func TestResolveLogoSubject_KeywordMapping(t *testing.T) {
 		})
 	}
 }
+
+// buildEnhancePhotoPrompt is the hot path for "Mejorar con IA" on
+// product photos. The previous prompt only forbade colour changes;
+// production users reported the model regenerating recognisable
+// products (e.g. a Toy Story keychain) from its training prior,
+// losing the actual SKU's silhouette and accessories. The current
+// prompt pins identity preservation explicitly. These tests pin the
+// regression so a future "tighten the prompt" refactor can't
+// accidentally drop the anti-regeneration anchors.
+func TestBuildEnhancePhotoPrompt_IdentityPreservationAnchors(t *testing.T) {
+	prompt := buildEnhancePhotoPrompt("")
+
+	// Anti-regeneration anchor: the model must NOT fall back to its
+	// training-time mental model of recognisable products.
+	mustContain := []string{
+		"FUENTE CANÓNICA",
+		"NO uses tu conocimiento previo",
+		"IGNORA ese conocimiento",
+		"PIXEL-A-PIXEL la silueta",
+		"fidelidad a la foto",
+	}
+	for _, s := range mustContain {
+		assert.Contains(t, prompt, s,
+			"identity-preservation anchor missing: %q", s)
+	}
+
+	// Negative list: the specific failure modes the QA team caught
+	// (Toy Story keychain regenerated with different face / base /
+	// keyring position) all need their explicit prohibition.
+	negativeList := []string{
+		"PROHIBIDO redibujar la cara",
+		"PROHIBIDO mover, duplicar, eliminar o reposicionar accesorios",
+		"PROHIBIDO sustituir la base/pies/soporte",
+	}
+	for _, s := range negativeList {
+		assert.Contains(t, prompt, s,
+			"negative prompt missing: %q", s)
+	}
+
+	// Self-verification block: the model is asked to re-check its
+	// own output before delivering, which empirically reduces the
+	// regeneration rate on diffusion models.
+	assert.Contains(t, prompt, "VERIFICACIÓN ANTES DE ENTREGAR",
+		"self-check block missing — regression risk")
+	assert.Contains(t, prompt, "¿La silueta del producto coincide con la entrada?",
+		"silhouette check missing")
+}
+
+func TestBuildEnhancePhotoPrompt_ProductInfoIsInjected(t *testing.T) {
+	prompt := buildEnhancePhotoPrompt("Llavero Alien Pixar verde con aro metálico")
+	assert.Contains(t, prompt, "El producto es: Llavero Alien Pixar verde con aro metálico.",
+		"productInfo must be embedded so the model knows the SKU context")
+}
+
+func TestBuildEnhancePhotoPrompt_EmptyProductInfoStillBuilds(t *testing.T) {
+	// Empty productInfo is a valid input — the call sites pass "" when
+	// the merchant hasn't filled in the product name yet. The prompt
+	// must still build a complete, working instruction without trailing
+	// whitespace artifacts that confuse the diffusion model.
+	prompt := buildEnhancePhotoPrompt("")
+	assert.NotContains(t, prompt, "El producto es: .",
+		"empty productInfo must not leave a dangling sentence")
+	assert.Contains(t, prompt, "Eres un EDITOR FOTOGRÁFICO profesional",
+		"prompt header must always be present")
+}
+
+func TestBuildEnhancePhotoPrompt_ColorAndFramingRulesPreserved(t *testing.T) {
+	// The original prompt's framing rules (1:1, 75% max area, 12% safe
+	// zone, white background) were proven in production — the new
+	// identity layer must add to them, not replace them.
+	prompt := buildEnhancePhotoPrompt("")
+	for _, anchor := range []string{
+		"colores originales son SAGRADOS",
+		"BLANCO PURO sólido (#FFFFFF)",
+		"Formato cuadrado 1:1",
+		"75% del área", // Sprintf collapses %% in the source to a single % in output.
+		"safe zone",
+	} {
+		assert.Contains(t, prompt, anchor,
+			"legacy framing rule lost during refactor: %q", anchor)
+	}
+}
