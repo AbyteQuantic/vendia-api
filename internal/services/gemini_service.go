@@ -17,6 +17,17 @@ import (
 	"gorm.io/gorm"
 )
 
+// defaultTextModel and defaultImageModel are the IDs used when the
+// caller did not configure GEMINI_MODEL / GEMINI_IMAGE_MODEL and the
+// runtime discovery did not return a usable candidate. We default the
+// image model to Nano Banana Pro because identity preservation on
+// product photos (the "Mejorar con IA" flow) is the dominant use case
+// and Pro respects the source silhouette better than the Flash tiers.
+const (
+	defaultTextModel  = "gemini-2.0-flash"
+	defaultImageModel = "gemini-3-pro-image-preview"
+)
+
 type GeminiService struct {
 	apiKey     string
 	model      string
@@ -97,14 +108,14 @@ func (s *GeminiService) discoverModels() (string, string) {
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		log.Printf("[GEMINI] Failed to list models: %v — using hardcoded fallbacks", err)
-		return "gemini-2.0-flash", "gemini-2.5-flash-image"
+		return defaultTextModel, defaultImageModel
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("[GEMINI] ListModels HTTP %d: %.200s — using fallbacks", resp.StatusCode, string(body))
-		return "gemini-2.0-flash", "gemini-2.5-flash-image"
+		return defaultTextModel, defaultImageModel
 	}
 
 	var listResp struct {
@@ -115,7 +126,7 @@ func (s *GeminiService) discoverModels() (string, string) {
 	}
 	if err := json.Unmarshal(body, &listResp); err != nil {
 		log.Printf("[GEMINI] Failed to parse models list: %v", err)
-		return "gemini-2.0-flash", "gemini-2.5-flash-image"
+		return defaultTextModel, defaultImageModel
 	}
 
 	var textModel, imageModel string
@@ -148,19 +159,31 @@ func (s *GeminiService) discoverModels() (string, string) {
 			}
 		}
 
-		// Image generation model: prefer flash-image or flash-exp
+		// Image generation model: prefer Pro tier (Nano Banana Pro)
+		// over Flash for product-photo identity preservation, then
+		// fall back to alphabetical ordering within the same tier.
 		if strings.Contains(name, "image") || strings.Contains(name, "flash-exp") {
-			if imageModel == "" || strings.Compare(name, imageModel) > 0 {
+			if imageModel == "" {
 				imageModel = name
+			} else {
+				candidateIsPro := strings.Contains(name, "pro")
+				currentIsPro := strings.Contains(imageModel, "pro")
+				switch {
+				case candidateIsPro && !currentIsPro:
+					imageModel = name
+				case candidateIsPro == currentIsPro &&
+					strings.Compare(name, imageModel) > 0:
+					imageModel = name
+				}
 			}
 		}
 	}
 
 	if textModel == "" {
-		textModel = "gemini-2.0-flash"
+		textModel = defaultTextModel
 	}
 	if imageModel == "" {
-		imageModel = "gemini-2.5-flash-image"
+		imageModel = defaultImageModel
 	}
 
 	log.Printf("[GEMINI] Discovered %d models. Selected text=%s, image=%s", len(listResp.Models), textModel, imageModel)

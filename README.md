@@ -27,6 +27,8 @@ go run ./cmd/server/main.go
 | `PORT` | Default 8080 | No |
 | `ENV` | development / production | No |
 | `GEMINI_API_KEY` | Google Gemini API key | No |
+| `GEMINI_MODEL` | Text/OCR model. Default `gemini-2.0-flash` | No |
+| `GEMINI_IMAGE_MODEL` | Image edit/gen model. Default `gemini-3-pro-image-preview` (Nano Banana Pro) | No |
 | `ALLOWED_ORIGINS` | CORS origins (comma-separated) | No |
 
 ## API

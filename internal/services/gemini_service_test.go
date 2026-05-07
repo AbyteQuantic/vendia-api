@@ -8,12 +8,28 @@ import (
 )
 
 func TestNewGeminiService_Defaults(t *testing.T) {
+	// With an unconfigured imageModel, the constructor falls through
+	// discovery (which fails with the bogus key) and lands on the
+	// hardcoded defaults. Pinning these IDs here protects against an
+	// accidental rename of the constants — Render relies on the
+	// fallback during cold starts before the env var is plumbed in.
 	svc := NewGeminiService("test-key", "", "", 0)
 	assert.NotNil(t, svc)
 	assert.Equal(t, "gemini-2.0-flash", svc.model)
-	assert.Equal(t, "gemini-2.5-flash-image", svc.imageModel)
+	assert.Equal(t, "gemini-3-pro-image-preview", svc.imageModel,
+		"default image model must be Nano Banana Pro for product-photo "+
+			"identity preservation")
 	assert.Equal(t, 30*time.Second, svc.timeout)
 	assert.Equal(t, "test-key", svc.apiKey)
+}
+
+func TestDefaultImageModel_IsNanoBananaPro(t *testing.T) {
+	// Mirror the const directly so refactors that touch the constant
+	// have to update this test deliberately.
+	assert.Equal(t, "gemini-3-pro-image-preview", defaultImageModel,
+		"default image model is the contract — change deliberately")
+	assert.Equal(t, "gemini-2.0-flash", defaultTextModel,
+		"default text model unchanged — text/OCR still runs on Flash")
 }
 
 func TestNewGeminiService_CustomModel(t *testing.T) {
