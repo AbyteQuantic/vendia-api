@@ -50,6 +50,13 @@ func InitFiado(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// Normalize the phone EARLY so every downstream lookup, customer
+		// upsert and unique-constraint check sees the canonical digits-
+		// only form. Without this, the same human ("(300) 123-4567" vs
+		// "+57 300 123 4567") creates two customer rows and bypasses the
+		// one-open-account invariant.
+		normalizedPhone := normalizePhone(req.CustomerPhone)
+
 		// ── Idempotency: check if a pending fiado already exists ─────────
 		if req.IdempotencyKey != "" {
 			var existing models.CreditAccount
@@ -64,19 +71,25 @@ func InitFiado(db *gorm.DB) gin.HandlerFunc {
 		// Also check for pending fiado with same customer+amount in last 5 min
 		var recent models.CreditAccount
 		fiveMinAgo := time.Now().Add(-5 * time.Minute)
-		if err := db.Where("tenant_id = ? AND total_amount = ? AND fiado_status IN (?, ?) AND created_at > ?",
-			tenantID, req.TotalAmount, FiadoLinkSent, FiadoLinkOpened, fiveMinAgo).
-			Joins("JOIN customers ON customers.id = credit_accounts.customer_id AND customers.phone = ?", req.CustomerPhone).
-			First(&recent).Error; err == nil {
-			c.JSON(http.StatusOK, buildFiadoResponse(db, recent, tenantID))
-			return
+		if normalizedPhone != "" {
+			// Fully qualify the columns — both credit_accounts and
+			// customers carry tenant_id, so the unqualified reference
+			// blew up with "ambiguous column name" once we exercised
+			// the path with a real customer row.
+			if err := db.Where("credit_accounts.tenant_id = ? AND credit_accounts.total_amount = ? AND credit_accounts.fiado_status IN (?, ?) AND credit_accounts.created_at > ?",
+				tenantID, req.TotalAmount, FiadoLinkSent, FiadoLinkOpened, fiveMinAgo).
+				Joins("JOIN customers ON customers.id = credit_accounts.customer_id AND customers.phone = ?", normalizedPhone).
+				First(&recent).Error; err == nil {
+				c.JSON(http.StatusOK, buildFiadoResponse(db, recent, tenantID))
+				return
+			}
 		}
 
 		// ── Find or create customer ─────────────────────────────────────
 		var customer models.Customer
 		found := false
-		if req.CustomerPhone != "" {
-			if err := db.Where("tenant_id = ? AND phone = ?", tenantID, req.CustomerPhone).
+		if normalizedPhone != "" {
+			if err := db.Where("tenant_id = ? AND phone = ?", tenantID, normalizedPhone).
 				First(&customer).Error; err == nil {
 				found = true
 			}
@@ -91,12 +104,12 @@ func InitFiado(db *gorm.DB) gin.HandlerFunc {
 			customer = models.Customer{
 				TenantID: tenantID,
 				Name:     req.CustomerName,
-				Phone:    req.CustomerPhone,
+				Phone:    normalizedPhone,
 				Email:    req.CustomerEmail,
 			}
 			if err := db.Create(&customer).Error; err != nil {
 				log.Printf("[init-fiado] create customer failed tenant=%s phone=%q email=%q: %v",
-					tenantID, req.CustomerPhone, req.CustomerEmail, err)
+					tenantID, normalizedPhone, req.CustomerEmail, err)
 				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al crear cliente: %v", err)})
 				return
 			}
@@ -105,16 +118,17 @@ func InitFiado(db *gorm.DB) gin.HandlerFunc {
 			if req.CustomerEmail != "" && customer.Email == "" {
 				updates["email"] = req.CustomerEmail
 			}
-			if req.CustomerPhone != "" && customer.Phone == "" {
-				updates["phone"] = req.CustomerPhone
+			if normalizedPhone != "" && customer.Phone == "" {
+				updates["phone"] = normalizedPhone
 			}
 			if len(updates) > 0 {
 				db.Model(&customer).Updates(updates)
 			}
 		}
 
-		// ── One-Open-Account rule: if this customer already has an
-		// accepted (open) fiado, DON'T auto-merge. Return a 409-style
+		// ── One-Open-Account rule: if this customer already has any
+		// open-shape ledger account (open, partial mid-payment, or
+		// pending fiado handshake), DON'T auto-merge. Return a 409-style
 		// payload so the client can show the cashier a confirmation
 		// dialog: "Viviana ya tiene cuenta abierta por $X — ¿sumar $Y?".
 		// On confirmation the client calls /credits/:id/append, which
@@ -122,22 +136,29 @@ func InitFiado(db *gorm.DB) gin.HandlerFunc {
 		// line of credit. This preserves the "one-open-account" invariant
 		// (we never create a duplicate account silently) while giving the
 		// cashier full visibility into what's happening.
+		//
+		// We expand the gate beyond just status='open'+accepted: a
+		// 'partial' account (mid-abono) and a 'pending' account (link
+		// sent but not yet accepted) BOTH count as "live" — opening a
+		// second one would corrupt the customer's statement.
 		var openAcct models.CreditAccount
 		if err := db.Where(
-			"tenant_id = ? AND customer_id = ? AND status = ? AND fiado_status = ?",
-			tenantID, customer.ID, "open", FiadoAccepted,
+			"tenant_id = ? AND customer_id = ? AND status IN ? AND deleted_at IS NULL",
+			tenantID, customer.ID, []string{"open", "partial", "pending"},
 		).First(&openAcct).Error; err == nil {
 			c.JSON(http.StatusOK, gin.H{
 				"data": gin.H{
-					"needs_confirmation":   true,
-					"existing_credit_id":   openAcct.ID,
-					"existing_total":       openAcct.TotalAmount,
-					"existing_paid":        openAcct.PaidAmount,
-					"existing_balance":     openAcct.TotalAmount - openAcct.PaidAmount,
-					"customer_name":        customer.Name,
-					"customer_phone":       customer.Phone,
-					"requested_amount":     req.TotalAmount,
-					"projected_new_total":  openAcct.TotalAmount + req.TotalAmount,
+					"needs_confirmation":    true,
+					"existing_credit_id":    openAcct.ID,
+					"existing_total":        openAcct.TotalAmount,
+					"existing_paid":         openAcct.PaidAmount,
+					"existing_balance":      openAcct.TotalAmount - openAcct.PaidAmount,
+					"existing_status":       openAcct.Status,
+					"existing_fiado_status": openAcct.FiadoStatus,
+					"customer_name":         customer.Name,
+					"customer_phone":        customer.Phone,
+					"requested_amount":      req.TotalAmount,
+					"projected_new_total":   openAcct.TotalAmount + req.TotalAmount,
 				},
 			})
 			return
@@ -161,6 +182,32 @@ func InitFiado(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		if err := db.Create(&credit).Error; err != nil {
+			// Race protection: if two POS tabs hit InitFiado at the same
+			// moment, the app-level check above can't see each other's
+			// in-flight INSERT. The Postgres uq_one_open_account partial
+			// index makes the race physically impossible — when it fires
+			// we recover the existing row and return the same
+			// needs_confirmation envelope as the happy path.
+			if isUniqueViolation(err, "uq_one_open_account") {
+				var existing models.CreditAccount
+				if findErr := db.Where(
+					"tenant_id = ? AND customer_id = ? AND status IN ? AND deleted_at IS NULL",
+					tenantID, customer.ID, []string{"open", "partial", "pending"},
+				).First(&existing).Error; findErr == nil {
+					c.JSON(http.StatusConflict, gin.H{
+						"data": gin.H{
+							"needs_confirmation":    true,
+							"existing_credit_id":    existing.ID,
+							"existing_total":        existing.TotalAmount,
+							"existing_paid":         existing.PaidAmount,
+							"existing_balance":      existing.TotalAmount - existing.PaidAmount,
+							"existing_status":       existing.Status,
+							"existing_fiado_status": existing.FiadoStatus,
+						},
+					})
+					return
+				}
+			}
 			log.Printf("[init-fiado] create credit failed tenant=%s customer=%s total=%d: %v",
 				tenantID, customer.ID, req.TotalAmount, err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al crear fiado: %v", err)})
@@ -169,6 +216,21 @@ func InitFiado(db *gorm.DB) gin.HandlerFunc {
 
 		c.JSON(http.StatusCreated, buildFiadoResponse(db, credit, tenantID))
 	}
+}
+
+// isUniqueViolation detects Postgres unique-constraint failures by
+// matching against the error string. Avoids pulling in pgx/pgconn as
+// a direct dependency just for one error code — the SQLSTATE 23505
+// always surfaces in the wrapped error message GORM returns, and the
+// constraint name lets us narrow to a specific index instead of
+// catching every duplicate-key error.
+func isUniqueViolation(err error, indexName string) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, indexName) ||
+		(strings.Contains(msg, "SQLSTATE 23505") && strings.Contains(msg, indexName))
 }
 
 // AppendToFiado adds an amount to an existing, already-accepted (open) credit

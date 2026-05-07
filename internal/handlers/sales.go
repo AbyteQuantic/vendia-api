@@ -108,13 +108,22 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		// Credit sales need either a customer (opens a new credit account) or
-		// an existing credit_account_id (appends to a pre-authorized fiado).
+		// Credit sales MUST carry an existing credit_account_id. The
+		// fiado handshake is the ONLY path that opens a CreditAccount
+		// — see /api/v1/fiado/init — so a credit sale without that id
+		// is a client bug we want to surface as 400 instead of silently
+		// patching it up here. Without this guard we'd create rogue
+		// ledger accounts that never went through the handshake (no
+		// customer signature, no notification, no audit trail).
 		hasCustomer := req.CustomerID != nil && *req.CustomerID != ""
 		hasCreditAccount := req.CreditAccountID != nil && *req.CreditAccountID != ""
-		if req.PaymentMethod == models.PaymentCredit && !hasCustomer && !hasCreditAccount {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "customer_id o credit_account_id requerido para ventas a crédito"})
-			return
+		if req.PaymentMethod == models.PaymentCredit {
+			if !hasCreditAccount {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"error": "credit_account_id requerido — abre el fiado vía /api/v1/fiado/init",
+				})
+				return
+			}
 		}
 
 		// When the sale is linked to an existing credit account but the
@@ -127,7 +136,6 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 				First(&linked).Error; err == nil && linked.CustomerID != "" {
 				cid := linked.CustomerID
 				req.CustomerID = &cid
-				hasCustomer = true
 			}
 		}
 
@@ -293,23 +301,10 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 				return err
 			}
 
-			// Only create a new credit account when the caller did NOT pass
-			// an existing one. When credit_account_id is present the append
-			// is authoritative (InitFiado / AppendToFiado already bumped the
-			// total); we just link the sale so the statement can show items.
-			if sale.IsCredit && req.CustomerID != nil && !hasCreditAccount {
-				credit := models.CreditAccount{
-					TenantID:    tenantID,
-					CreatedBy:   middleware.UUIDPtr(userID),
-					BranchID:    middleware.UUIDPtr(branchID),
-					CustomerID:  *req.CustomerID,
-					SaleID:      &sale.ID,
-					TotalAmount: int64(total),
-					Status:      "open",
-				}
-				return tx.Create(&credit).Error
-			}
-
+			// NOTE: credit accounts are only ever created via the explicit
+			// fiado handshake (POST /api/v1/fiado/init) — never implicitly
+			// from a sale. If we got here the credit_account_id was already
+			// validated above; we just need the sale row linked to it.
 			return nil
 		})
 
