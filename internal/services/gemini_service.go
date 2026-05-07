@@ -518,37 +518,80 @@ func businessTypeLabel(t string) string {
 	}
 }
 
-// EnhancePhoto generates a professional e-commerce product photo.
-// productInfo is optional context (e.g., "Coca-Cola Botella 350ml").
-func (s *GeminiService) EnhancePhoto(ctx context.Context, imageData []byte, mimeType string, productInfo string) ([]byte, error) {
+// buildEnhancePhotoPrompt assembles the identity-preserving instruction
+// passed to Gemini's image-edit endpoint. Extracted so unit tests can
+// pin the regression: when the previous prompt only forbade colour
+// changes the model regenerated recognisable products (Toy Story
+// keychains, branded packaging) from its training prior, losing the
+// physical shape of the customer's actual SKU.
+func buildEnhancePhotoPrompt(productInfo string) string {
 	description := ""
 	if productInfo != "" {
 		description = fmt.Sprintf("\nEl producto es: %s.", productInfo)
 	}
+	return fmt.Sprintf(`Eres un EDITOR FOTOGRÁFICO profesional, NO un artista creativo, NO un ilustrador.%s
 
-	prompt := fmt.Sprintf(`Eres un EDITOR FOTOGRÁFICO profesional, NO un artista creativo.%s
+TAREA: Toma esta foto real de un producto y edítala para catálogo de e-commerce. Trabajas SOBRE los píxeles del producto en la imagen — no generas una versión nueva.
 
-TAREA: Toma esta foto real de un producto y edítala para catálogo de e-commerce.
+═══════════════════════════════════════════════════════════════════
+REGLA #0 — PRESERVACIÓN DE IDENTIDAD (INNEGOCIABLE)
+═══════════════════════════════════════════════════════════════════
 
-REGLAS ESTRICTAS (PROHIBIDO violarlas):
-1. PROHIBIDO cambiar el color original del producto. Si es rojo, DEBE seguir siendo rojo. Si es verde, DEBE seguir siendo verde. Los colores originales son SAGRADOS.
+La imagen adjunta es la FUENTE CANÓNICA del producto. NO uses tu conocimiento previo de marcas, personajes, juguetes ni packaging "oficial". NO generes una versión "mejor" o "correcta" del producto desde memoria. Si reconoces el producto (ej. un personaje conocido, una marca famosa, un envase típico), IGNORA ese conocimiento — la única referencia válida es lo que ves en la foto.
+
+Mantén PIXEL-A-PIXEL la silueta y proporciones del producto:
+- La forma exacta del contorno (silueta).
+- El número, posición y forma exacta de cualquier elemento decorativo (ojos, botones, etiquetas, accesorios, ganchos, aros, tapas).
+- La postura, ángulo y orientación del producto tal como aparecen.
+- La estructura de la base, pies, soporte o asiento del producto.
+- Cualquier accesorio adherido (cordón, llavero, etiqueta colgante) en su posición exacta.
+
+Si dudas entre "fidelidad a la foto" e "interpretación del producto que crees reconocer", elige SIEMPRE fidelidad a la foto.
+
+═══════════════════════════════════════════════════════════════════
+REGLAS ESTRICTAS (PROHIBIDO violarlas)
+═══════════════════════════════════════════════════════════════════
+
+1. PROHIBIDO cambiar el color original del producto. Si es rojo, DEBE seguir siendo rojo. Si es verde, DEBE seguir siendo verde. Los colores originales son SAGRADOS — solo se permite refinarlos (saturación, limpieza), no sustituirlos por tonos parecidos.
 2. PROHIBIDO alterar las letras, marca, logo o forma del envase/empaque.
 3. PROHIBIDO inventar detalles que no existan en la foto original.
-4. Tu ÚNICA función es:
-   a) Eliminar el fondo y reemplazarlo por BLANCO PURO sólido (#FFFFFF).
-   b) Centrar el producto completo en el encuadre con margen seguro.
-   c) Aplicar iluminación suave y uniforme tipo estudio fotográfico.
-5. Si el producto está recortado en los bordes, autocompleta el envase respetando la geometría y textura ORIGINAL.
-6. Sin texto adicional, sin logos extras, sin marcas de agua.
+4. PROHIBIDO redibujar la cara, ojos, expresión o postura de figuras/personajes/juguetes.
+5. PROHIBIDO mover, duplicar, eliminar o reposicionar accesorios del producto (aros, ganchos, cordones, etiquetas).
+6. PROHIBIDO sustituir la base/pies/soporte por una versión estilizada distinta a la del original.
+7. Tu ÚNICA función es:
+   a) Eliminar el fondo (mesa, polvo, migas, sombras del entorno, manos) y reemplazarlo por BLANCO PURO sólido (#FFFFFF).
+   b) Limpiar la SUPERFICIE del producto: polvo adherido, huellas, manchas, migas pegadas. NO modifiques la forma al limpiar.
+   c) Refinar colores SIN cambiar el tono (hue): saturación de fábrica, no derives a turquesa si era azul, ni a verde lima si era verde estándar.
+   d) Centrar el producto completo en el encuadre con margen seguro.
+   e) Aplicar iluminación suave y uniforme tipo estudio fotográfico.
+8. Si el producto está recortado en los bordes, autocompleta el envase respetando la geometría y textura ORIGINAL — extiende lo que ya está, no inventes detalles nuevos.
+9. Sin texto adicional, sin logos extras, sin marcas de agua.
 
-ENCUADRE (REGLA CRÍTICA — no violar):
+═══════════════════════════════════════════════════════════════════
+ENCUADRE (REGLA CRÍTICA — no violar)
+═══════════════════════════════════════════════════════════════════
 - Formato cuadrado 1:1.
 - El producto NUNCA debe tocar los bordes de la imagen.
 - El producto debe ocupar como máximo el 75%% del área de la imagen.
 - Dejar un margen de "safe zone" BLANCO de al menos 12%% en los cuatro lados.
 - Si la foto original está recortada o acercada, ALÉJATE: reduce la escala del producto hasta que entre completo con margen. No uses zoom/close-up.
 
-Resultado esperado: Fotografía tipo catálogo Amazon — producto REAL sobre fondo blanco puro, centrado con aire alrededor.`, description)
+═══════════════════════════════════════════════════════════════════
+VERIFICACIÓN ANTES DE ENTREGAR
+═══════════════════════════════════════════════════════════════════
+1. ¿La silueta del producto coincide con la entrada? Si no → NO entregues, vuelve a editar.
+2. ¿Cualquier figura/personaje conserva el mismo número de ojos, mismas extremidades, misma postura, misma base? Si no → NO entregues.
+3. ¿Los accesorios (aros, ganchos, cordones) están en la MISMA posición que en la entrada? Si no → NO entregues.
+4. ¿Los colores conservan los tonos originales (no derivaste a paletas similares)? Si no → NO entregues.
+5. ¿El fondo es blanco puro y limpio sin texturas? Si no → NO entregues.
+
+Resultado esperado: Fotografía tipo catálogo Amazon — el MISMO producto de la entrada, idéntico en forma y proporciones, pero limpio, con colores vibrantes (mismos tonos), sobre fondo blanco puro, centrado con aire alrededor.`, description)
+}
+
+// EnhancePhoto generates a professional e-commerce product photo.
+// productInfo is optional context (e.g., "Coca-Cola Botella 350ml").
+func (s *GeminiService) EnhancePhoto(ctx context.Context, imageData []byte, mimeType string, productInfo string) ([]byte, error) {
+	prompt := buildEnhancePhotoPrompt(productInfo)
 
 	b64 := base64.StdEncoding.EncodeToString(imageData)
 
