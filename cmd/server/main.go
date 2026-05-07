@@ -41,6 +41,14 @@ func main() {
 	// Idempotent — subsequent boots are no-ops.
 	database.BackfillBranchIDs(db)
 
+	// Self-heal: every tenant must have at least the "Efectivo"
+	// payment method seeded. Pre-fix tenants registered before the
+	// seed landed and would otherwise render zero chips on the POS.
+	// Idempotent — only touches tenants with zero methods.
+	if err := database.SeedDefaultPaymentMethods(db); err != nil {
+		log.Printf("[BOOTSTRAP] default payment-method seed failed: %v", err)
+	}
+
 	// ── Initialize external services (optional, nil-safe) ───────────────────
 	var geminiSvc *services.GeminiService
 	if cfg.GeminiAPIKey != "" {

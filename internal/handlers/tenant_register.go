@@ -117,6 +117,24 @@ func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 				return err
 			}
 
+			// 2.b Seed the only payment method that's active by
+			//     default for new tenants. The merchant configures
+			//     Nequi / Daviplata / Tarjeta / Fiar later from the
+			//     admin screen by toggling is_active and uploading
+			//     their QR. Without this seed, the public catalog
+			//     and the POS payment chips fall back to hardcoded
+			//     UI defaults — masking the fact that the tenant
+			//     literally has zero rows in payment_methods.
+			defaultMethod := models.TenantPaymentMethod{
+				TenantID: tenant.ID,
+				Name:     "Efectivo",
+				Provider: "cash",
+				IsActive: true,
+			}
+			if err := tx.Create(&defaultMethod).Error; err != nil {
+				return fmt.Errorf("failed to seed default payment method: %w", err)
+			}
+
 			// 3. Create default Branch
 			branch := models.Branch{
 				TenantID: tenant.ID,

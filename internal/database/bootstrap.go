@@ -2,6 +2,7 @@ package database
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 
@@ -150,4 +151,49 @@ func BackfillBranchIDs(db *gorm.DB) {
 	if res.RowsAffected > 0 {
 		log.Printf("[BOOTSTRAP] backfilled %d rows in credit_payments", res.RowsAffected)
 	}
+}
+
+// SeedDefaultPaymentMethods creates the "Efectivo" row for every tenant
+// that currently has zero payment methods. Idempotent — only inserts
+// where the tenant has none, so it's safe to run on every cold start.
+//
+// The new tenant_register handler seeds Efectivo inside the registration
+// transaction, so this function is mostly a no-op going forward; its
+// sole job is to heal pre-fix tenants that registered before the seed
+// landed and would otherwise show zero payment chips on the POS.
+//
+// Errors on a single tenant are logged and swallowed so one bad row
+// can't poison the boot sequence — the very next deploy will retry.
+func SeedDefaultPaymentMethods(db *gorm.DB) error {
+	type tenantRow struct {
+		ID string
+	}
+	var orphans []tenantRow
+	err := db.Table("tenants AS t").
+		Select("t.id").
+		Joins(`LEFT JOIN payment_methods pm ON pm.tenant_id = t.id AND pm.deleted_at IS NULL`).
+		Where("t.deleted_at IS NULL AND pm.id IS NULL").
+		Scan(&orphans).Error
+	if err != nil {
+		return fmt.Errorf("query tenants without payment methods: %w", err)
+	}
+
+	if len(orphans) == 0 {
+		return nil
+	}
+
+	for _, row := range orphans {
+		method := models.TenantPaymentMethod{
+			TenantID: row.ID,
+			Name:     "Efectivo",
+			Provider: "cash",
+			IsActive: true,
+		}
+		if err := db.Create(&method).Error; err != nil {
+			log.Printf("[SEED] tenant=%s failed to seed default Efectivo: %v", row.ID, err)
+			continue
+		}
+		log.Printf("[SEED] tenant=%s seeded default Efectivo", row.ID)
+	}
+	return nil
 }

@@ -31,10 +31,18 @@ func ListPaymentMethods(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
 
+		// Default behaviour returns ALL methods — the admin screen
+		// needs the inactive ones to render the "toggle to enable"
+		// rows. The public catalog and the POS chip rail pass
+		// `?active=true` to narrow the response to what the
+		// merchant has actually turned on.
+		query := db.Where("tenant_id = ?", tenantID).Order("created_at ASC")
+		if c.Query("active") == "true" {
+			query = query.Where("is_active = ?", true)
+		}
+
 		var methods []models.TenantPaymentMethod
-		if err := db.Where("tenant_id = ?", tenantID).
-			Order("created_at ASC").
-			Find(&methods).Error; err != nil {
+		if err := query.Find(&methods).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al obtener métodos de pago"})
 			return
 		}
