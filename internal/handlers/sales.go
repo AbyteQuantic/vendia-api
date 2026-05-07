@@ -3,7 +3,6 @@ package handlers
 import (
 	"fmt"
 	"net/http"
-	"time"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
 	"vendia-backend/internal/services"
@@ -328,8 +327,7 @@ func TodayStats(db *gorm.DB) gin.HandlerFunc {
 		tenantID := middleware.GetTenantID(c)
 		scope := ResolveBranchScope(c, db)
 
-		now := time.Now()
-		startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		startOfToday := startOfTenantDay(tenantNow())
 		startOfYesterday := startOfToday.AddDate(0, 0, -1)
 
 		var totalSales float64
