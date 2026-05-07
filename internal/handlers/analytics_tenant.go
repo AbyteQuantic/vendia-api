@@ -16,8 +16,7 @@ func AnalyticsDashboard(db *gorm.DB) gin.HandlerFunc {
 		tenantID := middleware.GetTenantID(c)
 		scope := ResolveBranchScope(c, db)
 
-		now := time.Now()
-		startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		startOfToday := startOfTenantDay(tenantNow())
 
 		var totalSales float64
 		var transactionCount int64
@@ -83,7 +82,7 @@ func FinancialSummary(db *gorm.DB) gin.HandlerFunc {
 		tenantID := middleware.GetTenantID(c)
 		period := c.DefaultQuery("period", "today")
 
-		now := time.Now()
+		now := tenantNow()
 		since, prevSince, prevEnd := windowFor(period, now,
 			c.Query("since"), c.Query("until"))
 
@@ -382,7 +381,7 @@ func windowFor(period string, now time.Time, sinceQ, untilQ string) (time.Time, 
 		since := now.AddDate(0, -1, 0)
 		return since, since.AddDate(0, -1, 0), since
 	default: // today
-		since := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		since := startOfTenantDay(now)
 		return since, since.AddDate(0, 0, -1), since
 	}
 }
@@ -416,7 +415,7 @@ func SalesHistoryByPeriod(db *gorm.DB) gin.HandlerFunc {
 		period := c.DefaultQuery("period", "today")
 		p := parsePagination(c)
 
-		now := time.Now()
+		now := tenantNow()
 		var since time.Time
 		switch period {
 		case "week":
@@ -424,7 +423,7 @@ func SalesHistoryByPeriod(db *gorm.DB) gin.HandlerFunc {
 		case "month":
 			since = now.AddDate(0, -1, 0)
 		default:
-			since = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+			since = startOfTenantDay(now)
 		}
 
 		var total int64
@@ -657,8 +656,7 @@ func SalesByEmployee(db *gorm.DB) gin.HandlerFunc {
 		tenantID := middleware.GetTenantID(c)
 		scope := ResolveBranchScope(c, db)
 
-		now := time.Now()
-		startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		startOfToday := startOfTenantDay(tenantNow())
 
 		type EmployeeSales struct {
 			EmployeeUUID string  `json:"employee_uuid"`
