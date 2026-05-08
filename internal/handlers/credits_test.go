@@ -66,7 +66,8 @@ func setupCreditsDB(t *testing.T) *gorm.DB {
 			created_by TEXT, branch_id TEXT,
 			amount INTEGER NOT NULL DEFAULT 0,
 			payment_method TEXT DEFAULT 'cash',
-			note TEXT DEFAULT ''
+			note TEXT DEFAULT '',
+			receipt_image_url TEXT DEFAULT ''
 		)`,
 	}
 	for _, s := range stmts {
@@ -94,6 +95,17 @@ func mountCloseCredit(db *gorm.DB, tenantID string) *gin.Engine {
 		c.Next()
 	})
 	r.POST("/api/v1/credits/:id/close", handlers.CloseCredit(db))
+	return r
+}
+
+func mountCreditPayment(db *gorm.DB, tenantID string) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.TenantIDKey, tenantID)
+		c.Next()
+	})
+	r.POST("/api/v1/credits/:id/payments", handlers.CreatePayment(db))
 	return r
 }
 
@@ -227,4 +239,98 @@ func TestCloseCredit_StampsClosedAt(t *testing.T) {
 	require.NotNil(t, row.ClosedAt, "closed_at must be stamped on close")
 	assert.WithinDuration(t, time.Now(), *row.ClosedAt, 5*time.Second,
 		"closed_at must be ~now")
+}
+
+// TestRegisterCreditPayment_PersistsReceiptImageURL covers the
+// Mandatory Image Receipts epic for fiado abonos: the URL the
+// cashier sent must end up on the persisted CreditPayment row so the
+// audit trail survives the 8-day Supabase TTL purge of the blob.
+func TestRegisterCreditPayment_PersistsReceiptImageURL(t *testing.T) {
+	db := setupCreditsDB(t)
+	tenantID := "tenant-receipt-payment"
+
+	require.NoError(t, db.Exec(`INSERT INTO tenants (id, business_name, created_at) VALUES (?, ?, ?)`,
+		tenantID, "Tienda Recibo", time.Now()).Error)
+
+	creditID := "ffffffff-ffff-ffff-ffff-ffffffffffff"
+	require.NoError(t, db.Exec(`
+		INSERT INTO credit_accounts
+			(id, created_at, updated_at, tenant_id, customer_id, total_amount, paid_amount, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		creditID, time.Now(), time.Now(), tenantID,
+		"99999999-9999-9999-9999-999999999999", 10000, 0, "open").Error)
+
+	r := mountCreditPayment(db, tenantID)
+
+	receiptURL := "https://supabase.co/storage/v1/object/public/payment_receipts/abono.jpg"
+	body := map[string]any{
+		"amount":            5000,
+		"payment_method":    "transfer",
+		"note":              "abono digital",
+		"receipt_image_url": receiptURL,
+	}
+	raw, _ := json.Marshal(body)
+	req, _ := http.NewRequest(http.MethodPost,
+		"/api/v1/credits/"+creditID+"/payments",
+		bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var stored struct {
+		ReceiptImageURL string `gorm:"column:receipt_image_url"`
+		PaymentMethod   string `gorm:"column:payment_method"`
+	}
+	require.NoError(t, db.Table("credit_payments").
+		Select("receipt_image_url, payment_method").
+		Where("credit_account_id = ?", creditID).
+		Scan(&stored).Error)
+	assert.Equal(t, receiptURL, stored.ReceiptImageURL,
+		"the payment row must carry the receipt URL — audit trail")
+	assert.Equal(t, "transfer", stored.PaymentMethod)
+}
+
+// TestRegisterCreditPayment_AllowsEmptyReceiptForCashAbono is the
+// negative pair: cash abonos legitly omit the URL and must not 4xx.
+func TestRegisterCreditPayment_AllowsEmptyReceiptForCashAbono(t *testing.T) {
+	db := setupCreditsDB(t)
+	tenantID := "tenant-cash-abono"
+
+	require.NoError(t, db.Exec(`INSERT INTO tenants (id, business_name, created_at) VALUES (?, ?, ?)`,
+		tenantID, "Tienda Cash", time.Now()).Error)
+
+	creditID := "abcdef01-2345-6789-abcd-ef0123456789"
+	require.NoError(t, db.Exec(`
+		INSERT INTO credit_accounts
+			(id, created_at, updated_at, tenant_id, customer_id, total_amount, paid_amount, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		creditID, time.Now(), time.Now(), tenantID,
+		"11112222-3333-4444-5555-666677778888", 8000, 0, "open").Error)
+
+	r := mountCreditPayment(db, tenantID)
+
+	body := map[string]any{
+		"amount":         3000,
+		"payment_method": "cash",
+		"note":           "abono efectivo",
+	}
+	raw, _ := json.Marshal(body)
+	req, _ := http.NewRequest(http.MethodPost,
+		"/api/v1/credits/"+creditID+"/payments",
+		bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var stored struct {
+		ReceiptImageURL string `gorm:"column:receipt_image_url"`
+	}
+	require.NoError(t, db.Table("credit_payments").
+		Select("receipt_image_url").
+		Where("credit_account_id = ?", creditID).
+		Scan(&stored).Error)
+	assert.Equal(t, "", stored.ReceiptImageURL,
+		"cash abonos persist with empty URL — informative, never enforced")
 }

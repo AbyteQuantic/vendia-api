@@ -45,7 +45,8 @@ func setupPaymentDB(t *testing.T) *gorm.DB {
 			created_by TEXT, branch_id TEXT,
 			amount INTEGER NOT NULL DEFAULT 0,
 			payment_method TEXT DEFAULT 'cash',
-			note TEXT DEFAULT ''
+			note TEXT DEFAULT '',
+			receipt_image_url TEXT DEFAULT ''
 		)`,
 	}
 	for _, s := range stmts {
@@ -74,7 +75,7 @@ func TestRegisterPayment_StampsClosedAt(t *testing.T) {
 	svc := NewCreditService(db)
 	before := time.Now().Add(-1 * time.Second)
 	payment, err := svc.RegisterPaymentWithActor(tenantID, creditID,
-		"", "", 3000, "cash", "saldo final")
+		"", "", 3000, "cash", "saldo final", "")
 	require.NoError(t, err)
 	require.NotNil(t, payment)
 	assert.EqualValues(t, 3000, payment.Amount)
@@ -114,7 +115,7 @@ func TestRegisterPayment_PartialDoesNotStampClosedAt(t *testing.T) {
 
 	svc := NewCreditService(db)
 	_, err := svc.RegisterPaymentWithActor(tenantID, creditID,
-		"", "", 4000, "cash", "abono parcial")
+		"", "", 4000, "cash", "abono parcial", "")
 	require.NoError(t, err)
 
 	var row struct {
