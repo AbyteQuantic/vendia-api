@@ -12,10 +12,10 @@ const (
 type Sale struct {
 	BaseModel
 
-	TenantID      string        `gorm:"type:uuid;not null;index" json:"tenant_id"`
-	CreatedBy     *string       `gorm:"type:uuid;index" json:"created_by,omitempty"`
-	BranchID      *string       `gorm:"type:uuid;index" json:"branch_id,omitempty"`
-	Total         float64       `gorm:"not null" json:"total"`
+	TenantID  string  `gorm:"type:uuid;not null;index" json:"tenant_id"`
+	CreatedBy *string `gorm:"type:uuid;index" json:"created_by,omitempty"`
+	BranchID  *string `gorm:"type:uuid;index" json:"branch_id,omitempty"`
+	Total     float64 `gorm:"not null" json:"total"`
 	// TaxAmount is the IVA (or other tax) charged on this sale.
 	// Expressed in the same currency as Total. Zero for exempt tenants.
 	TaxAmount float64 `gorm:"type:numeric(12,2);not null;default:0" json:"tax_amount"`
@@ -30,8 +30,8 @@ type Sale struct {
 	// depend on the Customer row still existing or still matching the
 	// name the customer had at the time. Empty strings when there is no
 	// customer attached.
-	CustomerNameSnapshot  string `gorm:"type:varchar(128);not null;default:''" json:"customer_name_snapshot,omitempty"`
-	CustomerPhoneSnapshot string `gorm:"type:varchar(32);not null;default:''" json:"customer_phone_snapshot,omitempty"`
+	CustomerNameSnapshot  string  `gorm:"type:varchar(128);not null;default:''" json:"customer_name_snapshot,omitempty"`
+	CustomerPhoneSnapshot string  `gorm:"type:varchar(32);not null;default:''" json:"customer_phone_snapshot,omitempty"`
 	EmployeeUUID          *string `gorm:"type:uuid" json:"employee_uuid,omitempty"`
 	EmployeeName          string  `json:"employee_name,omitempty"`
 	ReceiptNumber         int64   `gorm:"index" json:"receipt_number,omitempty"`
@@ -53,8 +53,15 @@ type Sale struct {
 	// can split totals by channel. Defaults to "POS" for the cashier
 	// surface; "WEB" lands when an OnlineOrder transitions to
 	// completed; "TABLE" when an OrderTicket closes via CloseOrder.
-	Source string     `gorm:"type:varchar(16);not null;default:'POS';index" json:"source"`
-	Items  []SaleItem `gorm:"foreignKey:SaleID" json:"items"`
+	Source string `gorm:"type:varchar(16);not null;default:'POS';index" json:"source"`
+	// ReceiptImageURL points to a Supabase Storage object in the
+	// `payment_receipts` bucket. The cashier must attach a photo of
+	// the bank notification when paying with a digital method
+	// (transfer/QR/credit-app). Empty when payment is cash. The blob
+	// is purged automatically after 8 days by a server-side cron;
+	// the URL stays here as audit trail of the cashier's action.
+	ReceiptImageURL string     `gorm:"type:text;default:''" json:"receipt_image_url"`
+	Items           []SaleItem `gorm:"foreignKey:SaleID" json:"items"`
 }
 
 // SaleSource enumerates the source vocab for the unified ledger.
@@ -72,8 +79,8 @@ const (
 type SaleItem struct {
 	BaseModel
 
-	SaleID    string  `gorm:"type:uuid;not null;index" json:"sale_id"`
-	ProductID *string `gorm:"type:uuid" json:"product_id,omitempty"`
+	SaleID            string  `gorm:"type:uuid;not null;index" json:"sale_id"`
+	ProductID         *string `gorm:"type:uuid" json:"product_id,omitempty"`
 	Name              string  `gorm:"not null" json:"name"`
 	Price             float64 `gorm:"not null" json:"price"`
 	Quantity          int     `gorm:"not null;default:1" json:"quantity"`

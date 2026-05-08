@@ -432,6 +432,11 @@ func CreatePayment(db *gorm.DB) gin.HandlerFunc {
 		Amount        int64  `json:"amount" binding:"required,gt=0"`
 		PaymentMethod string `json:"payment_method"`
 		Note          string `json:"note"`
+		// ReceiptImageURL — Supabase Storage URL of the cashier's photo of
+		// the digital-payment confirmation. Optional at the API layer
+		// (frontend enforces it for digital methods); cash abonos legitly
+		// omit it. See models.CreditPayment for the storage contract.
+		ReceiptImageURL *string `json:"receipt_image_url"`
 	}
 
 	return func(c *gin.Context) {
@@ -446,8 +451,17 @@ func CreatePayment(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		receiptURL := ""
+		if req.ReceiptImageURL != nil {
+			receiptURL = *req.ReceiptImageURL
+			if !isAbsoluteHTTPURL(receiptURL) {
+				log.Printf("[create-payment] tenant=%s credit=%s non-absolute receipt_image_url=%q",
+					tenantID, creditID, receiptURL)
+			}
+		}
+
 		svc := services.NewCreditService(db)
-		payment, err := svc.RegisterPaymentWithActor(tenantID, creditID, userID, branchID, req.Amount, req.PaymentMethod, req.Note)
+		payment, err := svc.RegisterPaymentWithActor(tenantID, creditID, userID, branchID, req.Amount, req.PaymentMethod, req.Note, receiptURL)
 		if err != nil {
 			if err == services.ErrCreditNotFound {
 				c.JSON(http.StatusNotFound, gin.H{"error": "crédito no encontrado"})

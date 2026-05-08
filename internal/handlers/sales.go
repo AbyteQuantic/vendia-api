@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"fmt"
+	"log"
 	"net/http"
+	"strings"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
 	"vendia-backend/internal/services"
@@ -10,6 +12,19 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+// isAbsoluteHTTPURL is a tiny audit-friendly check on receipt image
+// URLs. We never reject the transaction over a malformed URL — the
+// cashier shouldn't lose a sale because Supabase returned an unusual
+// host — but we do log a warning so anomalies are visible in the
+// observability stream. Empty string is treated as "not provided" and
+// is allowed (cash sales legitimately omit it).
+func isAbsoluteHTTPURL(s string) bool {
+	if s == "" {
+		return true
+	}
+	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+}
 
 // SaleItemRequest represents either a product line or an ad-hoc service
 // line. Validation is performed in CreateSale since `binding:"required"`
@@ -58,6 +73,15 @@ type CreateSaleRequest struct {
 	// claim, and if that's empty too, to the global-scope lookup
 	// that existed before the isolation refactor.
 	BranchID string `json:"branch_id"`
+
+	// ReceiptImageURL — Supabase Storage URL of the photo the cashier
+	// took of the digital-payment confirmation (Mandatory Image
+	// Receipts epic). Optional from the backend's perspective: the
+	// frontend enforces "obligatorio para pagos digitales", but here
+	// we stay informative so we never block an audit-friendly cash
+	// sale. Pointer so we can distinguish "not sent" from "explicit
+	// empty string" if a future client cares.
+	ReceiptImageURL *string `json:"receipt_image_url"`
 }
 
 func CreateSale(db *gorm.DB) gin.HandlerFunc {
@@ -274,6 +298,18 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 				}
 			}
 
+			receiptURL := ""
+			if req.ReceiptImageURL != nil {
+				receiptURL = *req.ReceiptImageURL
+				if !isAbsoluteHTTPURL(receiptURL) {
+					// Audit-only — never block the sale on a bad URL,
+					// but surface it so we can spot a misconfigured
+					// client.
+					log.Printf("[create-sale] tenant=%s non-absolute receipt_image_url=%q",
+						tenantID, receiptURL)
+				}
+			}
+
 			sale = models.Sale{
 				TenantID:              tenantID,
 				CreatedBy:             middleware.UUIDPtr(userID),
@@ -291,6 +327,7 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 				CreditAccountID:       req.CreditAccountID,
 				PaymentStatus:         paymentStatus,
 				DynamicQRPayload:      req.DynamicQRPayload,
+				ReceiptImageURL:       receiptURL,
 				Items:                 items,
 			}
 			if req.ID != "" {

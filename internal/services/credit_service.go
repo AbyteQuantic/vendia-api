@@ -27,10 +27,14 @@ func NewCreditService(db *gorm.DB) *CreditService {
 // RegisterPaymentWithActor so we record who registered the payment and at
 // which branch — important for multi-workspace traceability.
 func (s *CreditService) RegisterPayment(tenantID, creditID string, amount int64, method, note string) (*models.CreditPayment, error) {
-	return s.RegisterPaymentWithActor(tenantID, creditID, "", "", amount, method, note)
+	return s.RegisterPaymentWithActor(tenantID, creditID, "", "", amount, method, note, "")
 }
 
-func (s *CreditService) RegisterPaymentWithActor(tenantID, creditID, userID, branchID string, amount int64, method, note string) (*models.CreditPayment, error) {
+// RegisterPaymentWithActor registers an abono. receiptImageURL is the
+// Supabase Storage URL of the cashier's photo of the digital-payment
+// confirmation; pass "" for cash abonos that don't carry one (the
+// Mandatory Image Receipts epic enforces it on the frontend, not here).
+func (s *CreditService) RegisterPaymentWithActor(tenantID, creditID, userID, branchID string, amount int64, method, note, receiptImageURL string) (*models.CreditPayment, error) {
 	var credit models.CreditAccount
 	if err := s.db.Where("id = ? AND tenant_id = ?", creditID, tenantID).
 		First(&credit).Error; err != nil {
@@ -59,6 +63,7 @@ func (s *CreditService) RegisterPaymentWithActor(tenantID, creditID, userID, bra
 			Amount:          amount,
 			PaymentMethod:   method,
 			Note:            note,
+			ReceiptImageURL: receiptImageURL,
 		}
 		if err := tx.Create(&payment).Error; err != nil {
 			return err
