@@ -39,7 +39,29 @@ func ListCredits(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		query := db.Model(&models.CreditAccount{}).Where("tenant_id = ?", tenantID)
-		if status != "" {
+		// Bucket semantics for the cuaderno tabs (PO mandate — tabs
+		// must be mutually exclusive):
+		//
+		//   * "pending" — fiado_status ∈ {pending, link_sent,
+		//     link_opened}. The link was sent / opened but the
+		//     customer has NOT accepted the fiado yet, so the
+		//     merchandise is *not* a live debt. Ignores the
+		//     `status` column on purpose — it can be `'pending'`
+		//     or even `'open'` while the handshake is in flight,
+		//     and we never want one row to bleed into both tabs.
+		//
+		//   * "paid"    — `status = 'paid'`. Ledger settlements,
+		//     ordered by `closed_at DESC` below.
+		//
+		// Anything else is treated as a literal column-level
+		// `status = ?` filter to keep the legacy contract for
+		// callers outside the cuaderno screen.
+		if status == "pending" {
+			query = query.Where(
+				"fiado_status IN ?",
+				[]string{FiadoPending, FiadoLinkSent, FiadoLinkOpened},
+			)
+		} else if status != "" {
 			query = query.Where("status = ?", status)
 		}
 		query = ApplyBranchScope(query, scope)
@@ -72,17 +94,22 @@ func ListCredits(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-// listCreditsGroupedByCustomer rolls every open-shape ledger account
-// into a single row per customer. The cuaderno screen renders one
-// entry per debtor, not one per fiado event — without this rollup the
-// list could show three "Viviana — $50.000" rows for the same
-// customer. We return all open / partial / pending accounts because
-// they all count as "live debt" the tendero needs to see.
+// listCreditsGroupedByCustomer rolls every accepted, unpaid ledger
+// account into a single row per customer. The cuaderno's "Activos"
+// tab uses this — without the rollup the list could show three
+// "Viviana — $50.000" rows for the same debtor.
 //
-// "Worst-case" status priority: open > partial > pending. If any of
-// the customer's accounts are open the row reads as open even if a
-// pending one also exists; the UI shows the worst (most actionable)
-// state.
+// PO mandate (Tab Bleeding fix): an account is only "live debt"
+// when the customer formally accepted the fiado. We require
+//
+//	status        ∈ {open, partial}     -- balance still pending
+//	fiado_status  =  accepted            -- customer agreed to owe it
+//
+// Pending handshakes (link_sent / link_opened / pending) belong in
+// the "Pendientes" tab exclusively and must NOT show up here, even
+// though their column-level status is technically `pending`.
+//
+// "Worst-case" priority among the surviving rows: open > partial.
 func listCreditsGroupedByCustomer(db *gorm.DB, c *gin.Context, tenantID string, scope BranchScopeResolution) {
 	// LatestAt is intentionally a string. Postgres returns a
 	// time.Time for MAX(updated_at), but the SQLite test driver
@@ -103,10 +130,9 @@ func listCreditsGroupedByCustomer(db *gorm.DB, c *gin.Context, tenantID string, 
 	}
 
 	// MAX(CASE ...) instead of BOOL_OR keeps the query portable
-	// across Postgres (production) and SQLite (unit tests). The
-	// numeric collation 'open'(2) > 'partial'(1) > 'pending'(0)
-	// means MAX picks the worst-case status alphabetically the
-	// way we want.
+	// across Postgres (production) and SQLite (unit tests). After
+	// the fiado_status='accepted' guard the only surviving values
+	// are 'open' and 'partial' — open wins by mandate.
 	q := db.Table("credit_accounts AS ca").
 		Select(`
 			ca.customer_id,
@@ -119,13 +145,13 @@ func listCreditsGroupedByCustomer(db *gorm.DB, c *gin.Context, tenantID string, 
 			MAX(ca.updated_at) AS latest_at,
 			CASE
 			  WHEN MAX(CASE WHEN ca.status = 'open'    THEN 1 ELSE 0 END) = 1 THEN 'open'
-			  WHEN MAX(CASE WHEN ca.status = 'partial' THEN 1 ELSE 0 END) = 1 THEN 'partial'
-			  ELSE 'pending'
+			  ELSE 'partial'
 			END AS status
 		`).
 		Joins("LEFT JOIN customers c ON c.id = ca.customer_id AND c.deleted_at IS NULL").
 		Where("ca.tenant_id = ? AND ca.deleted_at IS NULL", tenantID).
-		Where("ca.status IN ?", []string{"open", "partial", "pending"}).
+		Where("ca.status IN ?", []string{"open", "partial"}).
+		Where("ca.fiado_status = ?", FiadoAccepted).
 		Group("ca.customer_id, c.name, c.phone").
 		Order("balance DESC")
 

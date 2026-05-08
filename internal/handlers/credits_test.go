@@ -132,16 +132,22 @@ func TestListCredits_GroupByCustomer_AggregatesPerCustomer(t *testing.T) {
 		custA, tenantID, "Viviana", "3001111111",
 		custB, tenantID, "Pedro", "3002222222").Error)
 
-	// 3 accounts for Viviana (mix of statuses) + 1 for Pedro (open).
+	// Mix of statuses for Viviana + 1 open for Pedro. The PO mandate
+	// for the cuaderno's "Activos" tab is:
+	//   * status ∈ {open, partial}, AND
+	//   * fiado_status = accepted.
+	// The pending row (status='pending', fiado_status='link_sent')
+	// MUST be excluded from the rollup — it belongs to the
+	// "Pendientes" tab and has not been accepted yet.
 	now := time.Now()
 	require.NoError(t, db.Exec(`
 		INSERT INTO credit_accounts
-			(id, created_at, updated_at, tenant_id, customer_id, total_amount, paid_amount, status)
+			(id, created_at, updated_at, tenant_id, customer_id, total_amount, paid_amount, status, fiado_status)
 		VALUES
-			(?, ?, ?, ?, ?, 10000, 0,    'open'),
-			(?, ?, ?, ?, ?, 20000, 5000, 'partial'),
-			(?, ?, ?, ?, ?, 7000,  0,    'pending'),
-			(?, ?, ?, ?, ?, 30000, 0,    'open')
+			(?, ?, ?, ?, ?, 10000, 0,    'open',    'accepted'),
+			(?, ?, ?, ?, ?, 20000, 5000, 'partial', 'accepted'),
+			(?, ?, ?, ?, ?, 7000,  0,    'pending', 'link_sent'),
+			(?, ?, ?, ?, ?, 30000, 0,    'open',    'accepted')
 		`,
 		"c1111111-1111-1111-1111-111111111111", now, now, tenantID, custA,
 		"c2222222-2222-2222-2222-222222222222", now, now, tenantID, custA,
@@ -152,8 +158,8 @@ func TestListCredits_GroupByCustomer_AggregatesPerCustomer(t *testing.T) {
 	// One paid account for Viviana that MUST be excluded from the rollup.
 	require.NoError(t, db.Exec(`
 		INSERT INTO credit_accounts
-			(id, created_at, updated_at, tenant_id, customer_id, total_amount, paid_amount, status, closed_at)
-		VALUES (?, ?, ?, ?, ?, 5000, 5000, 'paid', ?)`,
+			(id, created_at, updated_at, tenant_id, customer_id, total_amount, paid_amount, status, fiado_status, closed_at)
+		VALUES (?, ?, ?, ?, ?, 5000, 5000, 'paid', 'accepted', ?)`,
 		"c5555555-5555-5555-5555-555555555555", now, now, tenantID, custA, now,
 	).Error)
 
@@ -169,7 +175,7 @@ func TestListCredits_GroupByCustomer_AggregatesPerCustomer(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	require.Len(t, body.Data, 2,
-		"two distinct customers must collapse to two rows (paid is excluded)")
+		"two distinct customers must collapse to two rows (paid + pending excluded)")
 
 	// Index by customer id so the test isn't order-sensitive.
 	byCustomer := map[string]map[string]any{}
@@ -177,18 +183,19 @@ func TestListCredits_GroupByCustomer_AggregatesPerCustomer(t *testing.T) {
 		byCustomer[row["customer_id"].(string)] = row
 	}
 
-	// Viviana: 3 active accounts, total = 10k+20k+7k = 37k, paid = 5k,
-	// balance = 32k, status worst-case = 'open'.
+	// Viviana: 2 ACCEPTED accounts (the link_sent one was excluded),
+	// total = 10k+20k = 30k, paid = 5k, balance = 25k.
 	viv := byCustomer[custA]
 	require.NotNil(t, viv, "Viviana's row must be present")
-	assert.EqualValues(t, 37000, viv["total_amount"])
+	assert.EqualValues(t, 30000, viv["total_amount"])
 	assert.EqualValues(t, 5000, viv["paid_amount"])
-	assert.EqualValues(t, 32000, viv["balance"])
-	assert.EqualValues(t, 3, viv["accounts_count"])
+	assert.EqualValues(t, 25000, viv["balance"])
+	assert.EqualValues(t, 2, viv["accounts_count"],
+		"the pending/link_sent row must NOT count toward accounts_count")
 	assert.Equal(t, "open", viv["status"])
 	assert.Equal(t, "Viviana", viv["customer_name"])
 
-	// Pedro: 1 open account, balance = 30k.
+	// Pedro: 1 accepted+open account, balance = 30k.
 	pedro := byCustomer[custB]
 	require.NotNil(t, pedro, "Pedro's row must be present")
 	assert.EqualValues(t, 30000, pedro["total_amount"])
@@ -196,6 +203,93 @@ func TestListCredits_GroupByCustomer_AggregatesPerCustomer(t *testing.T) {
 	assert.EqualValues(t, 30000, pedro["balance"])
 	assert.EqualValues(t, 1, pedro["accounts_count"])
 	assert.Equal(t, "open", pedro["status"])
+}
+
+// TestListCredits_GroupByCustomer_ExcludesNonAccepted is the negative
+// counterpart: a customer whose only ledger row is in the handshake
+// state must NOT appear in the Activos tab. Closes the "Tab Bleeding"
+// regression where a link_sent fiado bled into both tabs.
+func TestListCredits_GroupByCustomer_ExcludesNonAccepted(t *testing.T) {
+	db := setupCreditsDB(t)
+	tenantID := "tenant-bleed-fix"
+	require.NoError(t, db.Exec(`INSERT INTO tenants (id, business_name, created_at) VALUES (?, ?, ?)`,
+		tenantID, "Tienda Bleed", time.Now()).Error)
+
+	cust := "11111111-1111-1111-1111-aaaaaaaaaaaa"
+	require.NoError(t, db.Exec(`
+		INSERT INTO customers (id, created_at, updated_at, tenant_id, name, phone)
+		VALUES (?, datetime('now'), datetime('now'), ?, ?, ?)`,
+		cust, tenantID, "PendingOnly", "3009999999").Error)
+
+	now := time.Now()
+	require.NoError(t, db.Exec(`
+		INSERT INTO credit_accounts
+			(id, created_at, updated_at, tenant_id, customer_id, total_amount, paid_amount, status, fiado_status)
+		VALUES
+			(?, ?, ?, ?, ?, 8000, 0, 'pending', 'link_sent'),
+			(?, ?, ?, ?, ?, 4000, 0, 'pending', 'link_opened')`,
+		"d1111111-1111-1111-1111-111111111111", now, now, tenantID, cust,
+		"d2222222-2222-2222-2222-222222222222", now, now, tenantID, cust,
+	).Error)
+
+	r := mountCreditsList(db, tenantID)
+	req, _ := http.NewRequest(http.MethodGet, "/api/v1/credits?group_by=customer", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var body struct {
+		Data []map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Empty(t, body.Data,
+		"a customer with only link_sent/link_opened rows must NOT show in Activos")
+}
+
+// TestListCredits_StatusPending_FiltersByFiadoStatus pins the
+// reciprocal rule: ?status=pending now means "fiado_status ∈
+// {pending, link_sent, link_opened}" — the fiado handshake bucket —
+// not the column-level status. A row whose column-level status is
+// 'pending' but whose fiado_status is 'accepted' must NOT show up.
+func TestListCredits_StatusPending_FiltersByFiadoStatus(t *testing.T) {
+	db := setupCreditsDB(t)
+	tenantID := "tenant-pending-bucket"
+	require.NoError(t, db.Exec(`INSERT INTO tenants (id, business_name, created_at) VALUES (?, ?, ?)`,
+		tenantID, "Tienda Pending", time.Now()).Error)
+
+	custA := "22222222-2222-2222-2222-aaaaaaaaaaaa"
+	custB := "22222222-2222-2222-2222-bbbbbbbbbbbb"
+	require.NoError(t, db.Exec(`
+		INSERT INTO customers (id, created_at, updated_at, tenant_id, name, phone) VALUES
+			(?, datetime('now'), datetime('now'), ?, ?, ?),
+			(?, datetime('now'), datetime('now'), ?, ?, ?)`,
+		custA, tenantID, "Awaiting", "3008888888",
+		custB, tenantID, "Accepted", "3007777777").Error)
+
+	now := time.Now()
+	require.NoError(t, db.Exec(`
+		INSERT INTO credit_accounts
+			(id, created_at, updated_at, tenant_id, customer_id, total_amount, paid_amount, status, fiado_status)
+		VALUES
+			(?, ?, ?, ?, ?, 5000, 0, 'pending', 'link_sent'),
+			(?, ?, ?, ?, ?, 9000, 0, 'open',    'accepted')`,
+		"e1111111-1111-1111-1111-111111111111", now, now, tenantID, custA,
+		"e2222222-2222-2222-2222-222222222222", now, now, tenantID, custB,
+	).Error)
+
+	r := mountCreditsList(db, tenantID)
+	req, _ := http.NewRequest(http.MethodGet, "/api/v1/credits?status=pending", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var body struct {
+		Data []map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	require.Len(t, body.Data, 1,
+		"only the link_sent row should be in the Pendientes bucket")
+	assert.Equal(t, custA, body.Data[0]["customer_id"])
 }
 
 // TestCloseCredit_StampsClosedAt verifies the timestamp lands on the

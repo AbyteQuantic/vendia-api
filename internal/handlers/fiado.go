@@ -15,8 +15,17 @@ import (
 	"gorm.io/gorm"
 )
 
-// Fiado statuses
+// Fiado handshake states. The state machine is:
+//
+//	none → link_sent → link_opened → accepted | rejected
+//
+// `pending` is included as a defensive synonym for the column-level
+// `Status='pending'` rows that may have been created before the
+// fiado_status field existed; the cuaderno's "Pendientes" tab
+// treats it the same as link_sent.
 const (
+	FiadoNone       = "none"
+	FiadoPending    = "pending"
 	FiadoLinkSent   = "link_sent"
 	FiadoLinkOpened = "link_opened"
 	FiadoAccepted   = "accepted"
