@@ -68,11 +68,25 @@ func Load() *Config {
 			}
 		}
 	}
-	// Always include known frontends
+	// Always include known frontends. The custom domain trio
+	// (vendia.store / www.vendia.store / tienda.vendia.store) is
+	// hardcoded so a forgotten ALLOWED_ORIGINS env var on Render
+	// can't lock the merchant out of their own production app
+	// during a deploy. The legacy *.vercel.app / *.onrender.com
+	// hosts stay in the allowlist while the DNS migration is in
+	// flight — they can be removed in a later cleanup once
+	// Namecheap fully propagates.
 	knownOrigins := []string{
+		// Custom domain (production)
+		"https://vendia.store",
+		"https://www.vendia.store",
+		"https://tienda.vendia.store",
+		// Legacy hosts (kept until DNS migration is fully validated)
 		"https://vendia-admin.vercel.app",
 		"https://vendia-admin.onrender.com",
+		// Local dev
 		"http://localhost:3000",
+		"http://localhost:3099",
 	}
 	for _, ko := range knownOrigins {
 		found := false
