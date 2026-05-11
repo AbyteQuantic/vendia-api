@@ -32,10 +32,14 @@ type GodModeTenantRow struct {
 	CreatedAt            time.Time  `json:"created_at"`
 	LastSyncAt           *time.Time `json:"last_sync_at"`
 	PendingSyncOps       int        `json:"pending_sync_ops"`
-	// Legacy fields kept for backwards compat with the pre-phase-1
-	// admin table at /admin/tenants — the new dashboard ignores them.
-	LegacySubscriptionStatus string     `json:"legacy_subscription_status"`
-	LegacySubscriptionEndsAt *time.Time `json:"legacy_subscription_ends_at"`
+	// H18 fix: the `legacy_subscription_status` /
+	// `legacy_subscription_ends_at` columns used to be exposed here
+	// from `Tenant.SubscriptionStatus` / `Tenant.SubscriptionEndsAt`
+	// as a parallel-but-stale source of truth. The dashboard never
+	// used them; removing them eliminates the dual-source risk
+	// flagged in the audit. The single source is now `subs[t.ID]`
+	// (TenantSubscription rows), which feeds `SubscriptionStatus`
+	// above and `IsPremium` via `IsPremium(now)`.
 }
 
 // BuildGodModeTenants is the pure function that transforms the raw
@@ -67,25 +71,23 @@ func BuildGodModeTenants(
 		}
 
 		out = append(out, GodModeTenantRow{
-			ID:                       t.ID,
-			BusinessName:             t.BusinessName,
-			BusinessType:             primaryType,
-			BusinessTypes:            t.BusinessTypes,
-			OwnerName:                t.OwnerName,
-			Phone:                    t.Phone,
-			Location:                 t.Address,
-			Address:                  t.Address,
-			BranchesCount:            branchCounts[t.ID],
-			EmployeesCount:           employeeCounts[t.ID],
-			SubscriptionStatus:       subStatus,
-			TrialEndsAt:              sub.TrialEndsAt,
-			TrialDaysRemaining:       subPtr.TrialDaysRemaining(now),
-			IsPremium:                subPtr.IsPremium(now),
-			CreatedAt:                t.CreatedAt,
-			LastSyncAt:               t.LastSyncAt,
-			PendingSyncOps:           t.PendingSyncOps,
-			LegacySubscriptionStatus: t.SubscriptionStatus,
-			LegacySubscriptionEndsAt: t.SubscriptionEndsAt,
+			ID:                 t.ID,
+			BusinessName:       t.BusinessName,
+			BusinessType:       primaryType,
+			BusinessTypes:      t.BusinessTypes,
+			OwnerName:          t.OwnerName,
+			Phone:              t.Phone,
+			Location:           t.Address,
+			Address:            t.Address,
+			BranchesCount:      branchCounts[t.ID],
+			EmployeesCount:     employeeCounts[t.ID],
+			SubscriptionStatus: subStatus,
+			TrialEndsAt:        sub.TrialEndsAt,
+			TrialDaysRemaining: subPtr.TrialDaysRemaining(now),
+			IsPremium:          subPtr.IsPremium(now),
+			CreatedAt:          t.CreatedAt,
+			LastSyncAt:         t.LastSyncAt,
+			PendingSyncOps:     t.PendingSyncOps,
 		})
 	}
 	return out
@@ -102,8 +104,11 @@ func AdminListTenants(db *gorm.DB) gin.HandlerFunc {
 
 		var tenants []models.Tenant
 		if err := db.Select(
+			// `subscription_status` / `subscription_ends_at` legacy columns
+			// no longer hidrated — H18 fix. Subscription state comes from
+			// `tenant_subscriptions` via `loadSubscriptionsByTenantID` below.
 			"id, created_at, owner_name, phone, business_name, business_types, "+
-				"address, subscription_status, subscription_ends_at, last_sync_at, pending_sync_ops",
+				"address, last_sync_at, pending_sync_ops",
 		).Order("created_at DESC").Find(&tenants).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al obtener tenants"})
 			return

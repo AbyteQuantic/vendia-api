@@ -268,3 +268,77 @@ func TestAdminListTenants_E2E_GodModeShapeFromSQLite(t *testing.T) {
 }
 
 func ptrTime(t time.Time) *time.Time { return &t }
+
+// H18 pin: the legacy `subscription_status` columns on the Tenant
+// row used to surface in two parallel JSON keys — `subscription_status`
+// (from the model) and `legacy_subscription_status` (from
+// GodModeTenantRow). Both bled the column-level legacy value
+// alongside the canonical `tenant_subscriptions.status`. This test
+// locks down the new single-source contract: the only
+// subscription-related key in the JSON wire is the canonical
+// `subscription_status` populated from the join — neither of the
+// legacy keys should ever appear.
+func TestBuildGodModeTenants_DoesNotExposeLegacySubscriptionFields(t *testing.T) {
+	now := time.Date(2026, 5, 11, 10, 0, 0, 0, time.UTC)
+	tenants := []models.Tenant{
+		{
+			BaseModel:    models.BaseModel{ID: "t-leg", CreatedAt: now},
+			BusinessName: "Leaky",
+			// Populate the deprecated columns to ensure even if they
+			// hold non-empty data, they never reach the response.
+			SubscriptionStatus: models.SubscriptionStatusProActive,
+			SubscriptionEndsAt: ptrTime(now.Add(30 * 24 * time.Hour)),
+		},
+	}
+	subs := map[string]models.TenantSubscription{
+		"t-leg": {
+			TenantID: "t-leg",
+			Status:   models.SubscriptionStatusFree, // canonical wins
+		},
+	}
+
+	rows := handlers.BuildGodModeTenants(
+		tenants, subs, map[string]int{}, map[string]int{}, now,
+	)
+	require.Len(t, rows, 1)
+
+	// Round-trip through JSON to assert what hits the wire.
+	raw, err := json.Marshal(rows[0])
+	require.NoError(t, err)
+	var asMap map[string]any
+	require.NoError(t, json.Unmarshal(raw, &asMap))
+
+	assert.NotContains(t, asMap, "legacy_subscription_status",
+		"legacy struct field removed in H18 fix")
+	assert.NotContains(t, asMap, "legacy_subscription_ends_at",
+		"legacy struct field removed in H18 fix")
+
+	// The canonical key MUST still be present and reflect the
+	// TenantSubscription row (FREE), not the leaky tenant column
+	// (PRO_ACTIVE) — proves the row reads from the joined source
+	// and not from the deprecated column.
+	assert.Equal(t, models.SubscriptionStatusFree, asMap["subscription_status"],
+		"canonical status comes from tenant_subscriptions, not from Tenant.SubscriptionStatus")
+}
+
+// H18 pin on the model itself: the deprecated columns must never
+// leave the server through any handler that returns a raw Tenant
+// JSON. Independent of GodModeTenantRow — this guards generic
+// /tenant endpoints.
+func TestTenant_DeprecatedSubscriptionColumnsAreNotSerialised(t *testing.T) {
+	tenant := models.Tenant{
+		BaseModel:          models.BaseModel{ID: "t-1"},
+		BusinessName:       "Test",
+		SubscriptionStatus: models.SubscriptionStatusProActive,
+		SubscriptionEndsAt: ptrTime(time.Now()),
+	}
+	raw, err := json.Marshal(tenant)
+	require.NoError(t, err)
+	var asMap map[string]any
+	require.NoError(t, json.Unmarshal(raw, &asMap))
+
+	assert.NotContains(t, asMap, "subscription_status",
+		"H18: the legacy column must carry `json:\"-\"` so it never leaks")
+	assert.NotContains(t, asMap, "subscription_ends_at",
+		"H18: same — never leak the legacy expiry")
+}
