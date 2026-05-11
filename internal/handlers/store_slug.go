@@ -26,10 +26,11 @@ import (
 )
 
 // defaultPublicStoreBase is the fallback public URL prefix when
-// PUBLIC_STORE_URL is not set in the environment. Matches the
-// existing `https://vendia-admin.vercel.app` convention used by the
-// fiado links so tenants don't get a different hostname per feature.
-const defaultPublicStoreBase = "https://vendia-admin.vercel.app"
+// PUBLIC_STORE_URL is not set in the environment. Points at the
+// customer-facing custom domain (Vercel behind tienda.vendia.store)
+// so the catalog link the tendero shares matches the brand instead
+// of leaking the *.vercel.app build URL.
+const defaultPublicStoreBase = "https://tienda.vendia.store"
 
 // publicStoreBaseURL resolves the base URL the client should use to
 // build the public catalog link. Reads PUBLIC_STORE_URL from env so
