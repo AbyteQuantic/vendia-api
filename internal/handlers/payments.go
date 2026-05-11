@@ -126,8 +126,8 @@ func buildQRPayload(walletType, account string, amount int64, tenantID string) s
 		// the admin web. The page shows account + amount + copy button
 		// and attempts deep-links to the bank apps on tap.
 		return fmt.Sprintf(
-			"https://vendia-admin.vercel.app/pay?tenant=%s&account=%s&amount=%d&type=%s",
-			escape(tenantID), escape(account), amount, escape(walletType))
+			"%s/pay?tenant=%s&account=%s&amount=%d&type=%s",
+			publicStoreBaseURL(), escape(tenantID), escape(account), amount, escape(walletType))
 	}
 }
 
