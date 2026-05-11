@@ -123,8 +123,19 @@ type Tenant struct {
 	LastSyncAt     *time.Time `json:"last_sync_at"`
 	PendingSyncOps int        `gorm:"default:0" json:"pending_sync_ops"`
 
-	SubscriptionStatus string     `gorm:"default:'trial'" json:"subscription_status"`
-	SubscriptionEndsAt *time.Time `json:"subscription_ends_at"`
+	// DEPRECATED (audit H18). The canonical source of truth is the
+	// `tenant_subscriptions` table — see [TenantSubscription] +
+	// `middleware.PremiumAuth`. These two fields used to coexist
+	// with that table and could drift (dashboard read "TRIAL" while
+	// the endpoint blocked as "FREE").
+	//
+	// `json:"-"` keeps the columns alive in the database (so a
+	// rollback that brings back the legacy handlers still has the
+	// data) but prevents them from being serialised in any API
+	// response. A future migration will drop the columns altogether
+	// once we are confident no rollback path needs them.
+	SubscriptionStatus string     `gorm:"default:'trial'" json:"-"`
+	SubscriptionEndsAt *time.Time `json:"-"`
 
 	// Printer / Receipts
 	ReceiptHeader     string `gorm:"default:''" json:"receipt_header"`
