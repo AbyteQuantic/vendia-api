@@ -285,7 +285,7 @@ func TestExplodeRecipe_SkipsLegacyLineWithoutIngredientID(t *testing.T) {
 		ProductID:   strptr(productID),
 		Ingredients: []models.RecipeIngredient{
 			// Legacy line — ProductUUID set, IngredientID nil.
-			{RecipeUUID: recipeID, ProductUUID: "old-prod", ProductName: "Pan", Quantity: 1},
+			{RecipeUUID: recipeID, ProductUUID: strptr("old-prod"), ProductName: "Pan", Quantity: 1},
 		},
 	}).Error)
 	require.NoError(t, db.Create(&models.Product{

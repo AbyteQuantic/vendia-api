@@ -20,16 +20,23 @@ type Recipe struct {
 type RecipeIngredient struct {
 	BaseModel
 
-	RecipeUUID  string  `gorm:"type:uuid;not null;index" json:"recipe_uuid"`
-	ProductUUID string  `gorm:"type:uuid;not null" json:"product_uuid"`
+	RecipeUUID string `gorm:"type:uuid;not null;index" json:"recipe_uuid"`
+	// ProductUUID is the legacy product-oriented anchor. Feature 001
+	// re-orients recipe lines at an Ingredient (insumo), so new lines
+	// leave this nil. It is a nullable *string (was `not null`) so the
+	// new insumo contract never has to fabricate a meaningless product
+	// UUID — AutoMigrate drops the NOT NULL constraint additively and
+	// retrocompatibly (Art. X). Legacy rows that still carry a value
+	// keep working via the RecipeCost fallback branch.
+	ProductUUID *string `gorm:"type:uuid" json:"product_uuid,omitempty"`
 	ProductName string  `gorm:"not null" json:"product_name"`
 	Quantity    float64 `gorm:"not null" json:"quantity"`
 	UnitCost    float64 `gorm:"not null" json:"unit_cost"`
 	Emoji       string  `json:"emoji,omitempty"`
 	// IngredientID (Feature 001) re-orients the recipe line at an
-	// Ingredient (insumo) instead of a Product. ProductUUID is
-	// CONSCIOUSLY kept (Plan §6, Art. X) so existing data and older
-	// clients are not broken — the explosion prefers IngredientID
-	// and falls back to nothing when it is nil.
-	IngredientID *string `gorm:"type:uuid;index" json:"ingredient_id,omitempty"`
+	// Ingredient (insumo) instead of a Product. The JSON tag is
+	// `ingredient_uuid` for consistency with `recipe_uuid` /
+	// `product_uuid`. The explosion prefers IngredientID and falls
+	// back to nothing when it is nil.
+	IngredientID *string `gorm:"type:uuid;index" json:"ingredient_uuid,omitempty"`
 }

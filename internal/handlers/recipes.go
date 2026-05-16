@@ -28,12 +28,13 @@ func ListRecipes(db *gorm.DB) gin.HandlerFunc {
 }
 
 func CreateRecipe(db *gorm.DB) gin.HandlerFunc {
+	// IngredientInput is the Feature 001 insumo contract: a recipe line
+	// references an Ingredient (insumo) by UUID plus the quantity it
+	// consumes. Name and unit cost are NOT trusted from the client —
+	// they are snapshotted server-side from the resolved insumo.
 	type IngredientInput struct {
-		ProductUUID string  `json:"product_uuid" binding:"required"`
-		ProductName string  `json:"product_name" binding:"required"`
-		Quantity    float64 `json:"quantity"      binding:"required,gt=0"`
-		UnitCost    float64 `json:"unit_cost"     binding:"required,gt=0"`
-		Emoji       string  `json:"emoji"`
+		IngredientUUID string  `json:"ingredient_uuid" binding:"required"`
+		Quantity       float64 `json:"quantity"        binding:"required,gt=0"`
 	}
 
 	type Request struct {
@@ -43,7 +44,10 @@ func CreateRecipe(db *gorm.DB) gin.HandlerFunc {
 		SalePrice   float64           `json:"sale_price"   binding:"required,gt=0"`
 		Emoji       string            `json:"emoji"`
 		PhotoURL    string            `json:"photo_url"`
-		Ingredients []IngredientInput `json:"ingredients"  binding:"required,min=1"`
+		// `dive` makes the validator descend into each slice element so
+		// the per-field rules on IngredientInput (required ingredient_uuid,
+		// quantity > 0) are actually enforced.
+		Ingredients []IngredientInput `json:"ingredients"  binding:"required,min=1,dive"`
 	}
 
 	return func(c *gin.Context) {
@@ -62,12 +66,27 @@ func CreateRecipe(db *gorm.DB) gin.HandlerFunc {
 
 		var ingredients []models.RecipeIngredient
 		for _, ing := range req.Ingredients {
+			// Resolve the insumo tenant-scoped (Art. III). A miss means
+			// the recipe references an insumo that does not exist for
+			// this negocio — reject the whole request.
+			var insumo models.Ingredient
+			if err := db.Where("id = ? AND tenant_id = ?", ing.IngredientUUID, tenantID).
+				First(&insumo).Error; err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"error": "el insumo no existe: " + ing.IngredientUUID,
+				})
+				return
+			}
+
+			// Snapshot the insumo's name and unit cost onto the recipe
+			// line so the receta keeps a stable historic record even if
+			// the insumo is later renamed or repriced.
+			ingredientID := insumo.ID
 			ingredients = append(ingredients, models.RecipeIngredient{
-				ProductUUID: ing.ProductUUID,
-				ProductName: ing.ProductName,
-				Quantity:    ing.Quantity,
-				UnitCost:    ing.UnitCost,
-				Emoji:       ing.Emoji,
+				IngredientID: &ingredientID,
+				ProductName:  insumo.Name,
+				Quantity:     ing.Quantity,
+				UnitCost:     insumo.UnitCost,
 			})
 		}
 
@@ -196,9 +215,9 @@ func RecipeCost(db *gorm.DB) gin.HandlerFunc {
 					First(&insumo).Error; err == nil {
 					currentCost = insumo.UnitCost
 				}
-			} else {
+			} else if ing.ProductUUID != nil && *ing.ProductUUID != "" {
 				var product models.Product
-				if err := db.Where("id = ? AND tenant_id = ?", ing.ProductUUID, tenantID).
+				if err := db.Where("id = ? AND tenant_id = ?", *ing.ProductUUID, tenantID).
 					First(&product).Error; err == nil {
 					if product.PurchasePrice > 0 {
 						currentCost = product.PurchasePrice
