@@ -60,6 +60,51 @@ func TestWhatsAppService_SupplierOrder(t *testing.T) {
 	assert.Contains(t, msg, "Don Pepe")
 }
 
+// T-07 / AC-02 (Feature 002) — the purchase-order WhatsApp message
+// lists EVERY item with its quantity, plus the supplier and owner.
+func TestWhatsAppService_PurchaseOrder_ListsAllItems(t *testing.T) {
+	svc := NewWhatsAppService()
+	msg := svc.PurchaseOrder("Pedro", "Don Pepe", []PurchaseOrderLine{
+		{Name: "Arroz", Quantity: 10, Unit: "kg"},
+		{Name: "Coca-Cola 350ml", Quantity: 24, Unit: "unidad"},
+		{Name: "Aceite", Quantity: 5, Unit: "l"},
+	})
+	assert.Contains(t, msg, "Pedro")
+	assert.Contains(t, msg, "Don Pepe")
+	assert.Contains(t, msg, "Arroz")
+	assert.Contains(t, msg, "Coca-Cola 350ml")
+	assert.Contains(t, msg, "Aceite")
+	// Quantities must be present so the proveedor knows how much.
+	assert.Contains(t, msg, "10")
+	assert.Contains(t, msg, "24")
+	assert.Contains(t, msg, "5")
+}
+
+// A fractional quantity (e.g. 2.5 kg) is rendered without a trailing
+// ".0" but keeps real decimals.
+func TestWhatsAppService_PurchaseOrder_FractionalQuantities(t *testing.T) {
+	svc := NewWhatsAppService()
+	msg := svc.PurchaseOrder("Pedro", "Don Pepe", []PurchaseOrderLine{
+		{Name: "Queso", Quantity: 2.5, Unit: "kg"},
+		{Name: "Huevos", Quantity: 30, Unit: "unidad"},
+	})
+	assert.Contains(t, msg, "2.5")
+	assert.Contains(t, msg, "Queso")
+	assert.NotContains(t, msg, "30.0", "a whole quantity must not show a trailing .0")
+	assert.Contains(t, msg, "30")
+}
+
+// An empty contact name is tolerated — the message still goes out
+// (Art. I, cero fricción: never block on a missing optional field).
+func TestWhatsAppService_PurchaseOrder_EmptyContactName(t *testing.T) {
+	svc := NewWhatsAppService()
+	msg := svc.PurchaseOrder("", "Don Pepe", []PurchaseOrderLine{
+		{Name: "Arroz", Quantity: 1, Unit: "kg"},
+	})
+	assert.Contains(t, msg, "Arroz")
+	assert.Contains(t, msg, "Don Pepe")
+}
+
 func TestWhatsAppService_BuildURL_ColombianNumber(t *testing.T) {
 	svc := NewWhatsAppService()
 	url := svc.BuildURL("3001234567", "Hola mundo")

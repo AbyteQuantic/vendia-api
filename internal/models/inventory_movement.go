@@ -18,6 +18,11 @@ const (
 	// because a product-receta was sold. One movement per ingredient
 	// per recipe explosion (FR-03).
 	MovementRecipeConsumption MovementType = "recipe_consumption"
+	// MovementPurchaseReceipt (Feature 002) — stock entering because a
+	// purchase order was received. One movement per PO item; the kardex
+	// records the entry exactly once, anchored by the PO UUID so a
+	// re-receive never double-counts (Spec §7, D4).
+	MovementPurchaseReceipt MovementType = "purchase_receipt"
 )
 
 type InventoryMovement struct {
