@@ -120,6 +120,12 @@ func Migrate(db *gorm.DB) error {
 		// added by this feature are picked up by AutoMigrate on the
 		// already-registered structs above.
 		&models.Ingredient{},
+		// Feature 002 — purchase orders. Two new tables; the new
+		// kardex movement type `purchase_receipt` needs no migration
+		// (it is a string value on the existing column). Additive and
+		// backward-compatible (Art. X).
+		&models.PurchaseOrder{},
+		&models.PurchaseOrderItem{},
 	)
 	if err != nil {
 		return err

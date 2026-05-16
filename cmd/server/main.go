@@ -350,6 +350,18 @@ func main() {
 		v1.DELETE("/suppliers/:uuid", handlers.DeleteSupplier(db))
 		v1.POST("/suppliers/:uuid/order-wa", handlers.SupplierOrderWA(db))
 
+		// Purchase orders (Feature 002 — órdenes de compra de insumos).
+		// The literal /from-reorder route is registered before /:uuid so
+		// the static path wins over the param match.
+		v1.GET("/purchase-orders", handlers.ListPurchaseOrders(db))
+		v1.POST("/purchase-orders", handlers.CreatePurchaseOrder(db))
+		v1.POST("/purchase-orders/from-reorder", handlers.PurchaseOrdersFromReorder(db))
+		v1.GET("/purchase-orders/:uuid", handlers.GetPurchaseOrder(db))
+		v1.PATCH("/purchase-orders/:uuid", handlers.UpdatePurchaseOrder(db))
+		v1.DELETE("/purchase-orders/:uuid", handlers.DeletePurchaseOrder(db))
+		v1.POST("/purchase-orders/:uuid/send", handlers.SendPurchaseOrder(db))
+		v1.POST("/purchase-orders/:uuid/receive", handlers.ReceivePurchaseOrderHandler(db))
+
 		// Recipes / Insumos
 		v1.GET("/recipes", handlers.ListRecipes(db))
 		v1.POST("/recipes", handlers.CreateRecipe(db))

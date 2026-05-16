@@ -3,6 +3,7 @@ package services
 import (
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -38,6 +39,39 @@ func (s *WhatsAppService) SupplierOrder(contactName, productName string, quantit
 		"Hola %s, por favor en mi pedido de mañana me incluyes "+
 			"%d unidades de %s. Gracias, %s.",
 		contactName, quantity, productName, ownerName)
+}
+
+// PurchaseOrderLine is one item rendered into a purchase-order
+// WhatsApp message — the insumo/producto name, how much, and its unit.
+type PurchaseOrderLine struct {
+	Name     string
+	Quantity float64
+	Unit     string
+}
+
+// PurchaseOrder builds the WhatsApp message a tendero sends to a
+// proveedor with the COMPLETE list of items of a purchase order
+// (Feature 002 FR-04, AC-02). Each line is "- <qty> <unit> de <name>".
+func (s *WhatsAppService) PurchaseOrder(contactName, ownerName string, lines []PurchaseOrderLine) string {
+	greeting := "Hola"
+	if strings.TrimSpace(contactName) != "" {
+		greeting = "Hola " + contactName
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s, le hago el siguiente pedido:\n", greeting)
+	for _, line := range lines {
+		fmt.Fprintf(&b, "- %s %s de %s\n",
+			formatQuantity(line.Quantity), line.Unit, line.Name)
+	}
+	fmt.Fprintf(&b, "Gracias, %s.", ownerName)
+	return b.String()
+}
+
+// formatQuantity renders a quantity without a trailing ".0" for whole
+// numbers (24 not 24.0) but keeps real decimals (2.5 kg).
+func formatQuantity(q float64) string {
+	return strconv.FormatFloat(q, 'f', -1, 64)
 }
 
 func (s *WhatsAppService) BuildURL(phone, message string) string {
