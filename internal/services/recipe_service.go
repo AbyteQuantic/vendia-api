@@ -3,7 +3,6 @@ package services
 
 import (
 	"fmt"
-	"math"
 	"strings"
 
 	"vendia-backend/internal/models"
@@ -152,9 +151,10 @@ func (s *RecipeService) consumeIngredient(tx *gorm.DB, p ExplodeParams, ingredie
 	stockAfter := stockBefore - consumed
 
 	// Record the movement first so the kardex always reflects the
-	// consumption even when stock goes negative (AC-07). Quantity is
-	// the integer kardex column; the exact fractional figures live in
-	// Notes so nothing is lost to rounding.
+	// consumption even when stock goes negative (AC-07). The kardex
+	// columns are float64, so the fractional figures are stored exactly
+	// — nothing is rounded away (Constitución Art. VII: el inventario es
+	// exacto).
 	mov := models.InventoryMovement{
 		ID:             uuid.NewString(),
 		TenantID:       p.TenantID,
@@ -162,16 +162,15 @@ func (s *RecipeService) consumeIngredient(tx *gorm.DB, p ExplodeParams, ingredie
 		ProductID:      ingredient.ID,
 		ProductName:    ingredient.Name,
 		MovementType:   models.MovementRecipeConsumption,
-		Quantity:       -int(math.Ceil(consumed)),
-		StockBefore:    int(math.Ceil(stockBefore)),
-		StockAfter:     int(math.Floor(stockAfter)),
+		Quantity:       -consumed,
+		StockBefore:    stockBefore,
+		StockAfter:     stockAfter,
 		ReferenceID:    strPtr(p.SaleUUID),
 		ReferenceType:  "sale",
 		UserID:         p.UserID,
 		IdempotencyKey: strPtr(idemKey),
-		Notes: fmt.Sprintf(
-			"recipe_consumption insumo=%s consumido=%.4f %s antes=%.4f despues=%.4f",
-			ingredient.Name, consumed, ingredient.Unit, stockBefore, stockAfter),
+		Notes: fmt.Sprintf("recipe_consumption insumo=%s unidad=%s",
+			ingredient.Name, ingredient.Unit),
 	}
 	if err := tx.Create(&mov).Error; err != nil {
 		// A racing re-sync could insert the same key between our

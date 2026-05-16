@@ -66,6 +66,9 @@ func LogInventoryMovement(tx *gorm.DB, p MovementParams) error {
 
 	after := currentStock + p.Quantity
 
+	// The InventoryMovement columns are float64 so the kardex can hold
+	// fractional recipe consumption. Product movements are whole-unit by
+	// nature, so widening these ints is a lossless conversion.
 	mov := models.InventoryMovement{
 		ID:             uuid.NewString(),
 		TenantID:       p.TenantID,
@@ -73,9 +76,9 @@ func LogInventoryMovement(tx *gorm.DB, p MovementParams) error {
 		ProductID:      p.ProductID,
 		ProductName:    p.ProductName,
 		MovementType:   p.MovementType,
-		Quantity:       p.Quantity,
-		StockBefore:    currentStock,
-		StockAfter:     after,
+		Quantity:       float64(p.Quantity),
+		StockBefore:    float64(currentStock),
+		StockAfter:     float64(after),
 		ReferenceID:    p.ReferenceID,
 		ReferenceType:  p.ReferenceType,
 		UserID:         p.UserID,
@@ -98,4 +101,3 @@ func LogInventoryMovement(tx *gorm.DB, p MovementParams) error {
 // idempotency key already exists. Callers should skip the
 // corresponding stock update.
 var ErrDuplicateMovement = fmt.Errorf("movimiento duplicado ignorado")
-
