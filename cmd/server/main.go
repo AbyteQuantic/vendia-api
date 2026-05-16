@@ -381,6 +381,19 @@ func main() {
 		v1.PATCH("/ingredients/:uuid", handlers.UpdateIngredient(db))
 		v1.DELETE("/ingredients/:uuid", handlers.DeleteIngredient(db))
 
+		// Work orders (Feature 003 — trabajos de fabricación y
+		// reparación de muebles). CRUD + status transitions; a
+		// transition to `terminada` discounts material stock via the
+		// kardex. Anticipos and the WhatsApp quote share live on
+		// their own sub-routes.
+		v1.GET("/work-orders", handlers.ListWorkOrders(db))
+		v1.POST("/work-orders", handlers.CreateWorkOrder(db))
+		v1.GET("/work-orders/:uuid", handlers.GetWorkOrder(db))
+		v1.PATCH("/work-orders/:uuid", handlers.UpdateWorkOrder(db))
+		v1.DELETE("/work-orders/:uuid", handlers.DeleteWorkOrder(db))
+		v1.POST("/work-orders/:uuid/payments", handlers.CreateWorkOrderPayment(db))
+		v1.POST("/work-orders/:uuid/share", handlers.ShareWorkOrder(db))
+
 		// Promotions
 		v1.GET("/promotions", handlers.ListPromotions(db))
 		v1.POST("/promotions", handlers.CreatePromotion(db))

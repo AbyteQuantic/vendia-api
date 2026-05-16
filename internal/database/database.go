@@ -126,6 +126,14 @@ func Migrate(db *gorm.DB) error {
 		// backward-compatible (Art. X).
 		&models.PurchaseOrder{},
 		&models.PurchaseOrderItem{},
+		// Feature 003 — furniture fabrication / repair work orders.
+		// Three new tables; the new kardex movement type
+		// `work_order_consumption` needs no migration (it is a string
+		// value on the existing column). Additive and backward-
+		// compatible (Art. X).
+		&models.WorkOrder{},
+		&models.WorkOrderItem{},
+		&models.WorkOrderPayment{},
 	)
 	if err != nil {
 		return err

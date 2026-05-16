@@ -105,6 +105,38 @@ func TestWhatsAppService_PurchaseOrder_EmptyContactName(t *testing.T) {
 	assert.Contains(t, msg, "Don Pepe")
 }
 
+// T-09 / AC-06 (Feature 003) — the work-order quotation WhatsApp
+// message lists EVERY item with its line total, plus the customer
+// greeting, the business name and the grand total.
+func TestWhatsAppService_WorkOrderQuote_ListsAllItems(t *testing.T) {
+	svc := NewWhatsAppService()
+	msg := svc.WorkOrderQuote("Carlos", "Carpintería Don Pepe", []WorkOrderQuoteLine{
+		{Description: "Madera", Quantity: 2, LineTotal: 40000},
+		{Description: "Mano de obra", Quantity: 1, LineTotal: 50000},
+	}, 90000)
+	assert.Contains(t, msg, "Carlos")
+	assert.Contains(t, msg, "Carpintería Don Pepe")
+	assert.Contains(t, msg, "Madera")
+	assert.Contains(t, msg, "Mano de obra")
+	// Line totals and the grand total must be present so the customer
+	// sees the breakdown and the price.
+	assert.Contains(t, msg, "$40.000")
+	assert.Contains(t, msg, "$50.000")
+	assert.Contains(t, msg, "$90.000")
+}
+
+// An empty customer name is tolerated — the message still goes out
+// (Art. I, cero fricción: never block on a missing optional field).
+func TestWhatsAppService_WorkOrderQuote_EmptyCustomerName(t *testing.T) {
+	svc := NewWhatsAppService()
+	msg := svc.WorkOrderQuote("", "Carpintería Don Pepe", []WorkOrderQuoteLine{
+		{Description: "Reparar silla", Quantity: 1, LineTotal: 30000},
+	}, 30000)
+	assert.Contains(t, msg, "Reparar silla")
+	assert.Contains(t, msg, "Carpintería Don Pepe")
+	assert.Contains(t, msg, "$30.000")
+}
+
 func TestWhatsAppService_BuildURL_ColombianNumber(t *testing.T) {
 	svc := NewWhatsAppService()
 	url := svc.BuildURL("3001234567", "Hola mundo")

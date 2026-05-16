@@ -23,6 +23,12 @@ const (
 	// records the entry exactly once, anchored by the PO UUID so a
 	// re-receive never double-counts (Spec §7, D4).
 	MovementPurchaseReceipt MovementType = "purchase_receipt"
+	// MovementWorkOrderConsumption (Feature 003) — an insumo/producto
+	// consumed because a furniture work order was marked `terminada`.
+	// One movement per material item, anchored by the work order UUID
+	// so a re-complete (or an offline re-sync) never double-counts
+	// (Spec §7, FR-05, AC-04).
+	MovementWorkOrderConsumption MovementType = "work_order_consumption"
 )
 
 type InventoryMovement struct {
