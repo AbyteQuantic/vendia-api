@@ -18,7 +18,9 @@ import (
 )
 
 // setupRecipeHandlerDB migrates the schema CreateRecipe touches:
-// Recipe, RecipeIngredient and Ingredient (the insumo it snapshots).
+// Recipe, RecipeIngredient, Ingredient (the insumo it snapshots) and
+// Product — FR-02, CreateRecipe now also creates the vendible
+// product-receta in the same transaction.
 func setupRecipeHandlerDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -27,6 +29,7 @@ func setupRecipeHandlerDB(t *testing.T) *gorm.DB {
 		&models.Recipe{},
 		&models.RecipeIngredient{},
 		&models.Ingredient{},
+		&models.Product{},
 	))
 	return db
 }

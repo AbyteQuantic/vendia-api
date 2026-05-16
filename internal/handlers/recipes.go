@@ -38,12 +38,12 @@ func CreateRecipe(db *gorm.DB) gin.HandlerFunc {
 	}
 
 	type Request struct {
-		ID          string            `json:"id"`
-		ProductName string            `json:"product_name" binding:"required"`
-		Category    string            `json:"category"`
-		SalePrice   float64           `json:"sale_price"   binding:"required,gt=0"`
-		Emoji       string            `json:"emoji"`
-		PhotoURL    string            `json:"photo_url"`
+		ID          string  `json:"id"`
+		ProductName string  `json:"product_name" binding:"required"`
+		Category    string  `json:"category"`
+		SalePrice   float64 `json:"sale_price"   binding:"required,gt=0"`
+		Emoji       string  `json:"emoji"`
+		PhotoURL    string  `json:"photo_url"`
 		// `dive` makes the validator descend into each slice element so
 		// the per-field rules on IngredientInput (required ingredient_uuid,
 		// quantity > 0) are actually enforced.
@@ -103,7 +103,42 @@ func CreateRecipe(db *gorm.DB) gin.HandlerFunc {
 			recipe.ID = req.ID
 		}
 
-		if err := db.Create(&recipe).Error; err != nil {
+		// FR-02 — a receta vincula un producto vendible. The recipe and
+		// its vendible Product are created in ONE transaction so the POS
+		// can never see a recipe without a sellable product, nor an
+		// orphan product if the recipe write fails (Art. VII, Art. IX).
+		if err := db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Create(&recipe).Error; err != nil {
+				return err
+			}
+
+			recipeID := recipe.ID
+			// The vendible product-receta. IsRecipe flips the POS sale
+			// path to ExplodeRecipe; Stock stays 0 because availability
+			// is derived from the insumos (D1 — disponibilidad derivada).
+			product := models.Product{
+				TenantID:    tenantID,
+				Name:        recipe.ProductName,
+				Price:       recipe.SalePrice,
+				Category:    recipe.Category,
+				Emoji:       recipe.Emoji,
+				PhotoURL:    recipe.PhotoURL,
+				Stock:       0,
+				IsAvailable: true,
+				IsRecipe:    true,
+				RecipeID:    &recipeID,
+			}
+			if err := tx.Create(&product).Error; err != nil {
+				return err
+			}
+
+			// Close the loop: Recipe.ProductID → the vendible Product.
+			productID := product.ID
+			recipe.ProductID = &productID
+			return tx.Model(&recipe).
+				Where("id = ? AND tenant_id = ?", recipe.ID, tenantID).
+				UpdateColumn("product_id", productID).Error
+		}); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al crear receta"})
 			return
 		}
@@ -155,7 +190,44 @@ func UpdateRecipe(db *gorm.DB) gin.HandlerFunc {
 			updates["photo_url"] = *req.PhotoURL
 		}
 
-		if err := db.Model(&recipe).Updates(updates).Error; err != nil {
+		// FR-02 — keep the linked vendible Product's Name/Price/Category/
+		// Emoji in sync with the recipe so the POS shows the up-to-date
+		// plato. Done in the same transaction as the recipe update so the
+		// two never drift apart.
+		if err := db.Transaction(func(tx *gorm.DB) error {
+			if len(updates) > 0 {
+				if err := tx.Model(&recipe).Updates(updates).Error; err != nil {
+					return err
+				}
+			}
+			if recipe.ProductID == nil || *recipe.ProductID == "" {
+				// Legacy recipe with no linked product (predates FR-02):
+				// nothing to sync (Art. X — old recipes keep working).
+				return nil
+			}
+			productUpdates := map[string]any{}
+			if req.ProductName != nil {
+				productUpdates["name"] = *req.ProductName
+			}
+			if req.SalePrice != nil {
+				productUpdates["price"] = *req.SalePrice
+			}
+			if req.Category != nil {
+				productUpdates["category"] = *req.Category
+			}
+			if req.Emoji != nil {
+				productUpdates["emoji"] = *req.Emoji
+			}
+			if req.PhotoURL != nil {
+				productUpdates["photo_url"] = *req.PhotoURL
+			}
+			if len(productUpdates) == 0 {
+				return nil
+			}
+			return tx.Model(&models.Product{}).
+				Where("id = ? AND tenant_id = ?", *recipe.ProductID, tenantID).
+				Updates(productUpdates).Error
+		}); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al actualizar receta"})
 			return
 		}
@@ -169,9 +241,32 @@ func DeleteRecipe(db *gorm.DB) gin.HandlerFunc {
 		tenantID := middleware.GetTenantID(c)
 		uuid := c.Param("uuid")
 
-		result := db.Where("id = ? AND tenant_id = ?", uuid, tenantID).Delete(&models.Recipe{})
-		if result.RowsAffected == 0 {
+		// Load the recipe first so we know which vendible Product it is
+		// linked to (FR-02). Deleting blind would leave an orphan
+		// product-receta sellable in the POS.
+		var recipe models.Recipe
+		if err := db.Where("id = ? AND tenant_id = ?", uuid, tenantID).
+			First(&recipe).Error; err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "receta no encontrada"})
+			return
+		}
+
+		// Soft-delete the recipe AND its linked product in one
+		// transaction so the POS never keeps a sellable product whose
+		// recipe is gone (Art. IX — coherent state).
+		if err := db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Where("id = ? AND tenant_id = ?", uuid, tenantID).
+				Delete(&models.Recipe{}).Error; err != nil {
+				return err
+			}
+			if recipe.ProductID == nil || *recipe.ProductID == "" {
+				// Legacy recipe with no linked product (predates FR-02).
+				return nil
+			}
+			return tx.Where("id = ? AND tenant_id = ?", *recipe.ProductID, tenantID).
+				Delete(&models.Product{}).Error
+		}); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al eliminar receta"})
 			return
 		}
 
