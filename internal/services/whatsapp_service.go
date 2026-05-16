@@ -74,6 +74,34 @@ func formatQuantity(q float64) string {
 	return strconv.FormatFloat(q, 'f', -1, 64)
 }
 
+// WorkOrderQuoteLine is one item rendered into a work-order quotation
+// WhatsApp message — its description, how much, and its line total.
+type WorkOrderQuoteLine struct {
+	Description string
+	Quantity    float64
+	LineTotal   float64
+}
+
+// WorkOrderQuote builds the WhatsApp message a taller owner sends to a
+// customer with the COMPLETE breakdown of a work-order quotation
+// (Feature 003 FR-06, AC-06). Each line is
+// "- <qty>x <description>: $<line total>".
+func (s *WhatsAppService) WorkOrderQuote(customerName, businessName string, lines []WorkOrderQuoteLine, total float64) string {
+	greeting := "Hola"
+	if strings.TrimSpace(customerName) != "" {
+		greeting = "Hola " + customerName
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s, esta es la cotización de %s:\n", greeting, businessName)
+	for _, line := range lines {
+		fmt.Fprintf(&b, "- %sx %s: $%s\n",
+			formatQuantity(line.Quantity), line.Description, formatCOP(line.LineTotal))
+	}
+	fmt.Fprintf(&b, "Total: $%s", formatCOP(total))
+	return b.String()
+}
+
 func (s *WhatsAppService) BuildURL(phone, message string) string {
 	phone = strings.ReplaceAll(phone, " ", "")
 	phone = strings.ReplaceAll(phone, "+", "")
