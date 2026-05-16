@@ -356,6 +356,9 @@ func main() {
 		v1.PATCH("/recipes/:uuid", handlers.UpdateRecipe(db))
 		v1.DELETE("/recipes/:uuid", handlers.DeleteRecipe(db))
 		v1.GET("/recipes/:uuid/cost", handlers.RecipeCost(db))
+		// Feature 001 — units a product-receta can be made from the
+		// current insumo stock (FR-05).
+		v1.GET("/recipes/:uuid/availability", handlers.RecipeAvailability(db))
 
 		// Insumos (Feature 001) — raw-material inventory CRUD. The
 		// /low-stock route is registered before /:uuid so the literal
