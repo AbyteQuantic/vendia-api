@@ -205,6 +205,160 @@ func TestExplodeRecipe_NoOpForDirectProduct(t *testing.T) {
 	assert.Equal(t, int64(0), movCount, "a direct product produces zero movements")
 }
 
+// resolveRecipe fallback — when Product.RecipeID is nil the service
+// finds the recipe via Recipe.ProductID pointing back at the product.
+func TestExplodeRecipe_ResolvesViaRecipeProductID(t *testing.T) {
+	db := setupRecipeDB(t)
+	tenantID := "tenant-a"
+	productID := "p1000000-0000-4000-8000-000000000001"
+	recipeID := "r1000000-0000-4000-8000-000000000001"
+	arrozID := "11000000-0000-4000-8000-000000000001"
+
+	require.NoError(t, db.Create(&models.Ingredient{
+		BaseModel: models.BaseModel{ID: arrozID},
+		TenantID:  tenantID, Name: "Arroz", Unit: models.UnitKg, Stock: 3,
+	}).Error)
+	require.NoError(t, db.Create(&models.Recipe{
+		BaseModel:   models.BaseModel{ID: recipeID},
+		TenantID:    tenantID,
+		ProductName: "Almuerzo",
+		SalePrice:   12000,
+		ProductID:   strptr(productID), // recipe → product link
+		Ingredients: []models.RecipeIngredient{
+			{RecipeUUID: recipeID, ProductName: "Arroz", Quantity: 0.15, IngredientID: strptr(arrozID)},
+		},
+	}).Error)
+	// Product has IsRecipe=true but RecipeID nil — resolution must
+	// fall back to Recipe.ProductID.
+	require.NoError(t, db.Create(&models.Product{
+		BaseModel: models.BaseModel{ID: productID},
+		TenantID:  tenantID, Name: "Almuerzo", Price: 12000, IsRecipe: true,
+	}).Error)
+
+	svc := services.NewRecipeService(db)
+	err := db.Transaction(func(tx *gorm.DB) error {
+		return svc.ExplodeRecipe(tx, services.ExplodeParams{
+			TenantID: tenantID, SaleUUID: "5a1e0000-0000-4000-8000-0000000000a1",
+			ProductID: productID, Quantity: 1,
+		})
+	})
+	require.NoError(t, err)
+
+	var arroz models.Ingredient
+	require.NoError(t, db.First(&arroz, "id = ?", arrozID).Error)
+	assert.InDelta(t, 2.85, arroz.Stock, 1e-9, "resolved via Recipe.ProductID and discounted")
+}
+
+// A recipe-flagged product with NO recipe at all is a safe no-op: the
+// venta still goes through, nothing is exploded (D3).
+func TestExplodeRecipe_RecipeFlaggedProductWithoutRecipe(t *testing.T) {
+	db := setupRecipeDB(t)
+	require.NoError(t, db.Create(&models.Product{
+		BaseModel: models.BaseModel{ID: "p2000000-0000-4000-8000-000000000001"},
+		TenantID:  "tenant-a", Name: "Fantasma", Price: 1000, IsRecipe: true,
+	}).Error)
+	svc := services.NewRecipeService(db)
+	err := db.Transaction(func(tx *gorm.DB) error {
+		return svc.ExplodeRecipe(tx, services.ExplodeParams{
+			TenantID: "tenant-a", SaleUUID: "5a1e0000-0000-4000-8000-0000000000a2",
+			ProductID: "p2000000-0000-4000-8000-000000000001", Quantity: 1,
+		})
+	})
+	require.NoError(t, err)
+	var movCount int64
+	db.Model(&models.InventoryMovement{}).Count(&movCount)
+	assert.Equal(t, int64(0), movCount)
+}
+
+// A legacy recipe line still pointing at a Product (IngredientID nil)
+// is skipped — never guessed at (Art. IV).
+func TestExplodeRecipe_SkipsLegacyLineWithoutIngredientID(t *testing.T) {
+	db := setupRecipeDB(t)
+	tenantID := "tenant-a"
+	productID := "p3000000-0000-4000-8000-000000000001"
+	recipeID := "r3000000-0000-4000-8000-000000000001"
+	require.NoError(t, db.Create(&models.Recipe{
+		BaseModel:   models.BaseModel{ID: recipeID},
+		TenantID:    tenantID,
+		ProductName: "Receta vieja",
+		SalePrice:   5000,
+		ProductID:   strptr(productID),
+		Ingredients: []models.RecipeIngredient{
+			// Legacy line — ProductUUID set, IngredientID nil.
+			{RecipeUUID: recipeID, ProductUUID: "old-prod", ProductName: "Pan", Quantity: 1},
+		},
+	}).Error)
+	require.NoError(t, db.Create(&models.Product{
+		BaseModel: models.BaseModel{ID: productID},
+		TenantID:  tenantID, Name: "Receta vieja", Price: 5000,
+		IsRecipe: true, RecipeID: strptr(recipeID),
+	}).Error)
+
+	svc := services.NewRecipeService(db)
+	err := db.Transaction(func(tx *gorm.DB) error {
+		return svc.ExplodeRecipe(tx, services.ExplodeParams{
+			TenantID: tenantID, SaleUUID: "5a1e0000-0000-4000-8000-0000000000a3",
+			ProductID: productID, Quantity: 1,
+		})
+	})
+	require.NoError(t, err)
+	var movCount int64
+	db.Model(&models.InventoryMovement{}).Count(&movCount)
+	assert.Equal(t, int64(0), movCount, "a legacy product-line must be skipped, not exploded")
+}
+
+// A recipe line pointing at a soft-deleted insumo is skipped so the
+// venta is never lost (D3).
+func TestExplodeRecipe_SkipsMissingIngredient(t *testing.T) {
+	db := setupRecipeDB(t)
+	tenantID := "tenant-a"
+	productID := "p4000000-0000-4000-8000-000000000001"
+	recipeID := "r4000000-0000-4000-8000-000000000001"
+	require.NoError(t, db.Create(&models.Recipe{
+		BaseModel:   models.BaseModel{ID: recipeID},
+		TenantID:    tenantID,
+		ProductName: "Receta",
+		SalePrice:   5000,
+		ProductID:   strptr(productID),
+		Ingredients: []models.RecipeIngredient{
+			// IngredientID points at an insumo that does not exist.
+			{RecipeUUID: recipeID, ProductName: "Fantasma", Quantity: 1,
+				IngredientID: strptr("99000000-0000-4000-8000-000000000001")},
+		},
+	}).Error)
+	require.NoError(t, db.Create(&models.Product{
+		BaseModel: models.BaseModel{ID: productID},
+		TenantID:  tenantID, Name: "Receta", Price: 5000,
+		IsRecipe: true, RecipeID: strptr(recipeID),
+	}).Error)
+
+	svc := services.NewRecipeService(db)
+	err := db.Transaction(func(tx *gorm.DB) error {
+		return svc.ExplodeRecipe(tx, services.ExplodeParams{
+			TenantID: tenantID, SaleUUID: "5a1e0000-0000-4000-8000-0000000000a4",
+			ProductID: productID, Quantity: 1,
+		})
+	})
+	require.NoError(t, err, "a missing insumo must not lose the venta")
+}
+
+// Zero / negative quantity is a no-op.
+func TestExplodeRecipe_ZeroQuantityNoOp(t *testing.T) {
+	db := setupRecipeDB(t)
+	f := seedAlmuerzoCorriente(t, db)
+	svc := services.NewRecipeService(db)
+	err := db.Transaction(func(tx *gorm.DB) error {
+		return svc.ExplodeRecipe(tx, services.ExplodeParams{
+			TenantID: f.tenantID, SaleUUID: "5a1e0000-0000-4000-8000-0000000000a5",
+			ProductID: f.productID, Quantity: 0,
+		})
+	})
+	require.NoError(t, err)
+	var arroz models.Ingredient
+	require.NoError(t, db.First(&arroz, "id = ?", f.arrozID).Error)
+	assert.InDelta(t, 3.0, arroz.Stock, 1e-9, "qty 0 changes nothing")
+}
+
 // Art. III — a recipe belonging to another tenant is never exploded.
 func TestExplodeRecipe_TenantIsolation(t *testing.T) {
 	db := setupRecipeDB(t)

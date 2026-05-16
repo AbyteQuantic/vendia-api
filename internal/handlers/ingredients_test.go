@@ -220,6 +220,110 @@ func TestLowStockIngredients_ReturnsBelowMinimumOnly(t *testing.T) {
 	assert.Equal(t, "Arroz", resp.Data[0].Name)
 }
 
+// PATCH covers every editable field path: name, unit, expiry, supplier.
+func TestUpdateIngredient_AllFieldPaths(t *testing.T) {
+	db := setupIngredientDB(t)
+	ing := models.Ingredient{TenantID: "tenant-a", Name: "Arroz", Unit: "kg"}
+	require.NoError(t, db.Create(&ing).Error)
+	r := mountIngredientsHandler(db, "tenant-a")
+
+	w := doJSON(t, r, http.MethodPatch, "/ingredients/"+ing.ID, map[string]any{
+		"name":        "Arroz Diana",
+		"unit":        "g",
+		"min_stock":   3,
+		"expiry_date": "2026-12-31",
+		"supplier_id": "44444444-4444-4444-8444-444444444444",
+	})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var updated models.Ingredient
+	require.NoError(t, db.First(&updated, "id = ?", ing.ID).Error)
+	assert.Equal(t, "Arroz Diana", updated.Name)
+	assert.Equal(t, "g", updated.Unit)
+	assert.Equal(t, float64(3), updated.MinStock)
+	require.NotNil(t, updated.ExpiryDate)
+	require.NotNil(t, updated.SupplierID)
+}
+
+// PATCH rejects an invalid unit, an empty name, a negative min_stock /
+// unit_cost, and a malformed expiry date.
+func TestUpdateIngredient_RejectsBadInput(t *testing.T) {
+	db := setupIngredientDB(t)
+	ing := models.Ingredient{TenantID: "tenant-a", Name: "Arroz", Unit: "kg"}
+	require.NoError(t, db.Create(&ing).Error)
+	r := mountIngredientsHandler(db, "tenant-a")
+
+	cases := []map[string]any{
+		{"unit": "kilo"},
+		{"name": "   "},
+		{"min_stock": -1},
+		{"unit_cost": -5},
+		{"expiry_date": "31-12-2026"},
+	}
+	for _, body := range cases {
+		w := doJSON(t, r, http.MethodPatch, "/ingredients/"+ing.ID, body)
+		assert.Equal(t, http.StatusBadRequest, w.Code, "payload %v must 400", body)
+	}
+}
+
+// PATCH on a non-existent ingredient is a 404.
+func TestUpdateIngredient_NotFound(t *testing.T) {
+	db := setupIngredientDB(t)
+	r := mountIngredientsHandler(db, "tenant-a")
+	w := doJSON(t, r, http.MethodPatch,
+		"/ingredients/99999999-9999-4999-8999-999999999999",
+		map[string]any{"unit_cost": 1})
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// DELETE of a non-existent ingredient is a 404.
+func TestDeleteIngredient_NotFound(t *testing.T) {
+	db := setupIngredientDB(t)
+	r := mountIngredientsHandler(db, "tenant-a")
+	w := doJSON(t, r, http.MethodDelete,
+		"/ingredients/99999999-9999-4999-8999-999999999999", nil)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// Create accepts an optional expiry date and supplier id.
+func TestCreateIngredient_WithExpiryAndSupplier(t *testing.T) {
+	db := setupIngredientDB(t)
+	r := mountIngredientsHandler(db, "tenant-a")
+	supplierID := "55555555-5555-4555-8555-555555555555"
+
+	w := doJSON(t, r, http.MethodPost, "/ingredients", map[string]any{
+		"name":        "Pollo",
+		"unit":        "kg",
+		"expiry_date": "2026-06-30",
+		"supplier_id": supplierID,
+	})
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var resp struct {
+		Data models.Ingredient `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Data.ExpiryDate)
+	require.NotNil(t, resp.Data.SupplierID)
+	assert.Equal(t, supplierID, *resp.Data.SupplierID)
+}
+
+// Create rejects a malformed expiry date and a malformed id.
+func TestCreateIngredient_RejectsBadExpiryAndID(t *testing.T) {
+	db := setupIngredientDB(t)
+	r := mountIngredientsHandler(db, "tenant-a")
+
+	w1 := doJSON(t, r, http.MethodPost, "/ingredients", map[string]any{
+		"name": "X", "unit": "kg", "expiry_date": "diciembre",
+	})
+	assert.Equal(t, http.StatusBadRequest, w1.Code)
+
+	w2 := doJSON(t, r, http.MethodPost, "/ingredients", map[string]any{
+		"id": "not-a-uuid", "name": "X", "unit": "kg",
+	})
+	assert.Equal(t, http.StatusBadRequest, w2.Code)
+}
+
 // Idempotent create — a client-supplied UUID re-sent does not duplicate.
 func TestCreateIngredient_IdempotentByUUID(t *testing.T) {
 	db := setupIngredientDB(t)
