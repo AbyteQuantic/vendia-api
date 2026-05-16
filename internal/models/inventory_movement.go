@@ -14,6 +14,10 @@ const (
 	MovementTabClose     MovementType = "tab_close"
 	MovementManualAdjust MovementType = "manual_adjust"
 	MovementInitialStock MovementType = "initial_stock"
+	// MovementRecipeConsumption (Feature 001) — an ingredient consumed
+	// because a product-receta was sold. One movement per ingredient
+	// per recipe explosion (FR-03).
+	MovementRecipeConsumption MovementType = "recipe_consumption"
 )
 
 type InventoryMovement struct {

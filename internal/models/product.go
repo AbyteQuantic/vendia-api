@@ -28,4 +28,12 @@ type Product struct {
 	Presentation      string  `json:"presentation,omitempty"` // botella, lata, bolsa, caja, etc.
 	Content           string  `json:"content,omitempty"`      // 350ml, 500g, 1L, etc.
 	IsAIEnhanced      bool    `gorm:"default:false" json:"is_ai_enhanced"`
+
+	// Feature 001 — a product is either "directo" (default) or
+	// "receta". When IsRecipe is true, selling it explodes RecipeID's
+	// recipe and discounts the ingredients instead of the product's
+	// own stock. Additive + default false: every existing product
+	// stays a direct product and its sale path is untouched (AC-06).
+	IsRecipe bool    `gorm:"default:false" json:"is_recipe"`
+	RecipeID *string `gorm:"type:uuid;index" json:"recipe_id,omitempty"`
 }

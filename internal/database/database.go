@@ -114,6 +114,12 @@ func Migrate(db *gorm.DB) error {
 		&models.InventoryMovement{},
 		// Invoice scan audit trail for the owner.
 		&models.InvoiceLog{},
+		// Feature 001 — Ingredient (insumo) is raw-material inventory.
+		// Additive: legacy clients keep selling direct products
+		// unaffected (Art. X). Recipe/RecipeIngredient/Product columns
+		// added by this feature are picked up by AutoMigrate on the
+		// already-registered structs above.
+		&models.Ingredient{},
 	)
 	if err != nil {
 		return err
