@@ -87,7 +87,7 @@ func (s *SyncService) processOperation(tx *gorm.DB, tenantID string, op SyncOper
 	case "product":
 		return s.syncEntity(tx, &models.Product{}, tenantID, op)
 	case "sale":
-		return s.syncEntity(tx, &models.Sale{}, tenantID, op)
+		return s.syncSale(tx, tenantID, op)
 	case "customer":
 		return s.syncEntity(tx, &models.Customer{}, tenantID, op)
 	case "credit_account":
@@ -153,6 +153,52 @@ func applyUpdate(tx *gorm.DB, model any, op SyncOperation) (bool, error) {
 	}
 
 	return true, tx.Model(model).Where("id = ?", op.ID).Updates(op.Data).Error
+}
+
+// syncSale persists a synced Sale and then explodes the recipe of any
+// product-receta line it carries (Feature 001, FR-03). It delegates the
+// row write to syncEntity and only adds the explosion on a freshly
+// applied `create`. The explosion is idempotent by (sale_uuid,
+// ingredient_id), so a sale that arrives twice through sync never
+// double-discounts the insumos (Art. II). A direct-product sale is
+// untouched — ExplodeRecipe is a no-op for non-recipe products (AC-06).
+func (s *SyncService) syncSale(tx *gorm.DB, tenantID string, op SyncOperation) (bool, error) {
+	applied, err := s.syncEntity(tx, &models.Sale{}, tenantID, op)
+	if err != nil || !applied {
+		return applied, err
+	}
+	if op.Action != "create" {
+		return applied, nil
+	}
+
+	// Re-load the persisted sale with its items so the explosion runs
+	// against the authoritative server state, not the raw op payload.
+	var sale models.Sale
+	if err := tx.Preload("Items").
+		Where("id = ? AND tenant_id = ?", op.ID, tenantID).
+		First(&sale).Error; err != nil {
+		// Sale not found (e.g. OnConflict DoNothing skipped it) — the
+		// row already existed, nothing new to explode.
+		return applied, nil
+	}
+
+	recipeSvc := NewRecipeService(s.db)
+	for _, item := range sale.Items {
+		if item.ProductID == nil || *item.ProductID == "" {
+			continue
+		}
+		if err := recipeSvc.ExplodeRecipe(tx, ExplodeParams{
+			TenantID:  tenantID,
+			SaleUUID:  sale.ID,
+			ProductID: *item.ProductID,
+			Quantity:  item.Quantity,
+			BranchID:  sale.BranchID,
+			UserID:    sale.CreatedBy,
+		}); err != nil {
+			return false, err
+		}
+	}
+	return applied, nil
 }
 
 func (s *SyncService) syncCreditPayment(tx *gorm.DB, op SyncOperation) (bool, error) {

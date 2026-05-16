@@ -186,10 +186,24 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 
+		// recipeService explodes product-receta lines into insumo
+		// discounts AFTER the sale row is persisted. Built once per
+		// request; ExplodeRecipe receives the active transaction.
+		recipeService := services.NewRecipeService(db)
+
 		var sale models.Sale
 		err := db.Transaction(func(tx *gorm.DB) error {
 			var items []models.SaleItem
 			var total float64
+			// recipeLines collects the product-receta items so they
+			// can be exploded once the sale row exists (its UUID is
+			// the idempotency anchor). Direct products are NOT added
+			// here — their path below is untouched (AC-06).
+			type recipeLine struct {
+				productID string
+				quantity  int
+			}
+			var recipeLines []recipeLine
 
 			for _, item := range req.Items {
 				if item.IsService {
@@ -237,6 +251,18 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 					Quantity:  item.Quantity,
 					Subtotal:  subtotal,
 				})
+
+				// Feature 001 — a product-receta is queued for recipe
+				// explosion after the sale row exists. This branch is
+				// ADDITIVE: it never runs for a direct product (IsRecipe
+				// false) so the legacy stock path below is untouched
+				// (AC-06).
+				if product.IsRecipe {
+					recipeLines = append(recipeLines, recipeLine{
+						productID: product.ID,
+						quantity:  item.Quantity,
+					})
+				}
 
 				if product.RequiresContainer && (item.HasContainer == nil || !*item.HasContainer) {
 					containerSubtotal := float64(product.ContainerPrice) * float64(item.Quantity)
@@ -336,6 +362,25 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 
 			if err := tx.Create(&sale).Error; err != nil {
 				return err
+			}
+
+			// Feature 001 — explode each product-receta line now that
+			// the sale row (and its UUID) exists. The sale UUID is the
+			// idempotency anchor: re-syncing the same sale will not
+			// discount the insumos twice (Art. II). A failure here
+			// aborts the transaction so the sale and the insumo
+			// discount stay consistent.
+			for _, rl := range recipeLines {
+				if err := recipeService.ExplodeRecipe(tx, services.ExplodeParams{
+					TenantID:  tenantID,
+					SaleUUID:  sale.ID,
+					ProductID: rl.productID,
+					Quantity:  rl.quantity,
+					BranchID:  middleware.UUIDPtr(branchID),
+					UserID:    middleware.UUIDPtr(userID),
+				}); err != nil {
+					return err
+				}
 			}
 
 			// NOTE: credit accounts are only ever created via the explicit

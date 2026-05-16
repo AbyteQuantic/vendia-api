@@ -30,9 +30,13 @@ func ProductKardex(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		var product models.Product
-		if err := db.Where("id = ? AND tenant_id = ?", productID, tenantID).
-			First(&product).Error; err != nil {
+		// Feature 001 (AC-07) — kardex movements for a recipe_consumption
+		// carry product_id = UUID of an INSUMO, not a Product. Resolve
+		// the entity from products first; fall back to ingredients so
+		// the consumption of insumos is visible in the kardex. The
+		// product kardex of a normal vendible product is untouched.
+		entity, found := resolveKardexEntity(db, tenantID, productID)
+		if !found {
 			c.JSON(http.StatusNotFound, gin.H{"error": "producto no encontrado"})
 			return
 		}
@@ -57,12 +61,13 @@ func ProductKardex(db *gorm.DB) gin.HandlerFunc {
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{
 				"product": gin.H{
-					"id":           product.ID,
-					"name":         product.Name,
-					"stock":        product.Stock,
-					"barcode":      product.Barcode,
-					"presentation": product.Presentation,
-					"content":      product.Content,
+					"id":           entity.ID,
+					"name":         entity.Name,
+					"stock":        entity.Stock,
+					"barcode":      entity.Barcode,
+					"presentation": entity.Presentation,
+					"content":      entity.Content,
+					"kind":         entity.Kind,
 				},
 				"movements": movements,
 				"total":     total,
@@ -71,6 +76,52 @@ func ProductKardex(db *gorm.DB) gin.HandlerFunc {
 			},
 		})
 	}
+}
+
+// kardexEntity is the kardex header for whatever the requested id turns
+// out to be: a vendible Product ("product") or an Ingredient/insumo
+// ("ingredient"). Product-only fields stay empty for an insumo.
+type kardexEntity struct {
+	ID           string
+	Name         string
+	Stock        any
+	Barcode      string
+	Presentation string
+	Content      string
+	Kind         string
+}
+
+// resolveKardexEntity finds the requested id as a Product or, failing
+// that, as an Ingredient — always tenant-scoped (Art. III). It returns
+// false when the id belongs to neither, so the handler can 404 without
+// leaking row counts across tenants (AC-07 + multi-tenant isolation).
+func resolveKardexEntity(db *gorm.DB, tenantID, id string) (kardexEntity, bool) {
+	var product models.Product
+	if err := db.Where("id = ? AND tenant_id = ?", id, tenantID).
+		First(&product).Error; err == nil {
+		return kardexEntity{
+			ID:           product.ID,
+			Name:         product.Name,
+			Stock:        product.Stock,
+			Barcode:      product.Barcode,
+			Presentation: product.Presentation,
+			Content:      product.Content,
+			Kind:         "product",
+		}, true
+	}
+
+	var insumo models.Ingredient
+	if err := db.Where("id = ? AND tenant_id = ?", id, tenantID).
+		First(&insumo).Error; err == nil {
+		return kardexEntity{
+			ID:    insumo.ID,
+			Name:  insumo.Name,
+			Stock: insumo.Stock,
+			Kind:  "ingredient",
+		}, true
+	}
+
+	return kardexEntity{}, false
 }
 
 // InventoryReport returns a general inventory report with all products,
