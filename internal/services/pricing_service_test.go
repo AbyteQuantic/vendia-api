@@ -45,13 +45,24 @@ func TestCalculateProfit_Zero(t *testing.T) {
 	assert.Equal(t, float64(0), profit)
 }
 
+// FR-04 — CalculateMarginPercent must return the gross MARGIN
+// (precio−costo)/precio, NOT the markup (precio−costo)/costo. With a
+// $2400 sale price and a $2000 cost the margin is 400/2400 ≈ 16.67%.
 func TestCalculateMarginPercent(t *testing.T) {
 	margin := CalculateMarginPercent(2400, 2000)
-	assert.InDelta(t, 20.0, margin, 0.01)
+	assert.InDelta(t, 16.6667, margin, 0.01)
 }
 
-func TestCalculateMarginPercent_ZeroPurchase(t *testing.T) {
-	margin := CalculateMarginPercent(2500, 0)
+// AC-04 — precio 1000, costo 600 → margen 40% (1000−600)/1000.
+func TestCalculateMarginPercent_AC04(t *testing.T) {
+	margin := CalculateMarginPercent(1000, 600)
+	assert.InDelta(t, 40.0, margin, 0.01)
+}
+
+// A zero sale price has no defined margin — return 0 instead of
+// dividing by zero.
+func TestCalculateMarginPercent_ZeroSalePrice(t *testing.T) {
+	margin := CalculateMarginPercent(0, 600)
 	assert.Equal(t, float64(0), margin)
 }
 

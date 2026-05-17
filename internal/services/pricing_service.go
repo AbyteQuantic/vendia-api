@@ -12,11 +12,16 @@ func CalculateProfit(salePrice, purchasePrice float64) float64 {
 	return salePrice - purchasePrice
 }
 
+// CalculateMarginPercent returns the gross margin as a percentage of
+// the sale price: (precio − costo) / precio * 100. This is the figure
+// the tendero understands as "margen" — what fraction of each peso
+// charged is profit. (The previous formula divided by the cost, which
+// yields markup, not margin — FR-04.)
 func CalculateMarginPercent(salePrice, purchasePrice float64) float64 {
-	if purchasePrice == 0 {
+	if salePrice == 0 {
 		return 0
 	}
-	return ((salePrice - purchasePrice) / purchasePrice) * 100
+	return ((salePrice - purchasePrice) / salePrice) * 100
 }
 
 func RoundCOP(amount float64) float64 {

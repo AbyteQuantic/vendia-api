@@ -303,6 +303,11 @@ func CloseOrder(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// saleInventory applies the same inventory side effects a POS
+		// sale does — FR-02. Built once; ApplyPostSale receives the
+		// active transaction so the discount is atomic with the sale row.
+		saleInventory := services.NewSaleInventoryService(db)
+
 		err := db.Transaction(func(tx *gorm.DB) error {
 			if err := tx.Model(&order).Updates(map[string]any{
 				"status":         models.OrderStatusCobrado,
@@ -312,6 +317,7 @@ func CloseOrder(db *gorm.DB) gin.HandlerFunc {
 			}
 
 			var saleItems []models.SaleItem
+			var inventoryLines []services.SaleInventoryLine
 			for _, item := range order.Items {
 				pid := item.ProductUUID
 				saleItems = append(saleItems, models.SaleItem{
@@ -321,6 +327,15 @@ func CloseOrder(db *gorm.DB) gin.HandlerFunc {
 					Quantity:  item.Quantity,
 					Subtotal:  item.UnitPrice * float64(item.Quantity),
 				})
+				// Queue the line for the shared inventory service. A
+				// blank product UUID (legacy / ad-hoc item) is skipped —
+				// it has no stock to move.
+				if item.ProductUUID != "" {
+					inventoryLines = append(inventoryLines, services.SaleInventoryLine{
+						ProductID: item.ProductUUID,
+						Quantity:  item.Quantity,
+					})
+				}
 			}
 
 			sale := models.Sale{
@@ -336,7 +351,23 @@ func CloseOrder(db *gorm.DB) gin.HandlerFunc {
 				Source: models.SaleSourceTable,
 				Items:  saleItems,
 			}
-			return tx.Create(&sale).Error
+			if err := tx.Create(&sale).Error; err != nil {
+				return err
+			}
+
+			// FR-02 — closing a KDS order must discount inventory and
+			// explode recipes exactly like CreateSale. The sale UUID
+			// anchors the recipe-explosion idempotency so a retried
+			// close never double-discounts insumos (Art. II). A failure
+			// aborts the transaction, keeping the order, the sale and
+			// the inventory consistent.
+			return saleInventory.ApplyPostSale(tx, services.PostSaleParams{
+				TenantID: tenantID,
+				SaleUUID: sale.ID,
+				BranchID: order.BranchID,
+				UserID:   order.EmployeeUUID,
+				Lines:    inventoryLines,
+			})
 		})
 
 		if err != nil {
