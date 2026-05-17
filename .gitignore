@@ -23,7 +23,6 @@ Thumbs.db
 *.swp
 *.swo
 
-# Claude Code
-CLAUDE.md
+# Claude Code — CLAUDE.md sí se versiona (contexto del proyecto)
 .claude/
 server
