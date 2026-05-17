@@ -164,14 +164,23 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		}
 
 		if product.Stock > 0 {
+			// FR-03 — the product row already carries stock_inicial, so
+			// LogInventoryMovement's self-read would record
+			// stock_before=stock_inicial / stock_after=2×stock_inicial.
+			// An initial_stock movement always goes from 0 to the full
+			// starting quantity: pass that snapshot explicitly.
+			zero := float64(0)
+			initial := float64(product.Stock)
 			services.LogInventoryMovement(db, services.MovementParams{
-				TenantID:     tenantID,
-				BranchID:     middleware.UUIDPtr(branchID),
-				ProductID:    product.ID,
-				ProductName:  product.Name,
-				MovementType: models.MovementInitialStock,
-				Quantity:     product.Stock,
-				UserID:       middleware.UUIDPtr(userID),
+				TenantID:            tenantID,
+				BranchID:            middleware.UUIDPtr(branchID),
+				ProductID:           product.ID,
+				ProductName:         product.Name,
+				MovementType:        models.MovementInitialStock,
+				Quantity:            product.Stock,
+				UserID:              middleware.UUIDPtr(userID),
+				StockBeforeOverride: &zero,
+				StockAfterOverride:  &initial,
 			})
 		}
 

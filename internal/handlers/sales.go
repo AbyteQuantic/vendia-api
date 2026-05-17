@@ -224,24 +224,23 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 
-		// recipeService explodes product-receta lines into insumo
-		// discounts AFTER the sale row is persisted. Built once per
-		// request; ExplodeRecipe receives the active transaction.
-		recipeService := services.NewRecipeService(db)
+		// saleInventory applies the inventory side effects of the sale —
+		// direct-product stock decrement + `sale` movement, and recipe
+		// explosion for product-recetas — AFTER the sale row is persisted.
+		// FR-02: the same service is invoked by CloseOrder so a KDS order
+		// close discounts inventory identically (Constitución Art. IX —
+		// one implementation, two callers).
+		saleInventory := services.NewSaleInventoryService(db)
 
 		var sale models.Sale
 		err := db.Transaction(func(tx *gorm.DB) error {
 			var items []models.SaleItem
 			var total float64
-			// recipeLines collects the product-receta items so they
-			// can be exploded once the sale row exists (its UUID is
-			// the idempotency anchor). Direct products are NOT added
-			// here — their path below is untouched (AC-06).
-			type recipeLine struct {
-				productID string
-				quantity  int
-			}
-			var recipeLines []recipeLine
+			// inventoryLines collects every product line (direct AND
+			// recipe) so the shared SaleInventoryService applies the
+			// stock effects once the sale row exists (its UUID is the
+			// idempotency anchor for the recipe explosion).
+			var inventoryLines []services.SaleInventoryLine
 
 			for _, item := range req.Items {
 				if item.IsService {
@@ -290,17 +289,16 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 					Subtotal:  subtotal,
 				})
 
-				// Feature 001 — a product-receta is queued for recipe
-				// explosion after the sale row exists. This branch is
-				// ADDITIVE: it never runs for a direct product (IsRecipe
-				// false) so the legacy stock path below is untouched
-				// (AC-06).
-				if product.IsRecipe {
-					recipeLines = append(recipeLines, recipeLine{
-						productID: product.ID,
-						quantity:  item.Quantity,
-					})
-				}
+				// Every product line — direct or recipe — is queued for
+				// the shared SaleInventoryService, applied after the sale
+				// row exists. The service itself decides direct-decrement
+				// vs recipe-explosion based on Product.IsRecipe, so a
+				// direct product still decrements its own stock and a
+				// recipe still explodes — behaviour unchanged (AC-06).
+				inventoryLines = append(inventoryLines, services.SaleInventoryLine{
+					ProductID: product.ID,
+					Quantity:  item.Quantity,
+				})
 
 				if product.RequiresContainer && (item.HasContainer == nil || !*item.HasContainer) {
 					containerSubtotal := float64(product.ContainerPrice) * float64(item.Quantity)
@@ -315,19 +313,10 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 					})
 				}
 
-				if product.Stock > 0 {
-					services.LogInventoryMovement(tx, services.MovementParams{
-						TenantID:      tenantID,
-						BranchID:      middleware.UUIDPtr(branchID),
-						ProductID:     product.ID,
-						ProductName:   product.Name,
-						MovementType:  models.MovementSale,
-						Quantity:      -item.Quantity,
-						ReferenceType: "sale",
-						UserID:        middleware.UUIDPtr(userID),
-					})
-					tx.Model(&product).UpdateColumn("stock", gorm.Expr("stock - ?", item.Quantity))
-				}
+				// NOTE: the direct-product stock decrement + `sale`
+				// movement is no longer applied inline. It is applied by
+				// saleInventory.ApplyPostSale after the sale row exists,
+				// together with the recipe explosion — see below.
 			}
 
 			// Tax and tip ride on top of the item total. Keep them
@@ -402,23 +391,22 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 				return err
 			}
 
-			// Feature 001 — explode each product-receta line now that
-			// the sale row (and its UUID) exists. The sale UUID is the
-			// idempotency anchor: re-syncing the same sale will not
-			// discount the insumos twice (Art. II). A failure here
-			// aborts the transaction so the sale and the insumo
-			// discount stay consistent.
-			for _, rl := range recipeLines {
-				if err := recipeService.ExplodeRecipe(tx, services.ExplodeParams{
-					TenantID:  tenantID,
-					SaleUUID:  sale.ID,
-					ProductID: rl.productID,
-					Quantity:  rl.quantity,
-					BranchID:  middleware.UUIDPtr(branchID),
-					UserID:    middleware.UUIDPtr(userID),
-				}); err != nil {
-					return err
-				}
+			// FR-02 — apply every product line's inventory effect now
+			// that the sale row (and its UUID) exists: direct products
+			// decrement their own stock and log a `sale` movement,
+			// product-recetas explode into insumo consumption. The sale
+			// UUID anchors the recipe-explosion idempotency, so a
+			// re-synced sale never discounts insumos twice (Art. II). A
+			// failure here aborts the transaction so the sale and the
+			// inventory stay consistent.
+			if err := saleInventory.ApplyPostSale(tx, services.PostSaleParams{
+				TenantID: tenantID,
+				SaleUUID: sale.ID,
+				BranchID: middleware.UUIDPtr(branchID),
+				UserID:   middleware.UUIDPtr(userID),
+				Lines:    inventoryLines,
+			}); err != nil {
+				return err
 			}
 
 			// NOTE: credit accounts are only ever created via the explicit

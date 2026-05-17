@@ -665,10 +665,16 @@ func SalesByEmployee(db *gorm.DB) gin.HandlerFunc {
 			TotalAmount  float64 `json:"total_amount"`
 		}
 
-		var result []EmployeeSales
+		// FR-01 — `employee_uuid` is a Postgres `uuid` column; comparing
+		// it against the empty string ('') raises 22P02 (invalid input
+		// syntax for type uuid). GORM silences that error on Scan, so the
+		// endpoint returned `null` for every tenant. Filter unattributed
+		// sales out with `IS NOT NULL`, which is the type-correct way to
+		// drop rows that never carried an employee.
+		result := []EmployeeSales{}
 		ApplyBranchScope(db.Model(&models.Sale{}), scope).
 			Select("employee_uuid, employee_name, COUNT(*) as sale_count, SUM(total) as total_amount").
-			Where("tenant_id = ? AND created_at >= ? AND deleted_at IS NULL AND employee_uuid != ''",
+			Where("tenant_id = ? AND created_at >= ? AND deleted_at IS NULL AND employee_uuid IS NOT NULL",
 				tenantID, startOfToday).
 			Group("employee_uuid, employee_name").
 			Order("total_amount DESC").
