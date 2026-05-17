@@ -63,6 +63,7 @@ func cleanupByPhone(t *testing.T, db *gorm.DB, phone string) {
 	if err := db.Unscoped().Where("phone = ?", phone).First(&tenant).Error; err == nil {
 		db.Unscoped().Where("tenant_id = ?", tenant.ID).Delete(&models.Employee{})
 		db.Unscoped().Where("tenant_id = ?", tenant.ID).Delete(&models.RefreshToken{})
+		db.Unscoped().Where("tenant_id = ?", tenant.ID).Delete(&models.TenantSubscription{})
 		db.Unscoped().Delete(&tenant)
 	}
 }
@@ -254,4 +255,40 @@ func TestTenantRegister_JWT_HasCorrectExpiry(t *testing.T) {
 	refreshToken, ok := resp["refresh_token"].(string)
 	assert.True(t, ok, "response must contain refresh_token")
 	assert.NotEmpty(t, refreshToken)
+}
+
+// TestTenantRegister_CreatesTrialSubscription verifies AC-01: registering
+// a tenant creates its TenantSubscription row in TRIAL state with a
+// trial_ends_at 14 days out — inside the registration transaction, not
+// via a DB trigger Render never runs.
+func TestTenantRegister_CreatesTrialSubscription(t *testing.T) {
+	db := setupTestDB(t)
+	phone := uniquePhone()
+	t.Cleanup(func() { cleanupByPhone(t, db, phone) })
+
+	before := time.Now()
+	w := postJSON(setupRouter(db), defaultPayload(phone))
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	tenantID := resp["tenant_id"].(string)
+
+	var sub models.TenantSubscription
+	require.NoError(t,
+		db.Where("tenant_id = ?", tenantID).First(&sub).Error,
+		"el registro DEBE crear la TenantSubscription (AC-01)")
+
+	assert.Equal(t, models.SubscriptionStatusTrial, sub.Status)
+	assert.Equal(t, models.SubscriptionPlanFree, sub.Plan,
+		"el trial arranca en el plan base")
+	require.NotNil(t, sub.TrialEndsAt, "trial_ends_at no puede ser nil")
+
+	// 14 días ±1 día de tolerancia para latencia del request.
+	expectedMin := before.Add(13*24*time.Hour + 23*time.Hour)
+	expectedMax := before.Add(14*24*time.Hour + 1*time.Hour)
+	assert.True(t, sub.TrialEndsAt.After(expectedMin),
+		"trial_ends_at debe estar ~14 días en el futuro")
+	assert.True(t, sub.TrialEndsAt.Before(expectedMax),
+		"trial_ends_at no debe pasar de ~14 días")
 }

@@ -39,3 +39,26 @@ func TestLoad_PanicsWithShortJWTSecret(t *testing.T) {
 		_ = r
 	}()
 }
+
+func TestParseBoolEnv_DefaultWhenUnset(t *testing.T) {
+	t.Setenv("EPAYCO_TEST_MODE_X", "")
+	assert.True(t, parseBoolEnv("EPAYCO_TEST_MODE_X", true))
+	assert.False(t, parseBoolEnv("EPAYCO_TEST_MODE_X", false))
+}
+
+func TestParseBoolEnv_ParsesExplicitValues(t *testing.T) {
+	t.Setenv("EPAYCO_TEST_MODE_X", "false")
+	assert.False(t, parseBoolEnv("EPAYCO_TEST_MODE_X", true))
+	t.Setenv("EPAYCO_TEST_MODE_X", "true")
+	assert.True(t, parseBoolEnv("EPAYCO_TEST_MODE_X", false))
+	t.Setenv("EPAYCO_TEST_MODE_X", "0")
+	assert.False(t, parseBoolEnv("EPAYCO_TEST_MODE_X", true))
+	t.Setenv("EPAYCO_TEST_MODE_X", "1")
+	assert.True(t, parseBoolEnv("EPAYCO_TEST_MODE_X", false))
+}
+
+func TestParseBoolEnv_DefaultsOnGarbage(t *testing.T) {
+	t.Setenv("EPAYCO_TEST_MODE_X", "yeah-sure")
+	assert.True(t, parseBoolEnv("EPAYCO_TEST_MODE_X", true),
+		"un valor invalido debe caer al default (no flipear el sandbox)")
+}

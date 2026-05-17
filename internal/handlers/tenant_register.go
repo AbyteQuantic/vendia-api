@@ -3,6 +3,7 @@ package handlers
 import (
 	"fmt"
 	"net/http"
+	"time"
 	"vendia-backend/internal/models"
 
 	"github.com/gin-gonic/gin"
@@ -156,6 +157,27 @@ func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 			}
 			if err := tx.Create(&ws).Error; err != nil {
 				return err
+			}
+
+			// 4.b Create the TenantSubscription — Feature 008 (FR-02 /
+			//     AC-01). Historically a DB trigger was supposed to do
+			//     this, but Render only runs GORM AutoMigrate (never the
+			//     goose .sql), so the trigger never fired and every new
+			//     tenant landed with NO subscription row → the soft
+			//     paywall 403'd them on first premium request. Creating
+			//     the row HERE, inside the same transaction as the
+			//     tenant, makes the trial real and atomic: if it fails,
+			//     the whole registration rolls back rather than leaving
+			//     a tenant stranded.
+			trialEnds := time.Now().Add(models.TrialDays * 24 * time.Hour)
+			sub := models.TenantSubscription{
+				TenantID:    tenant.ID,
+				Status:      models.SubscriptionStatusTrial,
+				Plan:        models.SubscriptionPlanFree,
+				TrialEndsAt: &trialEnds,
+			}
+			if err := tx.Create(&sub).Error; err != nil {
+				return fmt.Errorf("failed to create trial subscription: %w", err)
 			}
 
 			// 5. Create Employee(s) — each one is scoped to the

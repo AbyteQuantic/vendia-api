@@ -130,6 +130,88 @@ func TestTenantSubscription_TrialDaysRemaining(t *testing.T) {
 	}
 }
 
+func TestTenantSubscription_IsPremium_ProPeriodExpiry(t *testing.T) {
+	now := time.Date(2026, 5, 17, 12, 0, 0, 0, time.UTC)
+
+	active := &TenantSubscription{
+		Status:           SubscriptionStatusProActive,
+		CurrentPeriodEnd: ptrTime(now.Add(10 * 24 * time.Hour)),
+	}
+	assert.True(t, active.IsPremium(now), "PRO con periodo vigente es premium")
+
+	expired := &TenantSubscription{
+		Status:           SubscriptionStatusProActive,
+		CurrentPeriodEnd: ptrTime(now.Add(-1 * time.Hour)),
+	}
+	assert.False(t, expired.IsPremium(now), "PRO con periodo vencido NO es premium")
+}
+
+func TestTenantSubscription_EffectiveStatus(t *testing.T) {
+	now := time.Date(2026, 5, 17, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name string
+		sub  *TenantSubscription
+		want string
+	}{
+		{
+			name: "nil reads as FREE",
+			sub:  nil,
+			want: SubscriptionStatusFree,
+		},
+		{
+			name: "TRIAL vigente se mantiene TRIAL",
+			sub: &TenantSubscription{
+				Status:      SubscriptionStatusTrial,
+				TrialEndsAt: ptrTime(now.Add(3 * 24 * time.Hour)),
+			},
+			want: SubscriptionStatusTrial,
+		},
+		{
+			name: "TRIAL vencido degrada a FREE (AC-08)",
+			sub: &TenantSubscription{
+				Status:      SubscriptionStatusTrial,
+				TrialEndsAt: ptrTime(now.Add(-1 * time.Hour)),
+			},
+			want: SubscriptionStatusFree,
+		},
+		{
+			name: "PRO_ACTIVE vigente se mantiene PRO_ACTIVE",
+			sub: &TenantSubscription{
+				Status:           SubscriptionStatusProActive,
+				CurrentPeriodEnd: ptrTime(now.Add(20 * 24 * time.Hour)),
+			},
+			want: SubscriptionStatusProActive,
+		},
+		{
+			name: "PRO_ACTIVE vencido degrada a FREE",
+			sub: &TenantSubscription{
+				Status:           SubscriptionStatusProActive,
+				CurrentPeriodEnd: ptrTime(now.Add(-1 * time.Hour)),
+			},
+			want: SubscriptionStatusFree,
+		},
+		{
+			name: "PRO_ACTIVE sin periodo (grant admin) se mantiene",
+			sub: &TenantSubscription{
+				Status: SubscriptionStatusProActive,
+			},
+			want: SubscriptionStatusProActive,
+		},
+		{
+			name: "FREE se mantiene FREE",
+			sub:  &TenantSubscription{Status: SubscriptionStatusFree},
+			want: SubscriptionStatusFree,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, tc.sub.EffectiveStatus(now))
+		})
+	}
+}
+
 func TestValidSubscriptionStatuses_ContainsAllConstants(t *testing.T) {
 	for _, s := range []string{
 		SubscriptionStatusTrial,

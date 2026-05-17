@@ -106,6 +106,10 @@ func Migrate(db *gorm.DB) error {
 		&models.PartialPayment{},
 		&models.AIUsageLog{},
 		&models.SubscriptionPayment{},
+		// Feature 008 — persisted ePayco checkout: the bridge row
+		// between POST /subscription/checkout and the backend-served
+		// GET /subscription/pay/:ref page. Additive table (Art. X).
+		&models.SubscriptionCheckout{},
 		// Cart-session lock (2026-04-28): tracks who is currently
 		// editing each POS cart slot so a second device can't
 		// stomp the cashier's work in real time.
