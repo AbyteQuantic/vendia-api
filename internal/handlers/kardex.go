@@ -274,10 +274,15 @@ func MatchProductsHandler(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-// applyBranchScopeMovements applies branch scope to inventory_movements queries.
+// applyBranchScopeMovements applies branch scope to inventory_movements
+// queries. A movement with branch_id = NULL is tenant-wide — insumos are
+// tenant-scoped (no sede), so their initial_stock movement carries no
+// branch. It must be visible under every sede's scope, hence the
+// `OR branch_id IS NULL`. Tenant isolation (Constitución Art. III) is
+// untouched: the tenant_id filter is added by the caller and never relaxed.
 func applyBranchScopeMovements(q *gorm.DB, scope BranchScopeResolution) *gorm.DB {
 	if scope.BranchID != "" {
-		return q.Where("branch_id = ?", scope.BranchID)
+		return q.Where("branch_id = ? OR branch_id IS NULL", scope.BranchID)
 	}
 	return q
 }
