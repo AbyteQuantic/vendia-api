@@ -10,21 +10,21 @@ import (
 )
 
 type Config struct {
-	Port           string
-	DatabaseURL    string
-	JWTSecret      string
-	AllowedOrigins []string
-	Env            string
-	RateLimitLogin int
-	GeminiAPIKey      string
-	GeminiModel       string
-	GeminiImageModel  string
-	R2AccountID    string
-	R2AccessKeyID  string
-	R2SecretKey    string
-	R2PublicURL       string
-	RedisURL          string
-	SupabaseURL       string
+	Port               string
+	DatabaseURL        string
+	JWTSecret          string
+	AllowedOrigins     []string
+	Env                string
+	RateLimitLogin     int
+	GeminiAPIKey       string
+	GeminiModel        string
+	GeminiImageModel   string
+	R2AccountID        string
+	R2AccessKeyID      string
+	R2SecretKey        string
+	R2PublicURL        string
+	RedisURL           string
+	SupabaseURL        string
 	SupabaseServiceKey string
 
 	// Super-admin seed — optional. When both are set, the server
@@ -39,6 +39,18 @@ type Config struct {
 	// FinOps: assumed list price for PRO (USD / month) — used for
 	// "margin at risk" when AI cost / seat approaches 50% of ARPU.
 	ProMonthlyPriceUSD float64
+
+	// ePayco payment gateway credentials (Feature 008). All four
+	// secrets are read from env vars — never hardcoded (Art. VI / D5).
+	// They stay empty in dev/test: the EpaycoService is nil-safe and
+	// the unit tests mock the gateway, so `go test` needs no real
+	// credentials. EpaycoTestMode toggles the sandbox vs production
+	// checkout flag ePayco exposes to its widget.
+	EpaycoPublicKey  string
+	EpaycoPrivateKey string
+	EpaycoPCustID    string
+	EpaycoPKey       string
+	EpaycoTestMode   bool
 }
 
 func Load() *Config {
@@ -109,28 +121,49 @@ func Load() *Config {
 	}
 
 	return &Config{
-		Port:           port,
-		DatabaseURL:    os.Getenv("DATABASE_URL"),
-		JWTSecret:      secret,
-		AllowedOrigins: allowedOrigins,
-		Env:            env,
-		RateLimitLogin: rateLimit,
-		GeminiAPIKey:      os.Getenv("GEMINI_API_KEY"),
-		GeminiModel:       os.Getenv("GEMINI_MODEL"),
-		GeminiImageModel:  os.Getenv("GEMINI_IMAGE_MODEL"),
-		R2AccountID:    os.Getenv("R2_ACCOUNT_ID"),
-		R2AccessKeyID:  os.Getenv("R2_ACCESS_KEY_ID"),
-		R2SecretKey:    os.Getenv("R2_SECRET_ACCESS_KEY"),
-		R2PublicURL:       os.Getenv("R2_PUBLIC_URL"),
-		RedisURL:          os.Getenv("REDIS_URL"),
-		SupabaseURL:       os.Getenv("SUPABASE_URL"),
+		Port:               port,
+		DatabaseURL:        os.Getenv("DATABASE_URL"),
+		JWTSecret:          secret,
+		AllowedOrigins:     allowedOrigins,
+		Env:                env,
+		RateLimitLogin:     rateLimit,
+		GeminiAPIKey:       os.Getenv("GEMINI_API_KEY"),
+		GeminiModel:        os.Getenv("GEMINI_MODEL"),
+		GeminiImageModel:   os.Getenv("GEMINI_IMAGE_MODEL"),
+		R2AccountID:        os.Getenv("R2_ACCOUNT_ID"),
+		R2AccessKeyID:      os.Getenv("R2_ACCESS_KEY_ID"),
+		R2SecretKey:        os.Getenv("R2_SECRET_ACCESS_KEY"),
+		R2PublicURL:        os.Getenv("R2_PUBLIC_URL"),
+		RedisURL:           os.Getenv("REDIS_URL"),
+		SupabaseURL:        os.Getenv("SUPABASE_URL"),
 		SupabaseServiceKey: os.Getenv("SUPABASE_SERVICE_KEY"),
 
-		SeedAdminEmail:    os.Getenv("SEED_ADMIN_EMAIL"),
-		SeedAdminPassword: os.Getenv("SEED_ADMIN_PASSWORD"),
-		SeedAdminName:     os.Getenv("SEED_ADMIN_NAME"),
+		SeedAdminEmail:     os.Getenv("SEED_ADMIN_EMAIL"),
+		SeedAdminPassword:  os.Getenv("SEED_ADMIN_PASSWORD"),
+		SeedAdminName:      os.Getenv("SEED_ADMIN_NAME"),
 		ProMonthlyPriceUSD: proMonthlyOrDefault(),
+
+		EpaycoPublicKey:  os.Getenv("EPAYCO_PUBLIC_KEY"),
+		EpaycoPrivateKey: os.Getenv("EPAYCO_PRIVATE_KEY"),
+		EpaycoPCustID:    os.Getenv("EPAYCO_P_CUST_ID"),
+		EpaycoPKey:       os.Getenv("EPAYCO_P_KEY"),
+		EpaycoTestMode:   parseBoolEnv("EPAYCO_TEST_MODE", true),
 	}
+}
+
+// parseBoolEnv reads a boolean env var. Accepts "true"/"false"/"1"/"0"
+// (case-insensitive). Returns def when unset or unparseable so a typo
+// can't silently flip the ePayco sandbox flag. Default true keeps a
+// misconfigured deploy in sandbox rather than charging real cards.
+func parseBoolEnv(key string, def bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	if b, err := strconv.ParseBool(v); err == nil {
+		return b
+	}
+	return def
 }
 
 // proMonthlyOrDefault reads PRO_MONTHLY_PRICE_USD; falls back to 29.99.

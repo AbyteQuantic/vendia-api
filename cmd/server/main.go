@@ -49,6 +49,18 @@ func main() {
 		log.Printf("[BOOTSTRAP] default payment-method seed failed: %v", err)
 	}
 
+	// Feature 008 self-heal: every tenant must have a subscription
+	// row. Pre-008 registrations never created one (the DB trigger
+	// never fired under AutoMigrate-only deploys), stranding those
+	// tenants behind the soft paywall. This backfills a courtesy
+	// 14-day TRIAL for any tenant missing a row. Idempotent — a
+	// tenant that already has a subscription is left untouched.
+	if created, err := database.SeedTenantSubscriptions(db); err != nil {
+		log.Printf("[BOOTSTRAP] tenant-subscription backfill failed: %v", err)
+	} else if created > 0 {
+		log.Printf("[BOOTSTRAP] tenant-subscription backfill seeded %d trials", created)
+	}
+
 	// ── Initialize external services (optional, nil-safe) ───────────────────
 	var geminiSvc *services.GeminiService
 	if cfg.GeminiAPIKey != "" {
@@ -95,6 +107,22 @@ func main() {
 
 	itunesSvc := services.NewITunesService()
 
+	// ePayco payment gateway (Feature 008). Always constructed —
+	// IsConfigured() gates behaviour when credentials are absent, so
+	// the subscription handlers never have to nil-check it.
+	epaycoSvc := services.NewEpaycoService(services.EpaycoConfig{
+		PublicKey:  cfg.EpaycoPublicKey,
+		PrivateKey: cfg.EpaycoPrivateKey,
+		PCustID:    cfg.EpaycoPCustID,
+		PKey:       cfg.EpaycoPKey,
+		TestMode:   cfg.EpaycoTestMode,
+	})
+	if epaycoSvc.IsConfigured() {
+		log.Printf("[SVC] ePayco gateway initialized (test_mode=%v)", cfg.EpaycoTestMode)
+	} else {
+		log.Println("[SVC] ePayco gateway NOT configured — subscription checkout disabled")
+	}
+
 	// ── Gin setup ───────────────────────────────────────────────────────────
 	r := gin.New()
 
@@ -135,6 +163,15 @@ func main() {
 
 	r.POST("/api/v1/auth/refresh", handlers.RefreshToken(db, cfg.JWTSecret))
 	r.POST("/api/v1/auth/select-workspace", middleware.Auth(cfg.JWTSecret), handlers.SelectWorkspace(db, cfg.JWTSecret))
+
+	// Subscription — PUBLIC endpoints (Feature 008). The ePayco
+	// confirmation webhook MUST be public (ePayco posts to it from its
+	// own servers, no JWT), so the handler verifies the SHA-256
+	// signature itself. The response landing is a UX-only HTML page
+	// shown after the checkout closes — it decides nothing.
+	r.POST("/api/v1/subscription/epayco/confirmation",
+		handlers.EpaycoConfirmation(db, epaycoSvc))
+	r.GET("/api/v1/subscription/response", handlers.SubscriptionResponse())
 
 	// Public store / catalog (no auth required)
 	r.GET("/api/v1/store/:slug/catalog", handlers.PublicCatalog(db))
@@ -190,6 +227,13 @@ func main() {
 	{
 		v1.POST("/auth/logout", handlers.Logout(db))
 		v1.GET("/auth/workspaces", handlers.ListWorkspaces(db))
+
+		// Subscription — JWT endpoints (Feature 008). The catalogue,
+		// the tenant's current state, and the checkout builder. The
+		// ePayco confirmation webhook is mounted PUBLIC above.
+		v1.GET("/subscription/plans", handlers.GetSubscriptionPlans())
+		v1.GET("/subscription/status", handlers.GetSubscriptionStatus(db))
+		v1.POST("/subscription/checkout", handlers.CreateSubscriptionCheckout(db, epaycoSvc))
 
 		// Sync (offline-first)
 		v1.POST("/sync/batch", handlers.SyncBatch(db))
