@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -130,6 +131,43 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 		if req.ID != "" && !models.IsValidUUID(req.ID) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "id must be a valid UUID v4"})
 			return
+		}
+
+		// Feature 004 / BUG-2 — idempotent re-sync. The sale UUID is
+		// generated client-side (Art. II offline-first); an offline POS
+		// that re-syncs a sale it already persisted would otherwise hit
+		// the sales_pkey UNIQUE constraint inside tx.Create below and
+		// the handler would leak a raw Postgres `duplicate key` error
+		// as HTTP 400 — English, ugly, and a dead end for the tendero.
+		//
+		// Instead: if a client provided an `id` that already belongs to
+		// a live (non-soft-deleted) sale for THIS tenant, the operation
+		// already succeeded. Return that existing sale with HTTP 200 and
+		// stop here. The first sale wins (spec D1): we never overwrite
+		// it with the new payload. Because this return happens BEFORE
+		// db.Transaction opens, the recipe explosion never runs on the
+		// duplicate path — insumos are not discounted a second time
+		// (AC-02). The query is tenant-scoped (Art. III) and GORM's
+		// default soft-delete scope keeps it to live sales only.
+		if req.ID != "" {
+			var existing models.Sale
+			lookupErr := db.Preload("Items").
+				Where("id = ? AND tenant_id = ?", req.ID, tenantID).
+				First(&existing).Error
+			if lookupErr == nil {
+				c.JSON(http.StatusOK, gin.H{"data": existing})
+				return
+			}
+			if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+				// A real DB error (not a clean miss) — surface it in
+				// Spanish instead of falling through to a create that
+				// would also fail and leak the raw driver message.
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error": "no se pudo verificar la venta",
+				})
+				return
+			}
+			// Clean miss → fresh sale, fall through to normal creation.
 		}
 
 		// Credit sales MUST carry an existing credit_account_id. The
