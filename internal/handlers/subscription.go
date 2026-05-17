@@ -115,10 +115,22 @@ func GetSubscriptionStatus(db *gorm.DB) gin.HandlerFunc {
 
 // ── POST /api/v1/subscription/checkout ──────────────────────────────
 
-// CreateSubscriptionCheckout builds the ePayco checkout payload for a
-// {plan, interval} purchase (FR-04 / AC-04). The frontend feeds the
-// returned struct to the ePayco widget. The FREE plan is not billable,
-// so a checkout for it is a 400.
+// CreateSubscriptionCheckout starts an ePayco checkout for a {plan,
+// interval} purchase (FR-04 / AC-04).
+//
+// F008 reconciliation — why this returns a URL, not raw widget params:
+//
+//	The ePayco checkout is a browser-only JS widget. A Flutter app
+//	(web + mobile) cannot host it, so this handler does NOT hand the
+//	client the raw widget params. Instead it:
+//	  1. derives the price and a unique reference,
+//	  2. persists a SubscriptionCheckout row (the bridge row),
+//	  3. returns {checkout_url, reference, amount, plan, interval},
+//	     where checkout_url is <base>/api/v1/subscription/pay/<ref> —
+//	     the backend-served page that opens the ePayco widget.
+//
+//	The Flutter CTA opens checkout_url with launchUrl. The FREE plan is
+//	not billable, so a checkout for it is a 400.
 func CreateSubscriptionCheckout(db *gorm.DB, epayco *services.EpaycoService) gin.HandlerFunc {
 	type request struct {
 		Plan     string `json:"plan"     binding:"required"`
@@ -165,17 +177,119 @@ func CreateSubscriptionCheckout(db *gorm.DB, epayco *services.EpaycoService) gin
 
 		ref := epayco.GenerateReference(tenantID)
 		base := publicBaseURL(c)
-		checkout := epayco.BuildCheckout(services.CheckoutParams{
+		responseURL := base + "/api/v1/subscription/response"
+		confirmationURL := base + "/api/v1/subscription/epayco/confirmation"
+
+		// Persistir el checkout: es el puente entre "checkout pedido" y
+		// "página de pago servida". GET /subscription/pay/:ref lee esta
+		// fila para renderizar el widget. La descripción se deriva igual
+		// que en BuildCheckout para que la página y el widget coincidan.
+		row := models.SubscriptionCheckout{
 			TenantID:        tenantID,
+			Reference:       ref,
 			Plan:            req.Plan,
 			Interval:        req.Interval,
-			Price:           price,
-			Reference:       ref,
-			ResponseURL:     base + "/api/v1/subscription/response",
-			ConfirmationURL: base + "/api/v1/subscription/epayco/confirmation",
+			Amount:          price.Amount,
+			Description:     checkoutDescription(req.Interval),
+			ResponseURL:     responseURL,
+			ConfirmationURL: confirmationURL,
+		}
+		if err := db.Create(&row).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "no se pudo iniciar el checkout",
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{
+			"checkout_url": base + "/api/v1/subscription/pay/" + ref,
+			"reference":    ref,
+			"amount":       price.Amount,
+			"plan":         req.Plan,
+			"interval":     req.Interval,
+		}})
+	}
+}
+
+// checkoutDescription is the Spanish buyer-facing description for a
+// VendIA Pro purchase. Kept in sync with EpaycoService.BuildCheckout so
+// the persisted row and the served widget agree.
+func checkoutDescription(interval string) string {
+	label := "mensual"
+	if interval == billing.IntervalYearly {
+		label = "anual"
+	}
+	return "Suscripción VendIA Pro (" + label + ")"
+}
+
+// ── GET /api/v1/subscription/pay/:ref ───────────────────────────────
+
+// SubscriptionPayPage SERVES the ePayco checkout page for a reference
+// created by POST /subscription/checkout (F008).
+//
+// The browser (opened by the Flutter CTA via launchUrl) lands here.
+// The handler:
+//   - looks up the SubscriptionCheckout row for :ref — unknown → 404
+//     (caso borde §9: a checkout that does not exist cannot be served),
+//   - rebuilds the ePayco widget params from that row,
+//   - returns an HTML page that loads checkout.js and opens the widget.
+//
+// PUBLIC: no JWT — the browser tab opened from the app carries no
+// token. The reference is unguessable (tenant id + nanosecond + uuid),
+// and the page exposes only the PUBLIC ePayco key, never the private
+// credentials. Without ePayco credentials it responds 503, mirroring
+// /subscription/checkout — the page literally cannot arm the widget.
+func SubscriptionPayPage(db *gorm.DB, epayco *services.EpaycoService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ref := strings.TrimSpace(c.Param("ref"))
+		if ref == "" {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "referencia de pago no encontrada",
+			})
+			return
+		}
+
+		var row models.SubscriptionCheckout
+		err := db.Where("reference = ?", ref).First(&row).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "referencia de pago no encontrada",
+			})
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "no se pudo cargar el checkout",
+			})
+			return
+		}
+
+		if !epayco.IsConfigured() {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error": "la pasarela de pagos no está disponible por ahora",
+			})
+			return
+		}
+
+		// Reconstruir los params del widget desde la fila persistida. Se
+		// usa BuildCheckout para que la página comparta exactamente la
+		// misma forma que produce el resto de la feature.
+		checkout := epayco.BuildCheckout(services.CheckoutParams{
+			TenantID: row.TenantID,
+			Plan:     row.Plan,
+			Interval: row.Interval,
+			Price: billing.Price{
+				Interval: row.Interval,
+				Amount:   row.Amount,
+				Currency: "COP",
+			},
+			Reference:       row.Reference,
+			ResponseURL:     row.ResponseURL,
+			ConfirmationURL: row.ConfirmationURL,
 		})
 
-		c.JSON(http.StatusOK, gin.H{"data": checkout})
+		c.Header("Content-Type", "text/html; charset=utf-8")
+		c.String(http.StatusOK, epayco.RenderCheckoutPage(checkout))
 	}
 }
 

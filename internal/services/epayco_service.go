@@ -18,6 +18,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -210,4 +211,100 @@ func (s *EpaycoService) GenerateReference(tenantID string) string {
 	short := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
 	return fmt.Sprintf("vendia-sub-%s-%d-%s",
 		tenantID, time.Now().UnixNano(), short)
+}
+
+// RenderCheckoutPage builds the self-contained HTML page the backend
+// SERVES so the ePayco checkout actually opens.
+//
+// Why the backend serves a page (the F008 reconciliation):
+//
+//	The Flutter app — web and mobile — has no place to host ePayco's
+//	browser-only JS widget. So /subscription/pay/:ref returns this
+//	page: it loads the official widget (checkout.js) and calls
+//	ePayco.checkout.configure({key,test}).open({...}) with the params
+//	of that reference. The Flutter CTA just opens the page URL with
+//	launchUrl — the page does the rest.
+//
+// Every dynamic value is injected as a JSON literal (encodeJSValue):
+// JSON escaping makes a string with quotes / </script> a harmless
+// string literal instead of an injection vector. The page is in
+// Spanish (Art. V).
+func (s *EpaycoService) RenderCheckoutPage(co EpaycoCheckout) string {
+	test := "false"
+	if co.Test {
+		test = "true"
+	}
+	return `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VendIA — Pago de suscripción</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#f4f5f7;margin:0;
+display:flex;align-items:center;justify-content:center;min-height:100vh}
+.card{background:#fff;border-radius:16px;padding:32px;max-width:360px;
+text-align:center;box-shadow:0 8px 24px rgba(0,0,0,.08)}
+h1{font-size:22px;color:#1a1a1a;margin:8px 0}
+p{font-size:16px;color:#444;line-height:1.5}
+.btn{display:inline-block;margin-top:16px;padding:14px 24px;
+background:#1a7f37;color:#fff;border:none;border-radius:12px;
+font-size:17px;font-weight:600;cursor:pointer}
+.amount{font-size:20px;font-weight:700;color:#1a7f37;margin:4px 0}
+</style>
+</head>
+<body>
+<div class="card">
+<h1>VendIA Pro</h1>
+<p class="amount">$` + co.Amount + ` ` + co.Currency + `</p>
+<p>Estamos abriendo la pasarela de pago segura de ePayco. Si no se
+abre sola, toca el botón.</p>
+<button class="btn" id="pagar" type="button">Pagar ahora</button>
+</div>
+<script src="https://checkout.epayco.co/checkout.js"></script>
+<script>
+var handler = ePayco.checkout.configure({
+  key: ` + encodeJSValue(co.PublicKey) + `,
+  test: ` + test + `
+});
+function abrirCheckout(){
+  handler.open({
+    name: ` + encodeJSValue(co.Name) + `,
+    description: ` + encodeJSValue(co.Description) + `,
+    invoice: ` + encodeJSValue(co.Invoice) + `,
+    amount: ` + encodeJSValue(co.Amount) + `,
+    tax_base: ` + encodeJSValue(co.TaxBase) + `,
+    tax: ` + encodeJSValue(co.Tax) + `,
+    currency: ` + encodeJSValue(co.Currency) + `,
+    country: ` + encodeJSValue(co.Country) + `,
+    lang: ` + encodeJSValue(co.Lang) + `,
+    external: "false",
+    response: ` + encodeJSValue(co.Response) + `,
+    confirmation: ` + encodeJSValue(co.Confirmation) + `,
+    extra1: ` + encodeJSValue(co.Extra1) + `,
+    extra2: ` + encodeJSValue(co.Extra2) + `,
+    extra3: ` + encodeJSValue(co.Extra3) + `
+  });
+}
+document.getElementById("pagar").addEventListener("click", abrirCheckout);
+abrirCheckout();
+</script>
+</body>
+</html>`
+}
+
+// encodeJSValue renders v as a JSON literal safe to embed inside a
+// <script> block: JSON marshaling escapes quotes and HTML-special
+// characters, so a value carrying </script> or a quote becomes an inert
+// string literal instead of breaking out of the script. Falls back to
+// an empty string literal if marshaling ever fails (it cannot for a
+// plain string, but never emit raw input).
+func encodeJSValue(v string) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return `""`
+	}
+	// json.Marshal escapes <, > and & to < etc., neutralising any
+	// </script> inside the value.
+	return string(b)
 }

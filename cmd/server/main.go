@@ -172,6 +172,13 @@ func main() {
 	r.POST("/api/v1/subscription/epayco/confirmation",
 		handlers.EpaycoConfirmation(db, epaycoSvc))
 	r.GET("/api/v1/subscription/response", handlers.SubscriptionResponse())
+	// Subscription checkout page (Feature 008). PUBLIC: the browser tab
+	// the Flutter CTA opens via launchUrl carries no JWT. The handler
+	// serves an HTML page that loads the ePayco widget for the {ref}
+	// created by POST /subscription/checkout. The reference is
+	// unguessable and the page exposes only the PUBLIC ePayco key.
+	r.GET("/api/v1/subscription/pay/:ref",
+		handlers.SubscriptionPayPage(db, epaycoSvc))
 
 	// Public store / catalog (no auth required)
 	r.GET("/api/v1/store/:slug/catalog", handlers.PublicCatalog(db))

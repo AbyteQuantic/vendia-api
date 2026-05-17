@@ -40,6 +40,7 @@ func setupSubscriptionDB(t *testing.T) *gorm.DB {
 	require.NoError(t, db.AutoMigrate(
 		&models.TenantSubscription{},
 		&models.SubscriptionPayment{},
+		&models.SubscriptionCheckout{},
 	))
 	return db
 }
@@ -73,6 +74,8 @@ func mountSubscriptionRoutes(db *gorm.DB, ep *services.EpaycoService, tenantID s
 	r.POST("/api/v1/subscription/epayco/confirmation",
 		handlers.EpaycoConfirmation(db, ep))
 	r.GET("/api/v1/subscription/response", handlers.SubscriptionResponse())
+	// /pay/:ref is PUBLIC — the browser opens it after /checkout.
+	r.GET("/api/v1/subscription/pay/:ref", handlers.SubscriptionPayPage(db, ep))
 	return r
 }
 
@@ -252,29 +255,78 @@ func TestGetSubscriptionStatus_RequiresTenant(t *testing.T) {
 }
 
 // ── POST /subscription/checkout (AC-04) ─────────────────────────────
+//
+// F008 reconciliation: /checkout no longer hands the raw ePayco widget
+// params to the Flutter client. It persists the checkout and returns a
+// checkout_url — the URL of the backend-served page that opens the
+// ePayco widget. The Flutter CTA opens that URL with launchUrl.
 
-func TestCreateCheckout_ProMonthly(t *testing.T) {
+// checkoutResponse is the new contract of POST /subscription/checkout.
+type checkoutResponse struct {
+	Data struct {
+		CheckoutURL string `json:"checkout_url"`
+		Reference   string `json:"reference"`
+		Amount      int    `json:"amount"`
+		Plan        string `json:"plan"`
+		Interval    string `json:"interval"`
+	} `json:"data"`
+}
+
+func postCheckout(r *gin.Engine, body string) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost,
+		"/api/v1/subscription/checkout", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+	return w
+}
+
+func TestCreateCheckout_ReturnsCheckoutURLAndReference(t *testing.T) {
 	db := setupSubscriptionDB(t)
 	tenantID := uuid.NewString()
 	r := mountSubscriptionRoutes(db, subTestEpayco(), tenantID)
 
-	w := httptest.NewRecorder()
-	body := strings.NewReader(`{"plan":"PRO","interval":"monthly"}`)
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/subscription/checkout", body)
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(w, req)
-
+	w := postCheckout(r, `{"plan":"PRO","interval":"monthly"}`)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	var resp struct {
-		Data services.EpaycoCheckout `json:"data"`
-	}
+
+	var resp checkoutResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "29900", resp.Data.Amount, "Pro mensual = 29.900 COP (AC-04)")
-	assert.Equal(t, "COP", resp.Data.Currency)
-	assert.NotEmpty(t, resp.Data.Invoice, "referencia única requerida")
-	assert.True(t, strings.HasPrefix(resp.Data.Invoice, "vendia-sub-"))
-	assert.Equal(t, tenantID, resp.Data.Extra1)
-	assert.Contains(t, resp.Data.Confirmation, "/subscription/epayco/confirmation")
+
+	// El contrato que el Flutter espera: una URL para abrir con launchUrl.
+	assert.NotEmpty(t, resp.Data.CheckoutURL, "checkout_url requerida (F008)")
+	assert.Contains(t, resp.Data.CheckoutURL, "/api/v1/subscription/pay/",
+		"checkout_url apunta a la página de pago servida por el backend")
+	assert.NotEmpty(t, resp.Data.Reference, "referencia única requerida")
+	assert.True(t, strings.HasPrefix(resp.Data.Reference, "vendia-sub-"))
+	// La URL termina con la referencia.
+	assert.True(t, strings.HasSuffix(resp.Data.CheckoutURL, resp.Data.Reference),
+		"la URL incluye la referencia como segmento de ruta")
+	assert.Equal(t, 29900, resp.Data.Amount, "Pro mensual = 29.900 COP (AC-04)")
+	assert.Equal(t, billing.PlanPro, resp.Data.Plan)
+	assert.Equal(t, billing.IntervalMonthly, resp.Data.Interval)
+}
+
+func TestCreateCheckout_PersistsCheckoutRow(t *testing.T) {
+	db := setupSubscriptionDB(t)
+	tenantID := uuid.NewString()
+	r := mountSubscriptionRoutes(db, subTestEpayco(), tenantID)
+
+	w := postCheckout(r, `{"plan":"PRO","interval":"yearly"}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var resp checkoutResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+	// La referencia se persiste para que /pay/:ref pueda servir la página.
+	var stored models.SubscriptionCheckout
+	require.NoError(t,
+		db.Where("reference = ?", resp.Data.Reference).First(&stored).Error,
+		"el checkout se persiste para servir /pay/:ref")
+	assert.Equal(t, tenantID, stored.TenantID)
+	assert.Equal(t, billing.PlanPro, stored.Plan)
+	assert.Equal(t, billing.IntervalYearly, stored.Interval)
+	assert.Equal(t, 299000, stored.Amount, "Pro anual = 299.000 COP")
+	assert.Contains(t, stored.ConfirmationURL, "/subscription/epayco/confirmation")
+	assert.Contains(t, stored.ResponseURL, "/subscription/response")
 }
 
 func TestCreateCheckout_UniqueReferences(t *testing.T) {
@@ -283,17 +335,11 @@ func TestCreateCheckout_UniqueReferences(t *testing.T) {
 	r := mountSubscriptionRoutes(db, subTestEpayco(), tenantID)
 
 	doCheckout := func() string {
-		w := httptest.NewRecorder()
-		body := strings.NewReader(`{"plan":"PRO","interval":"yearly"}`)
-		req, _ := http.NewRequest(http.MethodPost, "/api/v1/subscription/checkout", body)
-		req.Header.Set("Content-Type", "application/json")
-		r.ServeHTTP(w, req)
+		w := postCheckout(r, `{"plan":"PRO","interval":"yearly"}`)
 		require.Equal(t, http.StatusOK, w.Code)
-		var resp struct {
-			Data services.EpaycoCheckout `json:"data"`
-		}
+		var resp checkoutResponse
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		return resp.Data.Invoice
+		return resp.Data.Reference
 	}
 	assert.NotEqual(t, doCheckout(), doCheckout(), "cada checkout genera una ref única")
 }
@@ -302,11 +348,7 @@ func TestCreateCheckout_RejectsInvalidPlan(t *testing.T) {
 	db := setupSubscriptionDB(t)
 	r := mountSubscriptionRoutes(db, subTestEpayco(), uuid.NewString())
 
-	w := httptest.NewRecorder()
-	body := strings.NewReader(`{"plan":"ENTERPRISE","interval":"monthly"}`)
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/subscription/checkout", body)
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(w, req)
+	w := postCheckout(r, `{"plan":"ENTERPRISE","interval":"monthly"}`)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
@@ -314,11 +356,7 @@ func TestCreateCheckout_RejectsFreePlan(t *testing.T) {
 	db := setupSubscriptionDB(t)
 	r := mountSubscriptionRoutes(db, subTestEpayco(), uuid.NewString())
 
-	w := httptest.NewRecorder()
-	body := strings.NewReader(`{"plan":"FREE","interval":"monthly"}`)
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/subscription/checkout", body)
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(w, req)
+	w := postCheckout(r, `{"plan":"FREE","interval":"monthly"}`)
 	assert.Equal(t, http.StatusBadRequest, w.Code,
 		"el plan Gratis no se cobra — no hay checkout")
 }
@@ -328,13 +366,77 @@ func TestCreateCheckout_UnconfiguredGatewayFails(t *testing.T) {
 	unconfigured := services.NewEpaycoService(services.EpaycoConfig{})
 	r := mountSubscriptionRoutes(db, unconfigured, uuid.NewString())
 
-	w := httptest.NewRecorder()
-	body := strings.NewReader(`{"plan":"PRO","interval":"monthly"}`)
-	req, _ := http.NewRequest(http.MethodPost, "/api/v1/subscription/checkout", body)
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(w, req)
+	w := postCheckout(r, `{"plan":"PRO","interval":"monthly"}`)
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code,
 		"sin credenciales ePayco el checkout no puede armarse")
+}
+
+// ── GET /subscription/pay/:ref (F008 — página de checkout servida) ──
+
+func TestSubscriptionPayPage_ValidRefServesWidgetHTML(t *testing.T) {
+	db := setupSubscriptionDB(t)
+	tenantID := uuid.NewString()
+	r := mountSubscriptionRoutes(db, subTestEpayco(), tenantID)
+
+	// Un checkout real crea la referencia.
+	wc := postCheckout(r, `{"plan":"PRO","interval":"monthly"}`)
+	require.Equal(t, http.StatusOK, wc.Code, wc.Body.String())
+	var resp checkoutResponse
+	require.NoError(t, json.Unmarshal(wc.Body.Bytes(), &resp))
+
+	// La página de pago se sirve para esa referencia.
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet,
+		"/api/v1/subscription/pay/"+resp.Data.Reference, nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Contains(t, w.Header().Get("Content-Type"), "text/html")
+	body := w.Body.String()
+	assert.Contains(t, body, "https://checkout.epayco.co/checkout.js",
+		"la página carga el widget oficial de ePayco")
+	assert.Contains(t, body, "ePayco.checkout.configure",
+		"la página configura y abre el widget")
+	assert.Contains(t, body, resp.Data.Reference,
+		"el widget usa la referencia como invoice")
+	assert.Contains(t, body, "29900", "el widget cobra el monto del plan")
+	assert.Contains(t, body, tenantID, "extra1 lleva el tenant_id")
+}
+
+func TestSubscriptionPayPage_UnknownRefIs404(t *testing.T) {
+	db := setupSubscriptionDB(t)
+	r := mountSubscriptionRoutes(db, subTestEpayco(), uuid.NewString())
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet,
+		"/api/v1/subscription/pay/ref-que-no-existe", nil)
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code,
+		"una referencia desconocida → 404 (caso borde §9)")
+}
+
+func TestSubscriptionPayPage_UnconfiguredGatewayIs503(t *testing.T) {
+	db := setupSubscriptionDB(t)
+	tenantID := uuid.NewString()
+	// La referencia existe (se sembró con un gateway configurado)...
+	require.NoError(t, db.Create(&models.SubscriptionCheckout{
+		TenantID: tenantID, Reference: "vendia-sub-seed-001",
+		Plan: billing.PlanPro, Interval: billing.IntervalMonthly,
+		Amount: 29900, Description: "VendIA Pro",
+	}).Error)
+
+	// ...pero la página se sirve con un gateway SIN credenciales.
+	unconfigured := services.NewEpaycoService(services.EpaycoConfig{})
+	r := mountSubscriptionRoutes(db, unconfigured, tenantID)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet,
+		"/api/v1/subscription/pay/vendia-sub-seed-001", nil)
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code,
+		"sin credenciales ePayco la página no puede armar el widget")
 }
 
 // ── POST /subscription/epayco/confirmation ──────────────────────────

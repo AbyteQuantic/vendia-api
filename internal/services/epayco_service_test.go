@@ -188,3 +188,88 @@ func TestEpaycoService_GenerateReference_UniqueAndTenantScoped(t *testing.T) {
 	assert.Contains(t, r1, "tenant-aaa", "la referencia incluye el tenant_id")
 	assert.True(t, strings.HasPrefix(r1, "vendia-sub-"), "prefijo identificable")
 }
+
+// ── RenderCheckoutPage ──────────────────────────────────────────────
+//
+// The backend-served checkout page is what reconciles the F008
+// mismatch: the Flutter app cannot host the ePayco JS widget, so the
+// backend serves an HTML page that loads checkout.js and opens the
+// widget itself. /subscription/pay/:ref renders this page.
+
+func TestEpaycoService_RenderCheckoutPage_EmbedsWidgetAndParams(t *testing.T) {
+	svc := testEpaycoSvc()
+	price, _ := billing.LookupPrice(billing.PlanPro, billing.IntervalMonthly)
+	co := svc.BuildCheckout(CheckoutParams{
+		TenantID:        "tenant-xyz",
+		Plan:            billing.PlanPro,
+		Interval:        billing.IntervalMonthly,
+		Price:           price,
+		Reference:       "vendia-sub-tenant-xyz-001",
+		ResponseURL:     "https://api.vendia.store/api/v1/subscription/response",
+		ConfirmationURL: "https://api.vendia.store/api/v1/subscription/epayco/confirmation",
+	})
+
+	html := svc.RenderCheckoutPage(co)
+
+	// Carga el widget oficial de ePayco.
+	assert.Contains(t, html, "https://checkout.epayco.co/checkout.js",
+		"la pagina carga el script oficial del widget de ePayco")
+	assert.Contains(t, html, "ePayco.checkout.configure",
+		"configura el handler del checkout")
+	assert.Contains(t, html, ".open(",
+		"abre el widget de ePayco")
+
+	// Lleva los parametros de esta referencia.
+	assert.Contains(t, html, "pub_test_xxx", "incrusta la llave publica")
+	assert.Contains(t, html, "vendia-sub-tenant-xyz-001",
+		"incrusta la referencia como invoice")
+	assert.Contains(t, html, "29900", "incrusta el monto")
+	assert.Contains(t, html, "tenant-xyz", "incrusta el tenant_id en extra1")
+	assert.Contains(t, html, "/api/v1/subscription/response",
+		"incrusta la URL de respuesta")
+	assert.Contains(t, html, "/api/v1/subscription/epayco/confirmation",
+		"incrusta la URL de confirmacion")
+	assert.Contains(t, html, "COP")
+	assert.Contains(t, html, `lang="es"`, "la pagina esta en espanol")
+}
+
+func TestEpaycoService_RenderCheckoutPage_TestModeFlag(t *testing.T) {
+	test := testEpaycoSvc() // TestMode: true
+	prod := NewEpaycoService(EpaycoConfig{
+		PublicKey: "pub", PrivateKey: "priv", PCustID: "1", PKey: "k",
+		TestMode: false,
+	})
+	price, _ := billing.LookupPrice(billing.PlanPro, billing.IntervalMonthly)
+
+	testHTML := test.RenderCheckoutPage(test.BuildCheckout(CheckoutParams{
+		TenantID: "t", Plan: billing.PlanPro, Interval: billing.IntervalMonthly,
+		Price: price, Reference: "r-test",
+	}))
+	prodHTML := prod.RenderCheckoutPage(prod.BuildCheckout(CheckoutParams{
+		TenantID: "t", Plan: billing.PlanPro, Interval: billing.IntervalMonthly,
+		Price: price, Reference: "r-prod",
+	}))
+
+	assert.Contains(t, testHTML, "test: true",
+		"TestMode=true → widget en sandbox")
+	assert.Contains(t, prodHTML, "test: false",
+		"TestMode=false → widget en produccion")
+}
+
+// La referencia / descripcion se escapan en JS para que un valor con
+// comillas no pueda romper el script o inyectar codigo.
+func TestEpaycoService_RenderCheckoutPage_EscapesParams(t *testing.T) {
+	svc := testEpaycoSvc()
+	price, _ := billing.LookupPrice(billing.PlanPro, billing.IntervalMonthly)
+	co := svc.BuildCheckout(CheckoutParams{
+		TenantID:  `t"</script><script>alert(1)</script>`,
+		Plan:      billing.PlanPro,
+		Interval:  billing.IntervalMonthly,
+		Price:     price,
+		Reference: `ref"injected`,
+	})
+
+	html := svc.RenderCheckoutPage(co)
+	assert.NotContains(t, html, "<script>alert(1)</script>",
+		"un valor malicioso no se inyecta sin escapar")
+}
