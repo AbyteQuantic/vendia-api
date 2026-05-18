@@ -35,7 +35,7 @@ const (
 
 // TrialDays is the length of the courtesy trial granted at registration
 // and by the bootstrap backfill (FR-02 / FR-03).
-const TrialDays = 14
+const TrialDays = 7
 
 // TenantSubscription is the 1:1 row the DB trigger creates for every
 // new tenant. The struct lives alongside the tenant but is kept as a

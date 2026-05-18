@@ -247,13 +247,13 @@ func TestGetSubscriptionStatus_NoRowReadsAsFree(t *testing.T) {
 }
 
 // TestGetSubscriptionStatus_ExposesTrialTotalDays comprueba que el
-// estado incluye trial_total_days (= models.TrialDays, 14) — Feature
+// estado incluye trial_total_days (= models.TrialDays, 7) — Feature
 // 009: el frontend dibuja la barra de progreso del trial sin adivinar
 // el total (días restantes sobre el total).
 func TestGetSubscriptionStatus_ExposesTrialTotalDays(t *testing.T) {
 	db := setupSubscriptionDB(t)
 	tenantID := uuid.NewString()
-	ends := time.Now().Add(10 * 24 * time.Hour)
+	ends := time.Now().Add(5 * 24 * time.Hour)
 	require.NoError(t, db.Create(&models.TenantSubscription{
 		TenantID: tenantID, Status: models.SubscriptionStatusTrial,
 		Plan: models.SubscriptionPlanFree, TrialEndsAt: &ends,
@@ -273,7 +273,7 @@ func TestGetSubscriptionStatus_ExposesTrialTotalDays(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, models.TrialDays, resp.TrialTotalDays,
 		"trial_total_days = total del trial (F009)")
-	assert.Equal(t, 14, resp.TrialTotalDays, "el trial dura 14 días")
+	assert.Equal(t, 7, resp.TrialTotalDays, "el trial dura 7 días")
 	assert.LessOrEqual(t, resp.TrialDaysRemain, resp.TrialTotalDays,
 		"los días restantes nunca exceden el total")
 }
