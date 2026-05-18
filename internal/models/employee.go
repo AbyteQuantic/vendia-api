@@ -27,4 +27,11 @@ type Employee struct {
 	PasswordHash string       `gorm:"not null" json:"-"`
 	IsOwner      bool         `gorm:"default:false" json:"is_owner"`
 	IsActive     bool         `gorm:"default:true" json:"is_active"`
+	// PhotoURL is the staff member's profile photo. Feature 019: the
+	// owner is just an Employee row with is_owner=true, so this single
+	// column covers both the tendero (dueño) and every employee — no
+	// separate table. Additive column picked up by AutoMigrate
+	// (Constitution Art. X). Empty string = no photo yet.
+	// Spec: specs/019-foto-perfil-tendero-empleado/spec.md
+	PhotoURL string `gorm:"default:''" json:"photo_url"`
 }

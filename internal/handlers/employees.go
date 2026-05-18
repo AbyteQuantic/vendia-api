@@ -291,6 +291,9 @@ func VerifyPin(db *gorm.DB) gin.HandlerFunc {
 				"name":          employee.Name,
 				"role":          employee.Role,
 				"is_owner":      employee.IsOwner,
+				// Feature 019: expose the avatar so the POS shift
+				// screen can render it right after PIN verification.
+				"photo_url": employee.PhotoURL,
 			},
 		})
 	}
@@ -309,15 +312,15 @@ func VerifyPin(db *gorm.DB) gin.HandlerFunc {
 //  1. Hash and persist on Employee.PasswordHash (per-tenant audit
 //     trail of the credential the owner handed out).
 //  2. UPSERT into the global User table by phone:
-//       - If no User row for that phone exists, create one with the
-//         same hash. The employee can immediately log in.
-//       - If a User row ALREADY exists, do NOT touch User.PasswordHash.
-//         That row belongs to the person — the owner of THIS tenant
-//         must not be able to overwrite the global credential a
-//         person uses to log in to OTHER tenants. Surface a 200 with
-//         password_already_set=true so the UI can show "Esta persona
-//         ya tiene clave personal" instead of pretending the new pwd
-//         landed.
+//     - If no User row for that phone exists, create one with the
+//     same hash. The employee can immediately log in.
+//     - If a User row ALREADY exists, do NOT touch User.PasswordHash.
+//     That row belongs to the person — the owner of THIS tenant
+//     must not be able to overwrite the global credential a
+//     person uses to log in to OTHER tenants. Surface a 200 with
+//     password_already_set=true so the UI can show "Esta persona
+//     ya tiene clave personal" instead of pretending the new pwd
+//     landed.
 //  3. UPSERT into UserWorkspace (user_id, tenant_id, branch_id, role)
 //     so the next login by phone returns this tenant in the
 //     workspaces array. Idempotent — re-running the endpoint with
