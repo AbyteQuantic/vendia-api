@@ -138,6 +138,11 @@ func Migrate(db *gorm.DB) error {
 		&models.WorkOrder{},
 		&models.WorkOrderItem{},
 		&models.WorkOrderPayment{},
+		// Feature 016 — asynchronous AI photo jobs. One new table that
+		// tracks each enhance/generate operation so the client can poll
+		// its status instead of holding a long synchronous request.
+		// Additive and backward-compatible (Art. X).
+		&models.AIJob{},
 	)
 	if err != nil {
 		return err

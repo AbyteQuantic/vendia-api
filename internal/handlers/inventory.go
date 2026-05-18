@@ -405,6 +405,93 @@ func UploadProductPhoto(db *gorm.DB, storageSvc services.FileStorage) gin.Handle
 	}
 }
 
+// downloadSourceImage fetches the product's current photo so Gemini
+// can enhance it. It returns the raw bytes and the image content type.
+// Errors are wrapped so the caller (the background worker) can map a
+// timeout to the clean Spanish message.
+//
+// Spec: specs/016-ia-foto-async-polling/spec.md — §3 (background work).
+func downloadSourceImage(ctx context.Context, sourceURL string) ([]byte, string, error) {
+	imgReq, err := http.NewRequestWithContext(ctx, "GET", sourceURL, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("error al preparar descarga de foto: %w", err)
+	}
+	imgReq.Header.Set("User-Agent", "VendIA-POS/1.0 (vendia.co)")
+
+	resp, err := http.DefaultClient.Do(imgReq)
+	if err != nil {
+		return nil, "", fmt.Errorf("error al obtener foto: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("la URL de la foto devolvió %d", resp.StatusCode)
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if !strings.HasPrefix(contentType, "image/") {
+		return nil, "", fmt.Errorf("la URL no contiene una imagen válida")
+	}
+
+	imageData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", fmt.Errorf("error al leer foto: %w", err)
+	}
+	return imageData, contentType, nil
+}
+
+// buildProductInfo assembles the descriptive string Gemini receives —
+// name plus optional presentation/content. The edit screen may pass a
+// fresher value via query params; otherwise the stored product wins.
+func buildProductInfo(c *gin.Context, product models.Product) string {
+	name := c.Query("name")
+	if name == "" {
+		name = product.Name
+	}
+	pres := c.Query("presentation")
+	if pres == "" {
+		pres = product.Presentation
+	}
+	content := c.Query("content")
+	if content == "" {
+		content = product.Content
+	}
+	info := name
+	if pres != "" {
+		info += " " + pres
+	}
+	if content != "" {
+		info += " " + content
+	}
+	return info
+}
+
+// registerCatalogImage mirrors a freshly produced product photo into
+// the shared catalog (capped at 3 accepted images per catalog product).
+// It is best-effort: any failure is swallowed so it never fails the
+// AI job — the product photo is already saved at this point.
+func registerCatalogImage(catalogSvc *services.CatalogService, product models.Product, tenantID, newURL, key string) {
+	if catalogSvc == nil {
+		return
+	}
+	cp, err := catalogSvc.FindOrCreateCatalogProduct(
+		product.Barcode, product.Name, "", product.Presentation, product.Content, "")
+	if err != nil {
+		return
+	}
+	count, _ := catalogSvc.CountAcceptedImages(cp.ID)
+	if count < 3 {
+		catalogSvc.CreatePendingImage(cp.ID, tenantID, newURL, key)
+	}
+}
+
+// EnhanceProductPhoto queues an asynchronous "mejorar foto con IA" job.
+// It validates the request, creates a `processing` AIJob row, launches
+// the real work (download + Gemini + upload) in a background goroutine
+// with its OWN context, and answers 202 immediately with the job_id.
+// The client then polls GET /products/:id/ai-job/:jobId.
+//
+// Spec: specs/016-ia-foto-async-polling/spec.md — FR-01, AC-01.
 func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage, catalogSvc *services.CatalogService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
@@ -431,110 +518,66 @@ func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, storage
 		if sourceURL == "" {
 			sourceURL = product.ImageURL
 		}
+		productInfo := buildProductInfo(c, product)
 
-		// Spec: specs/015-ia-foto-timeouts/spec.md — FR-01.
-		// A single Gemini image operation measured ~27s in production;
-		// add the source-photo download and the R2 upload on top and
-		// 30s is not enough. 110s covers the whole operation with
-		// headroom, and stays below the frontend's ~140s receiveTimeout
-		// so the backend always answers before the client gives up.
-		ctx, cancel := context.WithTimeout(
-			aiusage.WithTenantID(c.Request.Context(), tenantID),
-			aiImageOperationTimeout,
-		)
-		defer cancel()
-
-		imgReq, err := http.NewRequestWithContext(ctx, "GET", sourceURL, nil)
+		job, err := createAIJob(db, tenantID, productUUID, models.AIJobTypeEnhance)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al preparar descarga de foto"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo iniciar el trabajo de IA"})
 			return
 		}
-		imgReq.Header.Set("User-Agent", "VendIA-POS/1.0 (vendia.co)")
 
-		resp, err := http.DefaultClient.Do(imgReq)
+		// The real work runs in the background with context.Background()
+		// — see runAIJob. The request context dies with this 202 reply.
+		worker := enhancePhotoWorker(db, geminiSvc, storageSvc, catalogSvc,
+			product, tenantID, productUUID, sourceURL, productInfo)
+		launchAIJob(db, job.ID, productUUID, tenantID, worker)
+
+		respondAIJobAccepted(c, job.ID)
+	}
+}
+
+// enhancePhotoWorker builds the background worker for an enhance job:
+// download the current photo, run Gemini's EnhancePhoto, upload the
+// result to storage, point the product's photo at the new URL, and
+// mirror it into the catalog. It returns the new photo URL.
+//
+// Spec: specs/016-ia-foto-async-polling/spec.md — §3, FR-01.
+func enhancePhotoWorker(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage, catalogSvc *services.CatalogService, product models.Product, tenantID, productUUID, sourceURL, productInfo string) aiPhotoWorker {
+	return func(ctx context.Context) (string, error) {
+		imageData, contentType, err := downloadSourceImage(ctx, sourceURL)
 		if err != nil {
-			respondAIImageError(c, ctx, "error al obtener foto", err)
-			return
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("la URL de la foto devolvió %d", resp.StatusCode)})
-			return
-		}
-
-		contentType := resp.Header.Get("Content-Type")
-		if !strings.HasPrefix(contentType, "image/") {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "la URL no contiene una imagen válida"})
-			return
-		}
-
-		imageData, err := io.ReadAll(resp.Body)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al leer foto"})
-			return
-		}
-
-		// Use fresh context from query params if provided (edit screen sends current UI state)
-		name := c.Query("name")
-		if name == "" {
-			name = product.Name
-		}
-		pres := c.Query("presentation")
-		if pres == "" {
-			pres = product.Presentation
-		}
-		content := c.Query("content")
-		if content == "" {
-			content = product.Content
-		}
-		productInfo := name
-		if pres != "" {
-			productInfo += " " + pres
-		}
-		if content != "" {
-			productInfo += " " + content
+			return "", err
 		}
 
 		enhanced, err := geminiSvc.EnhancePhoto(ctx, imageData, contentType, productInfo)
 		if err != nil {
-			respondAIImageError(c, ctx, "error al mejorar foto", err)
-			return
+			return "", fmt.Errorf("error al mejorar foto: %w", err)
 		}
 
 		key := fmt.Sprintf("products/%s/%s-enhanced.png", tenantID, productUUID)
 		newURL, err := storageSvc.Upload(ctx, "product-photos", key, enhanced, "image/png")
 		if err != nil {
-			respondAIImageError(c, ctx, "error al guardar foto mejorada", err)
-			return
+			return "", fmt.Errorf("error al guardar foto mejorada: %w", err)
 		}
 
-		db.Model(&product).Updates(map[string]any{"photo_url": newURL, "is_ai_enhanced": true})
-
-		// Catalog integration
-		var catalogImageID string
-		if catalogSvc != nil {
-			key := fmt.Sprintf("products/%s/%s-enhanced.png", tenantID, productUUID)
-			cp, err := catalogSvc.FindOrCreateCatalogProduct(
-				product.Barcode, product.Name, "", product.Presentation, product.Content, "")
-			if err == nil {
-				count, _ := catalogSvc.CountAcceptedImages(cp.ID)
-				if count < 3 {
-					img, err := catalogSvc.CreatePendingImage(cp.ID, tenantID, newURL, key)
-					if err == nil {
-						catalogImageID = img.ID
-					}
-				}
-			}
+		if err := db.Model(&models.Product{}).
+			Where("id = ? AND tenant_id = ?", productUUID, tenantID).
+			Updates(map[string]any{"photo_url": newURL, "is_ai_enhanced": true}).Error; err != nil {
+			return "", fmt.Errorf("error al actualizar producto: %w", err)
 		}
 
-		c.JSON(http.StatusOK, gin.H{"data": gin.H{
-			"photo_url":        newURL,
-			"catalog_image_id": catalogImageID,
-		}})
+		registerCatalogImage(catalogSvc, product, tenantID, newURL, key)
+		return newURL, nil
 	}
 }
 
+// GenerateProductImage queues an asynchronous "generar foto con IA"
+// job. Same async shape as EnhanceProductPhoto: validate, create the
+// `processing` AIJob row, launch the real work in a background
+// goroutine with its own context, and answer 202 immediately with the
+// job_id for the client to poll.
+//
+// Spec: specs/016-ia-foto-async-polling/spec.md — FR-01, AC-05.
 func GenerateProductImage(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage, catalogSvc *services.CatalogService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
@@ -552,78 +595,55 @@ func GenerateProductImage(db *gorm.DB, geminiSvc *services.GeminiService, storag
 			return
 		}
 
-		// Use fresh context from query params if provided (edit screen sends current UI state)
-		name := c.Query("name")
-		if name == "" {
-			name = product.Name
-		}
-		pres := c.Query("presentation")
-		if pres == "" {
-			pres = product.Presentation
-		}
-		content := c.Query("content")
-		if content == "" {
-			content = product.Content
-		}
+		productInfo := buildProductInfo(c, product)
 		barcode := c.Query("barcode")
 		if barcode == "" {
 			barcode = product.Barcode
-		}
-		productInfo := name
-		if pres != "" {
-			productInfo += " " + pres
-		}
-		if content != "" {
-			productInfo += " " + content
 		}
 		if barcode != "" {
 			productInfo += " (codigo de barras: " + barcode + ")"
 		}
 
-		// Spec: specs/015-ia-foto-timeouts/spec.md — FR-01.
-		// Aligned with EnhanceProductPhoto: a Gemini image operation
-		// (~27s) plus the R2 upload needs a generous, ordered budget.
-		ctx, cancel := context.WithTimeout(
-			aiusage.WithTenantID(c.Request.Context(), tenantID),
-			aiImageOperationTimeout,
-		)
-		defer cancel()
+		job, err := createAIJob(db, tenantID, productUUID, models.AIJobTypeGenerate)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo iniciar el trabajo de IA"})
+			return
+		}
 
+		worker := generateImageWorker(db, geminiSvc, storageSvc, catalogSvc,
+			product, tenantID, productUUID, productInfo)
+		launchAIJob(db, job.ID, productUUID, tenantID, worker)
+
+		respondAIJobAccepted(c, job.ID)
+	}
+}
+
+// generateImageWorker builds the background worker for a generate job:
+// run Gemini's GenerateProductImage, upload the result, point both the
+// product photo and image URL at it, and mirror it into the catalog.
+//
+// Spec: specs/016-ia-foto-async-polling/spec.md — §3, FR-01.
+func generateImageWorker(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage, catalogSvc *services.CatalogService, product models.Product, tenantID, productUUID, productInfo string) aiPhotoWorker {
+	return func(ctx context.Context) (string, error) {
 		generated, err := geminiSvc.GenerateProductImage(ctx, productInfo)
 		if err != nil {
-			respondAIImageError(c, ctx, "error al generar imagen", err)
-			return
+			return "", fmt.Errorf("error al generar imagen: %w", err)
 		}
 
 		key := fmt.Sprintf("products/%s/%s-generated.png", tenantID, productUUID)
 		newURL, err := storageSvc.Upload(ctx, "product-photos", key, generated, "image/png")
 		if err != nil {
-			respondAIImageError(c, ctx, "error al guardar imagen", err)
-			return
+			return "", fmt.Errorf("error al guardar imagen: %w", err)
 		}
 
-		db.Model(&product).Updates(map[string]any{"photo_url": newURL, "image_url": newURL, "is_ai_enhanced": true})
-
-		// Catalog integration
-		var catalogImageID string
-		if catalogSvc != nil {
-			cp, err := catalogSvc.FindOrCreateCatalogProduct(
-				product.Barcode, product.Name, "", product.Presentation, product.Content, "")
-			if err == nil {
-				count, _ := catalogSvc.CountAcceptedImages(cp.ID)
-				if count < 3 {
-					img, err := catalogSvc.CreatePendingImage(cp.ID, tenantID, newURL, key)
-					if err == nil {
-						catalogImageID = img.ID
-					}
-				}
-			}
+		if err := db.Model(&models.Product{}).
+			Where("id = ? AND tenant_id = ?", productUUID, tenantID).
+			Updates(map[string]any{"photo_url": newURL, "image_url": newURL, "is_ai_enhanced": true}).Error; err != nil {
+			return "", fmt.Errorf("error al actualizar producto: %w", err)
 		}
 
-		c.JSON(http.StatusOK, gin.H{"data": gin.H{
-			"photo_url":        newURL,
-			"catalog_image_id": catalogImageID,
-		}})
+		registerCatalogImage(catalogSvc, product, tenantID, newURL, key)
+		return newURL, nil
 	}
 }
 
