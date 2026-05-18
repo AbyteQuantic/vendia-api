@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,39 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+// aiImageOperationTimeout is the total budget for an AI photo
+// operation (enhance or generate): download the source photo +
+// Gemini image call (~27s measured in production) + R2 upload.
+//
+// Spec: specs/015-ia-foto-timeouts/spec.md — FR-01 / D1.
+// It must stay BELOW the frontend per-request receiveTimeout (~140s)
+// so the backend always responds — with a clear Spanish error if the
+// context is exhausted — before the client cuts the connection.
+const aiImageOperationTimeout = 110 * time.Second
+
+// aiTimeoutMessage is the Spanish, user-facing error returned when an
+// AI photo operation runs past its context budget.
+//
+// Spec: specs/015-ia-foto-timeouts/spec.md — FR-03 / Constitution Art. V.
+const aiTimeoutMessage = "La IA está tardando más de lo normal. Intenta de nuevo en un momento."
+
+// respondAIImageError maps an error from an AI photo operation to a
+// clean HTTP response. When the failure is a context deadline /
+// cancellation, it fails FAST with a clear Spanish message and 504 —
+// the handler never hangs past its context and never leaks the raw
+// "context deadline exceeded" string to the shopkeeper. Any other
+// error keeps the supplied Spanish prefix.
+//
+// Spec: specs/015-ia-foto-timeouts/spec.md — FR-03.
+func respondAIImageError(c *gin.Context, ctx context.Context, prefix string, err error) {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
+		ctx.Err() != nil {
+		c.JSON(http.StatusGatewayTimeout, gin.H{"error": aiTimeoutMessage})
+		return
+	}
+	c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("%s: %v", prefix, err)})
+}
 
 func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *services.OpenFoodFactsService) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -228,7 +262,6 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 			}
 			products = append(products, pr)
 
-
 		}
 
 		c.JSON(http.StatusOK, gin.H{
@@ -399,9 +432,15 @@ func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, storage
 			sourceURL = product.ImageURL
 		}
 
+		// Spec: specs/015-ia-foto-timeouts/spec.md — FR-01.
+		// A single Gemini image operation measured ~27s in production;
+		// add the source-photo download and the R2 upload on top and
+		// 30s is not enough. 110s covers the whole operation with
+		// headroom, and stays below the frontend's ~140s receiveTimeout
+		// so the backend always answers before the client gives up.
 		ctx, cancel := context.WithTimeout(
 			aiusage.WithTenantID(c.Request.Context(), tenantID),
-			30*time.Second,
+			aiImageOperationTimeout,
 		)
 		defer cancel()
 
@@ -414,7 +453,7 @@ func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, storage
 
 		resp, err := http.DefaultClient.Do(imgReq)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al obtener foto: %v", err)})
+			respondAIImageError(c, ctx, "error al obtener foto", err)
 			return
 		}
 		defer resp.Body.Close()
@@ -459,14 +498,14 @@ func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, storage
 
 		enhanced, err := geminiSvc.EnhancePhoto(ctx, imageData, contentType, productInfo)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al mejorar foto: %v", err)})
+			respondAIImageError(c, ctx, "error al mejorar foto", err)
 			return
 		}
 
 		key := fmt.Sprintf("products/%s/%s-enhanced.png", tenantID, productUUID)
 		newURL, err := storageSvc.Upload(ctx, "product-photos", key, enhanced, "image/png")
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al guardar foto mejorada: %v", err)})
+			respondAIImageError(c, ctx, "error al guardar foto mejorada", err)
 			return
 		}
 
@@ -541,22 +580,25 @@ func GenerateProductImage(db *gorm.DB, geminiSvc *services.GeminiService, storag
 			productInfo += " (codigo de barras: " + barcode + ")"
 		}
 
+		// Spec: specs/015-ia-foto-timeouts/spec.md — FR-01.
+		// Aligned with EnhanceProductPhoto: a Gemini image operation
+		// (~27s) plus the R2 upload needs a generous, ordered budget.
 		ctx, cancel := context.WithTimeout(
 			aiusage.WithTenantID(c.Request.Context(), tenantID),
-			60*time.Second,
+			aiImageOperationTimeout,
 		)
 		defer cancel()
 
 		generated, err := geminiSvc.GenerateProductImage(ctx, productInfo)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al generar imagen: %v", err)})
+			respondAIImageError(c, ctx, "error al generar imagen", err)
 			return
 		}
 
 		key := fmt.Sprintf("products/%s/%s-generated.png", tenantID, productUUID)
 		newURL, err := storageSvc.Upload(ctx, "product-photos", key, generated, "image/png")
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al guardar imagen: %v", err)})
+			respondAIImageError(c, ctx, "error al guardar imagen", err)
 			return
 		}
 
