@@ -14,6 +14,34 @@ import (
 	"gorm.io/gorm"
 )
 
+// resolveDefaultBranchID returns the tenant's "sede por defecto" — the
+// oldest non-deleted branch (Spec 014 §6). Used by CreateProduct as a
+// fallback when the JWT carries no branch_id claim (a mono-sede owner's
+// token), so a product is never inserted with branch_id NULL (FR-02).
+//
+// Returns an empty string when the tenant has no branch at all; the
+// caller then keeps the current behaviour (branch_id NULL) because there
+// is no sede to assign. The tie-breaker (`created_at ASC, id ASC`)
+// matches database.BackfillBranchIDs so the live fallback and the
+// historical backfill agree on the same default sede.
+func resolveDefaultBranchID(db *gorm.DB, tenantID string) string {
+	if tenantID == "" {
+		return ""
+	}
+	var branch models.Branch
+	err := db.Select("id").
+		Where("tenant_id = ?", tenantID).
+		Order("created_at ASC, id ASC").
+		First(&branch).Error
+	if err != nil {
+		// gorm.ErrRecordNotFound (tenant with no sede) or a real DB
+		// error — either way we have no sede to assign. Fall through
+		// to NULL; the boot-time backfill is the safety net.
+		return ""
+	}
+	return branch.ID
+}
+
 // normaliseExpiryDate validates an incoming expiry date string. Accepts
 // ISO-8601 dates ("2026-12-31") only. Empty or whitespace maps to nil
 // (no expiration). Any other input is rejected so the Postgres DATE
@@ -132,6 +160,56 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			return
 		}
 
+		// Feature 014 / FR-05 — idempotent re-sync. The product UUID is
+		// generated client-side (Art. II offline-first); an offline POS
+		// that re-syncs a product it already persisted would otherwise hit
+		// the products_pkey UNIQUE constraint on db.Create below and the
+		// handler would leak a raw Postgres `duplicate key` error as an
+		// HTTP 500 — English, ugly, a dead end for the tendero, and it
+		// also swallowed by create_product_screen.dart's mute catchError.
+		//
+		// Instead: if a client provided an `id` that already belongs to a
+		// live (non-soft-deleted) product for THIS tenant, the creation
+		// already succeeded. Return that existing product with HTTP 200
+		// and stop. The first write wins — we never overwrite it with the
+		// new payload, and because this return happens BEFORE db.Create,
+		// the initial_stock kardex movement is never logged twice (AC-03).
+		// The query is tenant-scoped (Art. III) and GORM's default
+		// soft-delete scope keeps it to live products only. This mirrors
+		// the CreateSale idempotency pattern in sales.go exactly.
+		if req.ID != "" {
+			var existing models.Product
+			lookupErr := db.Where("id = ? AND tenant_id = ?", req.ID, tenantID).
+				First(&existing).Error
+			if lookupErr == nil {
+				c.JSON(http.StatusOK, gin.H{"data": existing})
+				return
+			}
+			if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
+				// A real DB error (not a clean miss) — surface it in
+				// Spanish instead of falling through to a create that
+				// would also fail and leak the raw driver message.
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error": "no se pudo verificar el producto",
+				})
+				return
+			}
+			// Clean miss → fresh product, fall through to normal creation.
+		}
+
+		// Feature 014 / FR-02 — sede fallback. A mono-sede owner's JWT
+		// carries no branch_id claim, so GetBranchID returns "" →
+		// UUIDPtr("") → nil → the product would be inserted with
+		// branch_id NULL and vanish from sede-scoped Inventario/Dashboard
+		// reads (the exact bug this feature fixes). When the claim is
+		// empty, resolve the tenant's default sede and scope the product
+		// to it. If the tenant has no sede at all, branchID stays empty
+		// and the current behaviour (branch_id NULL) is preserved — the
+		// boot-time backfill is the safety net.
+		if branchID == "" {
+			branchID = resolveDefaultBranchID(db, tenantID)
+		}
+
 		expiry, err := normaliseExpiryDate(req.ExpiryDate)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -195,9 +273,9 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 
 func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.HandlerFunc {
 	type Request struct {
-		Name              *string  `json:"name"`
-		Price             *float64 `json:"price"`
-		Stock             *int     `json:"stock"`
+		Name  *string  `json:"name"`
+		Price *float64 `json:"price"`
+		Stock *int     `json:"stock"`
 		// Barcode was missing from this struct, so PATCH /products/:id
 		// silently dropped the field. Two real workflows broke because
 		// of it: (1) "Crear producto" via the scanner flow that pre-fills
@@ -205,15 +283,15 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		// up with an empty barcode column), (2) the cashier-side
 		// "asociar código a un producto existente" recovery action.
 		// Both depend on this column being writable.
-		Barcode           *string  `json:"barcode"`
-		CatalogImageID    *string  `json:"catalog_image_id"`
-		IsAvailable       *bool    `json:"is_available"`
-		RequiresContainer *bool    `json:"requires_container"`
-		ContainerPrice    *int64   `json:"container_price"`
-		ImageURL          *string  `json:"image_url"`
-		Presentation      *string  `json:"presentation"`
-		Content           *string  `json:"content"`
-		ExpiryDate        *string  `json:"expiry_date"`
+		Barcode           *string `json:"barcode"`
+		CatalogImageID    *string `json:"catalog_image_id"`
+		IsAvailable       *bool   `json:"is_available"`
+		RequiresContainer *bool   `json:"requires_container"`
+		ContainerPrice    *int64  `json:"container_price"`
+		ImageURL          *string `json:"image_url"`
+		Presentation      *string `json:"presentation"`
+		Content           *string `json:"content"`
+		ExpiryDate        *string `json:"expiry_date"`
 	}
 
 	return func(c *gin.Context) {

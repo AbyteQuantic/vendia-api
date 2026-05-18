@@ -36,10 +36,20 @@ func main() {
 		log.Printf("[BOOTSTRAP] super-admin seed failed: %v", err)
 	}
 
-	// Phase-6 self-heal: backfill NULL branch_id on legacy operational
-	// rows so sede-scoped reads don't hide pre-Phase-5 inventory/sales.
-	// Idempotent — subsequent boots are no-ops.
-	database.BackfillBranchIDs(db)
+	// Feature 014 self-heal: backfill NULL branch_id on the core
+	// operational tables (products, sales, inventory_movements,
+	// credit_accounts, order_tickets) so sede-scoped reads don't hide a
+	// product/sale that was created without a sede claim. Idempotent —
+	// subsequent boots are no-ops.
+	if touched, err := database.BackfillBranchIDs(db); err != nil {
+		log.Printf("[BOOTSTRAP] branch_id backfill failed: %v", err)
+	} else if touched > 0 {
+		log.Printf("[BOOTSTRAP] branch_id backfill repaired %d rows", touched)
+	}
+	// Backfill the remaining branch-scoped tables (user_workspaces,
+	// credit_payments) — must run AFTER BackfillBranchIDs so the parent
+	// credit_accounts are already scoped.
+	database.BackfillRelatedBranchIDs(db)
 
 	// Self-heal: every tenant must have at least the "Efectivo"
 	// payment method seeded. Pre-fix tenants registered before the

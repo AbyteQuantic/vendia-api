@@ -75,48 +75,27 @@ func BootstrapSuperAdmin(db *gorm.DB, cfg BootstrapSuperAdminConfig) error {
 	return nil
 }
 
-// BackfillBranchIDs assigns a default branch_id to every legacy
-// operational row where the column is still NULL. Phase-6 introduced
-// `WHERE branch_id = ?` on products/sales/credits, which would have
-// hidden pre-Phase-5 rows from the app. Migration 026 carried the SQL
-// backfill, but Render deploys run GORM AutoMigrate only (not goose),
-// so the SQL file never fires in production. This function mirrors
-// those UPDATE statements in Go and is wired into main.go right after
-// AutoMigrate, which means every boot self-heals:
+// BackfillRelatedBranchIDs repairs the NULL branch_id rows in tables
+// that fall OUTSIDE Spec 014's operational set (user_workspaces and
+// credit_payments). The five core operational tables — products, sales,
+// inventory_movements, credit_accounts, order_tickets — are handled by
+// BackfillBranchIDs in backfill_branch_id.go (Spec 014, FR-03). This
+// function covers the remaining two so the original Phase-6 self-heal is
+// preserved:
 //
-//   - The "oldest active branch per tenant" is picked as the default —
-//     same tie-breaker as the SQL migration.
+//   - user_workspaces: owners/cashiers without a branch get the oldest
+//     active branch for their tenant — same tie-breaker as the SQL
+//     migration 026.
 //   - credit_payments has no tenant_id column, so it inherits the
-//     branch_id from its parent credit_account.
-//   - All updates are gated by `branch_id IS NULL` so the function is
-//     idempotent. Running it on a fully scoped database is a no-op.
+//     branch_id from its parent credit_account (run AFTER
+//     BackfillBranchIDs so the parent accounts are already scoped).
 //
-// Errors are logged but don't abort the boot — a stranded NULL row is
-// preferable to a crashing deploy.
-func BackfillBranchIDs(db *gorm.DB) {
-	tenantScoped := []string{"products", "sales", "credit_accounts", "order_tickets"}
-	for _, tbl := range tenantScoped {
-		res := db.Exec(`
-			UPDATE `+tbl+` AS t
-			   SET branch_id = sub.id
-			  FROM (
-			      SELECT DISTINCT ON (tenant_id) tenant_id, id
-			        FROM branches
-			       WHERE deleted_at IS NULL
-			       ORDER BY tenant_id, created_at ASC
-			  ) sub
-			 WHERE t.tenant_id = sub.tenant_id
-			   AND t.branch_id IS NULL
-			   AND t.deleted_at IS NULL`)
-		if res.Error != nil {
-			log.Printf("[BOOTSTRAP] backfill %s skipped: %v", tbl, res.Error)
-			continue
-		}
-		if res.RowsAffected > 0 {
-			log.Printf("[BOOTSTRAP] backfilled %d rows in %s", res.RowsAffected, tbl)
-		}
-	}
-
+// All updates are gated by `branch_id IS NULL` so the function is
+// idempotent. Render deploys run GORM AutoMigrate only (not goose), so
+// the backfill lives in Go and runs on every boot. Errors are logged but
+// don't abort the boot — a stranded NULL row is preferable to a crashing
+// deploy.
+func BackfillRelatedBranchIDs(db *gorm.DB) {
 	// Backfill user_workspaces: owners/cashiers without a branch
 	// get the oldest active branch for their tenant.
 	res := db.Exec(`

@@ -74,9 +74,22 @@ func ResolveBranchScope(c *gin.Context, db *gorm.DB) BranchScopeResolution {
 // a specific sede. "No scope" leaves the query untouched — caller
 // already added the tenant filter, so the fall-through matches
 // the pre-isolation behaviour.
+//
+// Feature 014 / FR-06 / D5 — the scoped filter is
+// `(branch_id = ? OR branch_id IS NULL)`, not a bare `branch_id = ?`.
+// A row whose branch_id is NULL must NEVER be hidden by the sede scope:
+// `branch_id = ?` evaluates to FALSE for a NULL column in SQL, so a
+// legacy product created before the sede claim existed would silently
+// vanish from Inventario/Dashboard the moment the sede selector is used.
+// The `OR branch_id IS NULL` clause makes the scope a safety net
+// instead of a row-hider. After the boot-time backfill no live row is
+// NULL, so this clause is normally inert — it only ever matters as a
+// defense for a brand-new NULL row that slipped past CreateProduct's
+// fallback, and it does not weaken multi-tenant isolation because the
+// caller still adds the `tenant_id = ?` filter (Art. III).
 func ApplyBranchScope(q *gorm.DB, scope BranchScopeResolution) *gorm.DB {
 	if scope.BranchID == "" {
 		return q
 	}
-	return q.Where("branch_id = ?", scope.BranchID)
+	return q.Where("branch_id = ? OR branch_id IS NULL", scope.BranchID)
 }
