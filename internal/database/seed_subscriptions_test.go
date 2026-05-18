@@ -43,7 +43,7 @@ func insertTenant(t *testing.T, db *gorm.DB, id string) {
 }
 
 // TestSeedTenantSubscriptions_BackfillsMissingRows verifies AC-02: a
-// tenant with no subscription row gets a 14-day TRIAL.
+// tenant with no subscription row gets a 7-day TRIAL.
 func TestSeedTenantSubscriptions_BackfillsMissingRows(t *testing.T) {
 	db := setupSeedDB(t)
 	tenantA := uuid.NewString()
@@ -62,9 +62,9 @@ func TestSeedTenantSubscriptions_BackfillsMissingRows(t *testing.T) {
 		assert.Equal(t, models.SubscriptionStatusTrial, sub.Status)
 		assert.Equal(t, models.SubscriptionPlanFree, sub.Plan)
 		require.NotNil(t, sub.TrialEndsAt)
-		assert.True(t, sub.TrialEndsAt.After(before.Add(13*24*time.Hour)),
-			"trial de cortesía de ~14 días")
-		assert.True(t, sub.TrialEndsAt.Before(before.Add(15*24*time.Hour)))
+		assert.True(t, sub.TrialEndsAt.After(before.Add(6*24*time.Hour)),
+			"trial de cortesía de ~7 días")
+		assert.True(t, sub.TrialEndsAt.Before(before.Add(8*24*time.Hour)))
 	}
 }
 

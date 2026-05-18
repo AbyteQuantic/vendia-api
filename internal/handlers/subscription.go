@@ -45,7 +45,7 @@ func GetSubscriptionPlans() gin.HandlerFunc {
 // read to render the subscription badge / paywall.
 //
 // TrialTotalDays (Feature 009) is the fixed length of the courtesy
-// trial (models.TrialDays, 14). It is a product constant — the same for
+// trial (models.TrialDays, 7). It is a product constant — the same for
 // every tenant — so the dashboard can draw the trial progress bar
 // (days remaining over total) without hardcoding the denominator.
 type subscriptionStatusResponse struct {
