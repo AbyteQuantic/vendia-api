@@ -269,6 +269,11 @@ func main() {
 		// multi-tenant flow. See handler for the
 		// "phone-belongs-to-multiple-tenants" rationale.
 		v1.POST("/employees/:uuid/password", handlers.SetEmployeePassword(db))
+		// Profile photo upload — Feature 019. Stores the tendero's
+		// (owner = Employee with is_owner=true) or an employee's
+		// avatar in the profile-photos bucket and persists the URL on
+		// the Employee row. Tenant-scoped lookup before any write.
+		v1.POST("/employees/:uuid/photo", handlers.UploadEmployeePhoto(db, storageSvc))
 
 		// Branches (Phase 5 — multi-sede). List + read endpoints sit
 		// here under tenant auth; CREATE lives in the premium group
