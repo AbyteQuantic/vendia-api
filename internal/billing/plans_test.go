@@ -35,6 +35,79 @@ func TestCatalog_ContainsFreeAndPro(t *testing.T) {
 	require.Len(t, pro.Prices, 2, "el plan Pro tiene precio mensual y anual")
 }
 
+// ── Catálogo: descripción y funciones reales por plan (F009 §8) ─────
+
+// TestCatalog_PlansHaveDescription verifica que cada plan trae una
+// descripción corta en español (F009 / spec §8) — la vista de planes
+// la usa como subtítulo de cada tarjeta.
+func TestCatalog_PlansHaveDescription(t *testing.T) {
+	cat := Catalog()
+	require.Len(t, cat, 2)
+	for _, p := range cat {
+		assert.NotEmpty(t, p.Description,
+			"el plan %q debe traer una descripción", p.ID)
+	}
+}
+
+// TestCatalog_FreePlanFeatures comprueba que el plan Gratis lista las
+// funciones reales del spec §8 (corrige las viñetas inexactas: el fiado
+// es Gratis, no Pro).
+func TestCatalog_FreePlanFeatures(t *testing.T) {
+	free := Catalog()[0]
+	require.Equal(t, PlanFree, free.ID)
+	require.NotEmpty(t, free.Features, "el plan Gratis debe listar funciones")
+	wantFree := []string{
+		"Registrar ventas",
+		"Inventario",
+		"Fiado con recordatorios",
+		"Clientes",
+		"Reportes básicos",
+		"Respaldo en la nube",
+	}
+	assert.Equal(t, wantFree, free.Features,
+		"el plan Gratis trae exactamente las funciones reales del spec §8")
+}
+
+// TestProPlanIncludesEverythingInFree garantiza que Pro es un
+// superconjunto de Gratis (spec §8: "todo lo de Gratis +").
+func TestProPlanIncludesEverythingInFree(t *testing.T) {
+	cat := Catalog()
+	free := cat[0]
+	pro := cat[1]
+	require.Equal(t, PlanPro, pro.ID)
+	for _, f := range free.Features {
+		assert.Contains(t, pro.Features, f,
+			"Pro incluye todo lo de Gratis — falta %q", f)
+	}
+}
+
+// TestProPlanFeatures comprueba que Pro lista, además de lo de Gratis,
+// las funciones premium reales del spec §8.
+func TestProPlanFeatures(t *testing.T) {
+	pro := Catalog()[1]
+	require.Equal(t, PlanPro, pro.ID)
+	wantPro := []string{
+		// todo lo de Gratis
+		"Registrar ventas",
+		"Inventario",
+		"Fiado con recordatorios",
+		"Clientes",
+		"Reportes básicos",
+		"Respaldo en la nube",
+		// + funciones premium
+		"Generación de logo con IA",
+		"Escaneo de facturas con IA",
+		"Voz a catálogo",
+		"Analítica avanzada",
+		"Catálogo web público",
+		"Mesas, KDS y servicios",
+		"Combos y promos con IA",
+		"Multi-sede",
+	}
+	assert.Equal(t, wantPro, pro.Features,
+		"el plan Pro trae exactamente las funciones reales del spec §8")
+}
+
 func TestLookupPrice_ProMonthly(t *testing.T) {
 	price, err := LookupPrice(PlanPro, IntervalMonthly)
 	require.NoError(t, err)

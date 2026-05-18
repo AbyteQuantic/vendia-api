@@ -246,6 +246,82 @@ func TestGetSubscriptionStatus_NoRowReadsAsFree(t *testing.T) {
 	assert.False(t, resp.IsPremium)
 }
 
+// TestGetSubscriptionStatus_ExposesTrialTotalDays comprueba que el
+// estado incluye trial_total_days (= models.TrialDays, 14) — Feature
+// 009: el frontend dibuja la barra de progreso del trial sin adivinar
+// el total (días restantes sobre el total).
+func TestGetSubscriptionStatus_ExposesTrialTotalDays(t *testing.T) {
+	db := setupSubscriptionDB(t)
+	tenantID := uuid.NewString()
+	ends := time.Now().Add(10 * 24 * time.Hour)
+	require.NoError(t, db.Create(&models.TenantSubscription{
+		TenantID: tenantID, Status: models.SubscriptionStatusTrial,
+		Plan: models.SubscriptionPlanFree, TrialEndsAt: &ends,
+	}).Error)
+
+	r := mountSubscriptionRoutes(db, subTestEpayco(), tenantID)
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/api/v1/subscription/status", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var resp struct {
+		Status          string `json:"status"`
+		TrialTotalDays  int    `json:"trial_total_days"`
+		TrialDaysRemain int    `json:"trial_days_remaining"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, models.TrialDays, resp.TrialTotalDays,
+		"trial_total_days = total del trial (F009)")
+	assert.Equal(t, 14, resp.TrialTotalDays, "el trial dura 14 días")
+	assert.LessOrEqual(t, resp.TrialDaysRemain, resp.TrialTotalDays,
+		"los días restantes nunca exceden el total")
+}
+
+// TestGetSubscriptionStatus_TrialTotalDaysAlwaysPresent verifica que
+// trial_total_days viene también para tenants no-TRIAL (FREE / sin
+// fila) — es una constante del producto, no un dato por tenant; el
+// frontend lo necesita siempre disponible.
+func TestGetSubscriptionStatus_TrialTotalDaysAlwaysPresent(t *testing.T) {
+	t.Run("sin fila (FREE)", func(t *testing.T) {
+		db := setupSubscriptionDB(t)
+		r := mountSubscriptionRoutes(db, subTestEpayco(), uuid.NewString())
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest(http.MethodGet, "/api/v1/subscription/status", nil)
+		r.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+		var resp struct {
+			TrialTotalDays int `json:"trial_total_days"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Equal(t, models.TrialDays, resp.TrialTotalDays)
+	})
+
+	t.Run("trial vencido degradado a FREE", func(t *testing.T) {
+		db := setupSubscriptionDB(t)
+		tenantID := uuid.NewString()
+		ends := time.Now().Add(-1 * time.Hour)
+		require.NoError(t, db.Create(&models.TenantSubscription{
+			TenantID: tenantID, Status: models.SubscriptionStatusTrial,
+			Plan: models.SubscriptionPlanFree, TrialEndsAt: &ends,
+		}).Error)
+		r := mountSubscriptionRoutes(db, subTestEpayco(), tenantID)
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest(http.MethodGet, "/api/v1/subscription/status", nil)
+		r.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+		var resp struct {
+			Status         string `json:"status"`
+			TrialTotalDays int    `json:"trial_total_days"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.Equal(t, models.SubscriptionStatusFree, resp.Status)
+		assert.Equal(t, models.TrialDays, resp.TrialTotalDays)
+	})
+}
+
 func TestGetSubscriptionStatus_RequiresTenant(t *testing.T) {
 	r := mountSubscriptionRoutes(setupSubscriptionDB(t), subTestEpayco(), "")
 	w := httptest.NewRecorder()

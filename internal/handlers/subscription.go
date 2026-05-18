@@ -43,6 +43,11 @@ func GetSubscriptionPlans() gin.HandlerFunc {
 
 // subscriptionStatusResponse is the shape the Flutter app and admin
 // read to render the subscription badge / paywall.
+//
+// TrialTotalDays (Feature 009) is the fixed length of the courtesy
+// trial (models.TrialDays, 14). It is a product constant — the same for
+// every tenant — so the dashboard can draw the trial progress bar
+// (days remaining over total) without hardcoding the denominator.
 type subscriptionStatusResponse struct {
 	Status             string     `json:"status"` // efectivo, ya degradado
 	Plan               string     `json:"plan"`
@@ -50,6 +55,7 @@ type subscriptionStatusResponse struct {
 	IsPremium          bool       `json:"is_premium"`
 	TrialEndsAt        *time.Time `json:"trial_ends_at,omitempty"`
 	TrialDaysRemaining int        `json:"trial_days_remaining"`
+	TrialTotalDays     int        `json:"trial_total_days"`
 	CurrentPeriodEnd   *time.Time `json:"current_period_end,omitempty"`
 }
 
@@ -72,9 +78,10 @@ func GetSubscriptionStatus(db *gorm.DB) gin.HandlerFunc {
 			// Sin fila: FREE. El backfill del bootstrap deberia haberla
 			// creado; si falta, no inventamos premium.
 			c.JSON(http.StatusOK, subscriptionStatusResponse{
-				Status:    models.SubscriptionStatusFree,
-				Plan:      models.SubscriptionPlanFree,
-				IsPremium: false,
+				Status:         models.SubscriptionStatusFree,
+				Plan:           models.SubscriptionPlanFree,
+				IsPremium:      false,
+				TrialTotalDays: models.TrialDays,
 			})
 			return
 		}
@@ -108,6 +115,7 @@ func GetSubscriptionStatus(db *gorm.DB) gin.HandlerFunc {
 			IsPremium:          sub.IsPremium(now),
 			TrialEndsAt:        sub.TrialEndsAt,
 			TrialDaysRemaining: sub.TrialDaysRemaining(now),
+			TrialTotalDays:     models.TrialDays,
 			CurrentPeriodEnd:   sub.CurrentPeriodEnd,
 		})
 	}

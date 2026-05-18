@@ -42,11 +42,65 @@ type Price struct {
 }
 
 // Plan es una entrada del catalogo expuesta a la UI.
+//
+// Description y Features (Feature 009) son la fuente de verdad de la
+// vista de planes: una descripcion corta en espanol (Art. V) y la lista
+// real de funciones del plan. El frontend NO hardcodea vinetas — las lee
+// de aqui (decision D3 del spec 009: el catalogo es config del backend).
 type Plan struct {
-	ID       string  `json:"id"`
-	Name     string  `json:"name"` // nombre de cara al usuario (espanol, Art. V)
-	Currency string  `json:"currency"`
-	Prices   []Price `json:"prices"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"` // nombre de cara al usuario (espanol, Art. V)
+	Description string   `json:"description"`
+	Features    []string `json:"features"`
+	Currency    string   `json:"currency"`
+	Prices      []Price  `json:"prices"`
+}
+
+// Funciones reales por plan (Feature 009 §8). Se definen como variables
+// nivel-paquete y se copian en cada Catalog() para que un consumidor no
+// pueda mutar el catalogo global (Art. IX — inmutabilidad). El fiado es
+// Gratis, NO Pro: corrige las vinetas inexactas previas.
+var (
+	freePlanFeatures = []string{
+		"Registrar ventas",
+		"Inventario",
+		"Fiado con recordatorios",
+		"Clientes",
+		"Reportes básicos",
+		"Respaldo en la nube",
+	}
+	// Funciones exclusivas del plan Pro, ademas de todo lo de Gratis.
+	proExtraFeatures = []string{
+		"Generación de logo con IA",
+		"Escaneo de facturas con IA",
+		"Voz a catálogo",
+		"Analítica avanzada",
+		"Catálogo web público",
+		"Mesas, KDS y servicios",
+		"Combos y promos con IA",
+		"Multi-sede",
+	}
+)
+
+// Descripciones cortas de cara al usuario (espanol, Art. V).
+const (
+	freePlanDescription = "Todo lo esencial para vender y llevar tu negocio."
+	proPlanDescription  = "Todo lo de Gratis más herramientas con IA para crecer."
+)
+
+// freeFeatures devuelve una copia nueva de las funciones del plan
+// Gratis — evita que un consumidor mute el slice de paquete (Art. IX).
+func freeFeatures() []string {
+	return append([]string(nil), freePlanFeatures...)
+}
+
+// proFeatures devuelve, en un slice nuevo, todo lo de Gratis seguido de
+// las funciones premium — el plan Pro es un superconjunto de Gratis.
+func proFeatures() []string {
+	out := make([]string, 0, len(freePlanFeatures)+len(proExtraFeatures))
+	out = append(out, freePlanFeatures...)
+	out = append(out, proExtraFeatures...)
+	return out
 }
 
 // Catalog devuelve el catalogo completo de planes. Construye estructuras
@@ -55,17 +109,21 @@ type Plan struct {
 func Catalog() []Plan {
 	return []Plan{
 		{
-			ID:       PlanFree,
-			Name:     "Gratis",
-			Currency: currencyCOP,
+			ID:          PlanFree,
+			Name:        "Gratis",
+			Description: freePlanDescription,
+			Features:    freeFeatures(),
+			Currency:    currencyCOP,
 			Prices: []Price{
 				{Interval: IntervalMonthly, Amount: 0, Currency: currencyCOP},
 			},
 		},
 		{
-			ID:       PlanPro,
-			Name:     "Pro",
-			Currency: currencyCOP,
+			ID:          PlanPro,
+			Name:        "Pro",
+			Description: proPlanDescription,
+			Features:    proFeatures(),
+			Currency:    currencyCOP,
 			Prices: []Price{
 				{Interval: IntervalMonthly, Amount: priceProMonthlyCOP, Currency: currencyCOP},
 				{Interval: IntervalYearly, Amount: priceProYearlyCOP, Currency: currencyCOP},
