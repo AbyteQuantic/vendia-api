@@ -565,74 +565,58 @@ func businessTypeLabel(t string) string {
 	}
 }
 
-// buildEnhancePhotoPrompt assembles the identity-preserving instruction
-// passed to Gemini's image-edit endpoint. Extracted so unit tests can
-// pin the regression: when the previous prompt only forbade colour
-// changes the model regenerated recognisable products (Toy Story
-// keychains, branded packaging) from its training prior, losing the
-// physical shape of the customer's actual SKU.
+// buildEnhancePhotoPrompt assembles the faithful product-photography
+// EDIT instruction passed to Gemini's image model.
+//
+// Spec: specs/017-ia-mejora-fiel-producto/spec.md — FR-01..FR-04.
+//
+// The bug it fixes: the previous prompt induced the model to
+// REGENERATE the product from its name/description (productInfo)
+// instead of EDITING the supplied photo. A merchant photographed a
+// specific Kuromi-character keychain; the AI returned generic metal
+// keychains in a bag — it rebuilt the product from the word
+// "Llaveros" and its training prior, discarding the real object.
+//
+// The rewrite reframes the task as a strict EDIT, not a generation:
+// the attached image IS the product and the ONLY source of truth for
+// shape, colour, proportions, details, text and brand. The model may
+// ONLY cut the product out of its background and place it on pure
+// white with studio lighting — it is explicitly forbidden to replace,
+// redesign, reinvent, beautify or substitute the product itself.
+// productInfo is now a context hint ("the product is a {productInfo}")
+// — never a generation target. Extracted so unit tests can pin this
+// contract and stop a future refactor reintroducing the regression.
 func buildEnhancePhotoPrompt(productInfo string) string {
-	description := ""
+	contextHint := ""
 	if productInfo != "" {
-		description = fmt.Sprintf("\nEl producto es: %s.", productInfo)
+		contextHint = fmt.Sprintf(
+			"\n\nFor context only, the product is a %s. Use this purely as a hint to understand what the object is — it is NOT a description to generate from. The attached photo always overrides this hint.",
+			productInfo)
 	}
-	return fmt.Sprintf(`Eres un EDITOR FOTOGRÁFICO profesional, NO un artista creativo, NO un ilustrador.%s
+	return fmt.Sprintf(`You are a professional PRODUCT PHOTO RETOUCHER. Your job is to EDIT the attached photograph, NOT to create, generate, illustrate or imagine a new product.
 
-TAREA: Toma esta foto real de un producto y edítala para catálogo de e-commerce. Trabajas SOBRE los píxeles del producto en la imagen — no generas una versión nueva.
+THE ATTACHED IMAGE IS THE PRODUCT. It is the one and only source of truth for the object's shape, silhouette, proportions, colours, materials, decorative details, accessories, printed text and brand. You are retouching THIS exact object — you are not designing a product.%s
 
-═══════════════════════════════════════════════════════════════════
-REGLA #0 — PRESERVACIÓN DE IDENTIDAD (INNEGOCIABLE)
-═══════════════════════════════════════════════════════════════════
+YOUR ONLY ALLOWED EDITS:
+- Cut the product out of its current background (table, hands, clutter, environment shadows) and place it on a pure white background (#FFFFFF), clean and seamless.
+- Light it with soft, even studio lighting, as in a professional e-commerce product shoot.
+- Add one subtle, soft contact shadow beneath the product so it sits naturally on the white surface.
+- Center the product in the frame with comfortable margin around it, square 1:1 framing, catalog composition.
+- Gently clean the product's surface (dust, smudges, fingerprints) WITHOUT changing its shape, and refine exposure/saturation WITHOUT shifting any hue.
 
-La imagen adjunta es la FUENTE CANÓNICA del producto. NO uses tu conocimiento previo de marcas, personajes, juguetes ni packaging "oficial". NO generes una versión "mejor" o "correcta" del producto desde memoria. Si reconoces el producto (ej. un personaje conocido, una marca famosa, un envase típico), IGNORA ese conocimiento — la única referencia válida es lo que ves en la foto.
+STRICTLY FORBIDDEN (these cause the exact bug we are fixing):
+- DO NOT replace the product with a different object, a "cleaner" version, or a stock/official version of what you think it is.
+- DO NOT redesign, restyle, reinterpret or "beautify" the product itself.
+- DO NOT reinvent or redraw the product, its face, characters, figures, logos, packaging or labels.
+- DO NOT generate a different product based on the product name or your prior knowledge of any brand or character.
+- DO NOT add or remove any element, accessory, ring, hook, cord, tag, button, eye or detail. Keep every element exactly where the photo shows it, in the same count, position and shape.
+- DO NOT change any colour's hue, and DO NOT alter any printed text or brand mark.
 
-Mantén PIXEL-A-PIXEL la silueta y proporciones del producto:
-- La forma exacta del contorno (silueta).
-- El número, posición y forma exacta de cualquier elemento decorativo (ojos, botones, etiquetas, accesorios, ganchos, aros, tapas).
-- La postura, ángulo y orientación del producto tal como aparecen.
-- La estructura de la base, pies, soporte o asiento del producto.
-- Cualquier accesorio adherido (cordón, llavero, etiqueta colgante) en su posición exacta.
+If you recognise the product (a known character, a famous brand, a typical package), IGNORE that knowledge — the photo is the only valid reference. When in doubt, keep exactly what the photo shows; never invent.
 
-Si dudas entre "fidelidad a la foto" e "interpretación del producto que crees reconocer", elige SIEMPRE fidelidad a la foto.
+The product in your result MUST be recognisably the same product as in the original photo: a person comparing both images must say "it is the same product, just photographed better." Same object, same identity — only the background, lighting and framing improve.
 
-═══════════════════════════════════════════════════════════════════
-REGLAS ESTRICTAS (PROHIBIDO violarlas)
-═══════════════════════════════════════════════════════════════════
-
-1. PROHIBIDO cambiar el color original del producto. Si es rojo, DEBE seguir siendo rojo. Si es verde, DEBE seguir siendo verde. Los colores originales son SAGRADOS — solo se permite refinarlos (saturación, limpieza), no sustituirlos por tonos parecidos.
-2. PROHIBIDO alterar las letras, marca, logo o forma del envase/empaque.
-3. PROHIBIDO inventar detalles que no existan en la foto original.
-4. PROHIBIDO redibujar la cara, ojos, expresión o postura de figuras/personajes/juguetes.
-5. PROHIBIDO mover, duplicar, eliminar o reposicionar accesorios del producto (aros, ganchos, cordones, etiquetas).
-6. PROHIBIDO sustituir la base/pies/soporte por una versión estilizada distinta a la del original.
-7. Tu ÚNICA función es:
-   a) Eliminar el fondo (mesa, polvo, migas, sombras del entorno, manos) y reemplazarlo por BLANCO PURO sólido (#FFFFFF).
-   b) Limpiar la SUPERFICIE del producto: polvo adherido, huellas, manchas, migas pegadas. NO modifiques la forma al limpiar.
-   c) Refinar colores SIN cambiar el tono (hue): saturación de fábrica, no derives a turquesa si era azul, ni a verde lima si era verde estándar.
-   d) Centrar el producto completo en el encuadre con margen seguro.
-   e) Aplicar iluminación suave y uniforme tipo estudio fotográfico.
-8. Si el producto está recortado en los bordes, autocompleta el envase respetando la geometría y textura ORIGINAL — extiende lo que ya está, no inventes detalles nuevos.
-9. Sin texto adicional, sin logos extras, sin marcas de agua.
-
-═══════════════════════════════════════════════════════════════════
-ENCUADRE (REGLA CRÍTICA — no violar)
-═══════════════════════════════════════════════════════════════════
-- Formato cuadrado 1:1.
-- El producto NUNCA debe tocar los bordes de la imagen.
-- El producto debe ocupar como máximo el 75%% del área de la imagen.
-- Dejar un margen de "safe zone" BLANCO de al menos 12%% en los cuatro lados.
-- Si la foto original está recortada o acercada, ALÉJATE: reduce la escala del producto hasta que entre completo con margen. No uses zoom/close-up.
-
-═══════════════════════════════════════════════════════════════════
-VERIFICACIÓN ANTES DE ENTREGAR
-═══════════════════════════════════════════════════════════════════
-1. ¿La silueta del producto coincide con la entrada? Si no → NO entregues, vuelve a editar.
-2. ¿Cualquier figura/personaje conserva el mismo número de ojos, mismas extremidades, misma postura, misma base? Si no → NO entregues.
-3. ¿Los accesorios (aros, ganchos, cordones) están en la MISMA posición que en la entrada? Si no → NO entregues.
-4. ¿Los colores conservan los tonos originales (no derivaste a paletas similares)? Si no → NO entregues.
-5. ¿El fondo es blanco puro y limpio sin texturas? Si no → NO entregues.
-
-Resultado esperado: Fotografía tipo catálogo Amazon — el MISMO producto de la entrada, idéntico en forma y proporciones, pero limpio, con colores vibrantes (mismos tonos), sobre fondo blanco puro, centrado con aire alrededor.`, description)
+Output: a clean, professional e-commerce catalog photo of the SAME product on a pure white background, centered, with soft studio lighting and a subtle shadow. No extra text, no added logos, no watermarks.`, contextHint)
 }
 
 // EnhancePhoto generates a professional e-commerce product photo.
