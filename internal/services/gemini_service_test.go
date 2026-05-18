@@ -1,11 +1,77 @@
 package services
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 )
+
+// Spec: specs/015-ia-foto-timeouts/spec.md — FR-03 / D2.
+// requestContext must HONOR the caller's context deadline instead of
+// silently shrinking it back to s.timeout. The bug: image handlers
+// grant ~110s of context, but every Gemini call did
+// context.WithTimeout(ctx, s.timeout) with s.timeout=30s — so the
+// HTTP call to Gemini died at 30s even though an image operation
+// needs ~27s + download + upload. The fix: when the caller already
+// carries a deadline, defer to it; only fall back to s.timeout when
+// the caller passed a context with no deadline.
+func TestRequestContext_HonorsCallerDeadline(t *testing.T) {
+	svc := &GeminiService{timeout: 30 * time.Second}
+
+	t.Run("caller deadline longer than s.timeout is preserved", func(t *testing.T) {
+		parent, cancelParent := context.WithTimeout(context.Background(), 110*time.Second)
+		defer cancelParent()
+
+		ctx, cancel := svc.requestContext(parent)
+		defer cancel()
+
+		dl, ok := ctx.Deadline()
+		assert.True(t, ok, "derived context must carry a deadline")
+		remaining := time.Until(dl)
+		assert.Greater(t, remaining, 31*time.Second,
+			"the caller's 110s deadline must NOT be shrunk to s.timeout (30s)")
+		assert.LessOrEqual(t, remaining, 110*time.Second,
+			"derived deadline must not exceed the caller's deadline")
+	})
+
+	t.Run("caller deadline shorter than s.timeout is preserved", func(t *testing.T) {
+		parent, cancelParent := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelParent()
+
+		ctx, cancel := svc.requestContext(parent)
+		defer cancel()
+
+		dl, ok := ctx.Deadline()
+		assert.True(t, ok, "derived context must carry a deadline")
+		remaining := time.Until(dl)
+		assert.LessOrEqual(t, remaining, 5*time.Second,
+			"a caller with a tight deadline must not be expanded to s.timeout")
+	})
+
+	t.Run("context without deadline falls back to s.timeout", func(t *testing.T) {
+		ctx, cancel := svc.requestContext(context.Background())
+		defer cancel()
+
+		dl, ok := ctx.Deadline()
+		assert.True(t, ok, "fallback must apply s.timeout when caller has no deadline")
+		remaining := time.Until(dl)
+		assert.Greater(t, remaining, 25*time.Second,
+			"fallback timeout should be close to s.timeout (30s)")
+		assert.LessOrEqual(t, remaining, 30*time.Second,
+			"fallback timeout must not exceed s.timeout")
+	})
+
+	t.Run("cancelling the derived context propagates", func(t *testing.T) {
+		parent, cancelParent := context.WithTimeout(context.Background(), 110*time.Second)
+		defer cancelParent()
+
+		ctx, cancel := svc.requestContext(parent)
+		cancel()
+		assert.Error(t, ctx.Err(), "cancel() must cancel the derived context")
+	})
+}
 
 func TestNewGeminiService_Defaults(t *testing.T) {
 	// With an unconfigured imageModel, the constructor falls through
@@ -46,40 +112,40 @@ func TestNewGeminiService_CustomModel(t *testing.T) {
 // patterns we've already seen burn in production.
 func TestResolveLogoSubject_KeywordMapping(t *testing.T) {
 	cases := []struct {
-		name        string
+		name         string
 		businessType string
-		details     string
-		mustContain []string
+		details      string
+		mustContain  []string
 	}{
 		{
-			name:        "empty details falls back to rubro default",
+			name:         "empty details falls back to rubro default",
 			businessType: "tienda_barrio",
-			details:     "",
-			mustContain: []string{"corner storefront"},
+			details:      "",
+			mustContain:  []string{"corner storefront"},
 		},
 		{
-			name:        "ice cream keyword wins",
+			name:         "ice cream keyword wins",
 			businessType: "tienda_barrio",
-			details:     "Tienda con helados artesanales de frutas",
-			mustContain: []string{"ice cream cone"},
+			details:      "Tienda con helados artesanales de frutas",
+			mustContain:  []string{"ice cream cone"},
 		},
 		{
-			name:        "the case from the demo phone — llaveros + moda",
+			name:         "the case from the demo phone — llaveros + moda",
 			businessType: "emprendimiento_general",
-			details:     "Llaveros y utensilios de moda",
-			mustContain: []string{"key-ring", "hanger"},
+			details:      "Llaveros y utensilios de moda",
+			mustContain:  []string{"key-ring", "hanger"},
 		},
 		{
-			name:        "single match returns single subject (no together-with chain)",
+			name:         "single match returns single subject (no together-with chain)",
 			businessType: "comidas_rapidas",
-			details:     "vendo hamburguesas a domicilio",
-			mustContain: []string{"hamburger"},
+			details:      "vendo hamburguesas a domicilio",
+			mustContain:  []string{"hamburger"},
 		},
 		{
-			name:        "no keyword match falls back to rubro default",
+			name:         "no keyword match falls back to rubro default",
 			businessType: "manufactura",
-			details:     "We make custom-engineered widgets",
-			mustContain: []string{"gear"},
+			details:      "We make custom-engineered widgets",
+			mustContain:  []string{"gear"},
 		},
 	}
 	for _, c := range cases {

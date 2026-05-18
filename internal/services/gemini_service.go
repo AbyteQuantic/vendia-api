@@ -58,6 +58,30 @@ func NewGeminiService(apiKey, model, imageModel string, timeout time.Duration) *
 	return svc
 }
 
+// requestContext derives the context used for a single outbound HTTP
+// call to Gemini.
+//
+// Spec: specs/015-ia-foto-timeouts/spec.md — FR-03 / D2.
+//
+// The previous code did context.WithTimeout(ctx, s.timeout) on every
+// call. Because context.WithTimeout always picks the EARLIER of the
+// parent deadline and now+s.timeout, an image handler that granted
+// ~110s of context still saw the Gemini call cut off at s.timeout
+// (30s) — shorter than a single Gemini image operation (~27s) plus
+// download and upload. The handler ctx was effectively ignored.
+//
+// The fix: when the caller already carries a deadline, defer to it —
+// the handler is the authority on how long the whole operation may
+// run. s.timeout is only a safety net for callers that passed a
+// context with no deadline at all. cancellation always propagates.
+func (s *GeminiService) requestContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		// Caller set a deadline — honor it exactly, never shrink it.
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, s.timeout)
+}
+
 // WithUsageDB wires PostgreSQL for persisting token usage to ai_usage_logs
 // (FinOps). Safe to call with nil; logging is a no-op when unset.
 func (s *GeminiService) WithUsageDB(db *gorm.DB) *GeminiService {
@@ -641,7 +665,7 @@ func (s *GeminiService) EnhancePhoto(ctx context.Context, imageData []byte, mime
 	body, _ := json.Marshal(payload)
 	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", s.imageModel, s.apiKey)
 
-	reqCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	reqCtx, cancel := s.requestContext(ctx)
 	defer cancel()
 
 	req, _ := http.NewRequestWithContext(reqCtx, "POST", url, bytes.NewReader(body))
@@ -757,7 +781,7 @@ func (s *GeminiService) GeneratePromoBanner(ctx context.Context, prompt string, 
 	body, _ := json.Marshal(payload)
 	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", s.imageModel, s.apiKey)
 
-	reqCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	reqCtx, cancel := s.requestContext(ctx)
 	defer cancel()
 
 	req, _ := http.NewRequestWithContext(reqCtx, "POST", url, bytes.NewReader(body))
@@ -846,7 +870,7 @@ Estilo fotográfico:
 	body, _ := json.Marshal(payload)
 	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", s.imageModel, s.apiKey)
 
-	reqCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	reqCtx, cancel := s.requestContext(ctx)
 	defer cancel()
 
 	req, _ := http.NewRequestWithContext(reqCtx, "POST", url, bytes.NewReader(body))
@@ -925,7 +949,7 @@ func (s *GeminiService) callWithImageLowTemp(ctx context.Context, imageData []by
 	// Use the dynamically discovered model (set at init time)
 	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", s.model, s.apiKey)
 
-	reqCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	reqCtx, cancel := s.requestContext(ctx)
 	defer cancel()
 
 	req, _ := http.NewRequestWithContext(reqCtx, "POST", url, bytes.NewReader(body))
@@ -998,7 +1022,7 @@ func (s *GeminiService) callWithImage(ctx context.Context, imageData []byte, mim
 	body, _ := json.Marshal(payload)
 	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", s.model, s.apiKey)
 
-	reqCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	reqCtx, cancel := s.requestContext(ctx)
 	defer cancel()
 
 	req, _ := http.NewRequestWithContext(reqCtx, "POST", url, bytes.NewReader(body))
@@ -1051,7 +1075,7 @@ func (s *GeminiService) callImageGeneration(ctx context.Context, feature, prompt
 	body, _ := json.Marshal(payload)
 	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", s.imageModel, s.apiKey)
 
-	reqCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	reqCtx, cancel := s.requestContext(ctx)
 	defer cancel()
 
 	req, _ := http.NewRequestWithContext(reqCtx, "POST", url, bytes.NewReader(body))
@@ -1105,7 +1129,7 @@ func (s *GeminiService) callImageGeneration(ctx context.Context, feature, prompt
 type geminiResponse struct {
 	// UsageMetadata is set by the Generative Language API on success.
 	UsageMetadata GemUsageMetadata `json:"usageMetadata"`
-	Candidates []struct {
+	Candidates    []struct {
 		Content struct {
 			Parts []struct {
 				Text       string `json:"text"`
