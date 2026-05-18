@@ -160,57 +160,81 @@ func TestResolveLogoSubject_KeywordMapping(t *testing.T) {
 	}
 }
 
+// Spec: specs/017-ia-mejora-fiel-producto/spec.md — FR-01, FR-03.
 // buildEnhancePhotoPrompt is the hot path for "Mejorar con IA" on
-// product photos. The previous prompt only forbade colour changes;
-// production users reported the model regenerating recognisable
-// products (e.g. a Toy Story keychain) from its training prior,
-// losing the actual SKU's silhouette and accessories. The current
-// prompt pins identity preservation explicitly. These tests pin the
-// regression so a future "tighten the prompt" refactor can't
-// accidentally drop the anti-regeneration anchors.
-func TestBuildEnhancePhotoPrompt_IdentityPreservationAnchors(t *testing.T) {
+// product photos. The previous prompt induced the model to REGENERATE
+// the product from its name/description (productInfo) instead of
+// EDITING the attached photo: a merchant photographed a specific
+// Kuromi-character keychain and the AI returned generic metal
+// keychains in a bag, because the prompt told the model to "create an
+// image of {productInfo}". The rewritten prompt is a strict faithful
+// product-photography EDIT instruction: the attached image IS the
+// product and the sole source of truth; the model may only cut the
+// product from its background and place it on pure white. These tests
+// pin that contract so a future refactor can't reintroduce the
+// regeneration behaviour.
+func TestBuildEnhancePhotoPrompt_FidelityAnchors(t *testing.T) {
 	prompt := buildEnhancePhotoPrompt("")
 
-	// Anti-regeneration anchor: the model must NOT fall back to its
-	// training-time mental model of recognisable products.
-	mustContain := []string{
-		"FUENTE CANÓNICA",
-		"NO uses tu conocimiento previo",
-		"IGNORA ese conocimiento",
-		"PIXEL-A-PIXEL la silueta",
-		"fidelidad a la foto",
+	// FR-01: the attached photo is declared the single source of truth.
+	sourceOfTruth := []string{
+		"THE ATTACHED IMAGE IS THE PRODUCT",
+		"one and only source of truth",
+		"EDIT the attached photograph",
 	}
-	for _, s := range mustContain {
+	for _, s := range sourceOfTruth {
 		assert.Contains(t, prompt, s,
-			"identity-preservation anchor missing: %q", s)
+			"source-of-truth anchor missing: %q", s)
 	}
 
-	// Negative list: the specific failure modes the QA team caught
-	// (Toy Story keychain regenerated with different face / base /
-	// keyring position) all need their explicit prohibition.
-	negativeList := []string{
-		"PROHIBIDO redibujar la cara",
-		"PROHIBIDO mover, duplicar, eliminar o reposicionar accesorios",
-		"PROHIBIDO sustituir la base/pies/soporte",
+	// FR-01: regeneration / substitution must be explicitly forbidden.
+	prohibitions := []string{
+		"DO NOT replace",
+		"DO NOT redesign",
+		"DO NOT reinvent",
+		"DO NOT generate a different",
+		"DO NOT add or remove",
 	}
-	for _, s := range negativeList {
+	for _, s := range prohibitions {
 		assert.Contains(t, prompt, s,
-			"negative prompt missing: %q", s)
+			"prohibition anchor missing: %q", s)
 	}
 
-	// Self-verification block: the model is asked to re-check its
-	// own output before delivering, which empirically reduces the
-	// regeneration rate on diffusion models.
-	assert.Contains(t, prompt, "VERIFICACIÓN ANTES DE ENTREGAR",
-		"self-check block missing — regression risk")
-	assert.Contains(t, prompt, "¿La silueta del producto coincide con la entrada?",
-		"silhouette check missing")
+	// FR-02: the result must be a clean white-background catalog photo.
+	whiteBg := []string{
+		"pure white background",
+		"studio",
+		"shadow",
+	}
+	for _, s := range whiteBg {
+		assert.Contains(t, prompt, s,
+			"white-background / catalog-quality anchor missing: %q", s)
+	}
+
+	// FR-03: the output product must be recognisably the same SKU.
+	assert.Contains(t, prompt, "recognisably the same product",
+		"recognisability anchor missing — regression risk")
+
+	// "When in doubt, keep exactly what the photo shows."
+	assert.Contains(t, prompt, "When in doubt",
+		"doubt-resolution anchor missing")
 }
 
-func TestBuildEnhancePhotoPrompt_ProductInfoIsInjected(t *testing.T) {
-	prompt := buildEnhancePhotoPrompt("Llavero Alien Pixar verde con aro metálico")
-	assert.Contains(t, prompt, "El producto es: Llavero Alien Pixar verde con aro metálico.",
-		"productInfo must be embedded so the model knows the SKU context")
+// FR-04: productInfo must be a CONTEXT HINT only — never a generation
+// target. The prompt phrases it as "the product is a {productInfo}"
+// and never as "create/generate an image of {productInfo}".
+func TestBuildEnhancePhotoPrompt_ProductInfoIsHintOnly(t *testing.T) {
+	prompt := buildEnhancePhotoPrompt("Llavero Kuromi verde con aro metálico")
+
+	assert.Contains(t, prompt,
+		"For context only, the product is a Llavero Kuromi verde con aro metálico",
+		"productInfo must be embedded as a context hint")
+
+	// Negative: productInfo must never be wired as a generation target.
+	assert.NotContains(t, prompt, "generate an image of Llavero Kuromi",
+		"productInfo must not be a generation target")
+	assert.NotContains(t, prompt, "create a photo of Llavero Kuromi",
+		"productInfo must not be a generation target")
 }
 
 func TestBuildEnhancePhotoPrompt_EmptyProductInfoStillBuilds(t *testing.T) {
@@ -219,25 +243,25 @@ func TestBuildEnhancePhotoPrompt_EmptyProductInfoStillBuilds(t *testing.T) {
 	// must still build a complete, working instruction without trailing
 	// whitespace artifacts that confuse the diffusion model.
 	prompt := buildEnhancePhotoPrompt("")
-	assert.NotContains(t, prompt, "El producto es: .",
+	assert.NotContains(t, prompt, "the product is a .",
 		"empty productInfo must not leave a dangling sentence")
-	assert.Contains(t, prompt, "Eres un EDITOR FOTOGRÁFICO profesional",
-		"prompt header must always be present")
+	assert.NotContains(t, prompt, "For context only",
+		"empty productInfo must not emit the context-hint sentence")
+	assert.Contains(t, prompt, "THE ATTACHED IMAGE IS THE PRODUCT",
+		"prompt body must always be present")
 }
 
-func TestBuildEnhancePhotoPrompt_ColorAndFramingRulesPreserved(t *testing.T) {
-	// The original prompt's framing rules (1:1, 75% max area, 12% safe
-	// zone, white background) were proven in production — the new
-	// identity layer must add to them, not replace them.
+func TestBuildEnhancePhotoPrompt_FramingRulesPreserved(t *testing.T) {
+	// The framing rules (white background, soft shadow, centered,
+	// e-commerce catalog quality) must always be present so the edit
+	// produces a usable catalog photo.
 	prompt := buildEnhancePhotoPrompt("")
 	for _, anchor := range []string{
-		"colores originales son SAGRADOS",
-		"BLANCO PURO sólido (#FFFFFF)",
-		"Formato cuadrado 1:1",
-		"75% del área", // Sprintf collapses %% in the source to a single % in output.
-		"safe zone",
+		"pure white background",
+		"centered",
+		"e-commerce",
 	} {
 		assert.Contains(t, prompt, anchor,
-			"legacy framing rule lost during refactor: %q", anchor)
+			"framing rule lost during refactor: %q", anchor)
 	}
 }
