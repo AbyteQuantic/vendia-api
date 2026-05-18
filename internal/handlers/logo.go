@@ -55,7 +55,7 @@ func GenerateLogo(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc ser
 		details := strings.TrimSpace(req.Details)
 		if len([]rune(details)) < minLogoDetailsLength {
 			c.JSON(http.StatusBadRequest, gin.H{
-				"error": "describa su negocio (mínimo 12 caracteres) para que la IA acierte",
+				"error":      "describa su negocio (mínimo 12 caracteres) para que la IA acierte",
 				"error_code": "logo_details_required",
 			})
 			return
@@ -137,7 +137,18 @@ func UploadLogo(db *gorm.DB, storageSvc services.FileStorage) gin.HandlerFunc {
 			return
 		}
 
-		mimeType := header.Header.Get("Content-Type")
+		// Feature 010: sniff the real image format from the bytes
+		// instead of trusting the client Content-Type. iPhone photos
+		// arrive as HEIC; uploading HEIC to the logos bucket fails with
+		// a generic 500. Detect it here and reject with a clear 400.
+		mimeType := detectImageType(data)
+		if !uploadableImageTypes[mimeType] {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":      logoFormatoNoSoportadoMsg,
+				"error_code": logoFormatoNoSoportadoCode,
+			})
+			return
+		}
 		key := fmt.Sprintf("logos/%s/custom-%s.webp", tenantID, uuid.NewString()[:8])
 
 		logoURL, err := storageSvc.Upload(c.Request.Context(), "vendia-logos", key, data, mimeType)

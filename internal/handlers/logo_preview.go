@@ -137,15 +137,23 @@ func PreviewLogoUpload(storageSvc services.FileStorage) gin.HandlerFunc {
 			return
 		}
 
-		mimeType := header.Header.Get("Content-Type")
-		if mimeType == "" {
-			mimeType = "image/jpeg"
+		// Feature 010: never trust the client Content-Type. iPhone
+		// photos are HEIC and the client may forward image/heic (or a
+		// wrong MIME). Sniff the real bytes: upload with the detected
+		// type, and reject anything the bucket can't store with a clear
+		// 400 in Spanish instead of a generic 500 from Supabase.
+		mimeType := detectImageType(data)
+		if !uploadableImageTypes[mimeType] {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":      logoFormatoNoSoportadoMsg,
+				"error_code": logoFormatoNoSoportadoCode,
+			})
+			return
 		}
-		key := fmt.Sprintf("logos/preview/%s",
-			strings.ReplaceAll(header.Filename, " ", "-"))
+
 		// Always namespace with a uuid so two merchants picking the
 		// same filename don't overwrite each other.
-		key = fmt.Sprintf("logos/preview/%s-%s",
+		key := fmt.Sprintf("logos/preview/%s-%s",
 			uuid.NewString()[:8],
 			strings.ReplaceAll(header.Filename, " ", "-"))
 
