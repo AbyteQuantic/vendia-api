@@ -293,6 +293,10 @@ func main() {
 		v1.POST("/products/:id/photo", handlers.UploadProductPhoto(db, storageSvc))
 		v1.POST("/products/:id/enhance", handlers.EnhanceProductPhoto(db, geminiSvc, storageSvc, catalogSvc))
 		v1.POST("/products/:id/generate-image", handlers.GenerateProductImage(db, geminiSvc, storageSvc, catalogSvc))
+		// Feature 016 — async AI photo polling. The enhance/generate
+		// endpoints above now answer 202 with a job_id; the client
+		// polls this endpoint for the result. Tenant-scoped (Art. III).
+		v1.GET("/products/:id/ai-job/:jobId", handlers.GetAIJob(db))
 
 		// Catalog
 		v1.GET("/catalog/search", handlers.SearchCatalog(catalogSvc, catalogCacheSvc))
