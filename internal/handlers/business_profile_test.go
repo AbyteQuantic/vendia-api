@@ -174,3 +174,41 @@ func TestUpdateBusinessProfile_DeactivateToggle(t *testing.T) {
 	assert.False(t, after.FeatureFlags.EnableTables,
 		"has_tables=false debe desactivar enable_tables en tienda_barrio (AC-06)")
 }
+
+// TestGetBusinessProfile_ReturnsFeatureFlags verifies that GET profile includes
+// feature_flags. Without it the "Editar negocio" screen cannot show the current
+// toggle state and would silently drop capabilities on save (Spec F023 FR-06).
+func TestGetBusinessProfile_ReturnsFeatureFlags(t *testing.T) {
+	tenantID, patchRouter := setupProfileSuite(t)
+	db := setupTestDB(t)
+
+	// Activate the services toggle so feature_flags carries a real ON value.
+	wp := patchProfile(patchRouter, map[string]any{
+		"config": map[string]any{"offers_services": true},
+	})
+	require.Equal(t, http.StatusOK, wp.Code, wp.Body.String())
+
+	gin.SetMode(gin.TestMode)
+	getRouter := gin.New()
+	getRouter.GET("/api/v1/store/profile", func(c *gin.Context) {
+		c.Set(middleware.TenantIDKey, tenantID)
+		c.Next()
+	}, handlers.GetBusinessProfile(db))
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/api/v1/store/profile", nil)
+	getRouter.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	data, ok := resp["data"].(map[string]any)
+	require.True(t, ok, "la respuesta debe tener un bloque data")
+
+	flags, ok := data["feature_flags"].(map[string]any)
+	require.True(t, ok, "GET profile debe incluir feature_flags (FR-06)")
+	assert.Equal(t, true, flags["enable_services"],
+		"feature_flags.enable_services debe reflejar el toggle activado")
+	assert.Equal(t, true, flags["enable_custom_billing"],
+		"feature_flags.enable_custom_billing debe reflejar el toggle activado")
+}
