@@ -83,9 +83,11 @@ type businessPayload struct {
 }
 
 type configPayload struct {
-	SaleTypes    []string `json:"sale_types"`
-	HasShowcases bool     `json:"has_showcases"`
-	HasTables    bool     `json:"has_tables"`
+	SaleTypes      []string `json:"sale_types"`
+	HasShowcases   bool     `json:"has_showcases"`
+	HasTables      bool     `json:"has_tables"`
+	OffersServices bool     `json:"offers_services"`
+	SellsByWeight  bool     `json:"sells_by_weight"`
 }
 
 type employeePayload struct {
@@ -291,4 +293,112 @@ func TestTenantRegister_CreatesTrialSubscription(t *testing.T) {
 		"trial_ends_at debe estar ~14 días en el futuro")
 	assert.True(t, sub.TrialEndsAt.Before(expectedMax),
 		"trial_ends_at no debe pasar de ~14 días")
+}
+
+// ── T-04: Spec F023 — capability toggles in registration ──────────────────
+
+// TestTenantRegister_CapabilityToggles verifies that config.offers_services,
+// config.sells_by_weight, and config.has_tables are mapped to the correct
+// feature_flags on the created tenant (AC-04, FR-04, FR-07).
+// Requires Docker PostgreSQL — skips gracefully without it.
+func TestTenantRegister_CapabilityToggles_OffersServices(t *testing.T) {
+	db := setupTestDB(t)
+	phone := uniquePhone()
+	t.Cleanup(func() { cleanupByPhone(t, db, phone) })
+
+	payload := defaultPayload(phone) // tienda_barrio base
+	payload.Config.OffersServices = true
+
+	w := postJSON(setupRouter(db), payload)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	tenantID := resp["tenant_id"].(string)
+
+	var tenant models.Tenant
+	require.NoError(t, db.Where("id = ?", tenantID).First(&tenant).Error)
+
+	assert.True(t, tenant.FeatureFlags.EnableServices,
+		"offers_services toggle debe activar enable_services")
+	assert.True(t, tenant.FeatureFlags.EnableCustomBilling,
+		"offers_services toggle debe activar enable_custom_billing")
+	assert.False(t, tenant.FeatureFlags.EnableKDS,
+		"tienda_barrio no debe tener KDS aunque tenga services toggle")
+	assert.False(t, tenant.FeatureFlags.EnableTips,
+		"tienda_barrio no debe tener tips aunque tenga services toggle")
+}
+
+func TestTenantRegister_CapabilityToggles_SellsByWeight(t *testing.T) {
+	db := setupTestDB(t)
+	phone := uniquePhone()
+	t.Cleanup(func() { cleanupByPhone(t, db, phone) })
+
+	payload := defaultPayload(phone) // tienda_barrio base
+	payload.Config.SellsByWeight = true
+
+	w := postJSON(setupRouter(db), payload)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	tenantID := resp["tenant_id"].(string)
+
+	var tenant models.Tenant
+	require.NoError(t, db.Where("id = ?", tenantID).First(&tenant).Error)
+
+	assert.True(t, tenant.FeatureFlags.EnableFractionalUnits,
+		"sells_by_weight toggle debe activar enable_fractional_units")
+	assert.False(t, tenant.FeatureFlags.EnableTables,
+		"sells_by_weight no debe activar mesas")
+}
+
+func TestTenantRegister_CapabilityToggles_HasTables(t *testing.T) {
+	db := setupTestDB(t)
+	phone := uniquePhone()
+	t.Cleanup(func() { cleanupByPhone(t, db, phone) })
+
+	payload := defaultPayload(phone) // tienda_barrio base
+	payload.Config.HasTables = true
+
+	w := postJSON(setupRouter(db), payload)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	tenantID := resp["tenant_id"].(string)
+
+	var tenant models.Tenant
+	require.NoError(t, db.Where("id = ?", tenantID).First(&tenant).Error)
+
+	assert.True(t, tenant.FeatureFlags.EnableTables,
+		"has_tables toggle debe activar enable_tables")
+	assert.False(t, tenant.FeatureFlags.EnableKDS,
+		"has_tables en tienda_barrio NO debe activar KDS")
+	assert.False(t, tenant.FeatureFlags.EnableTips,
+		"has_tables en tienda_barrio NO debe activar tips")
+}
+
+func TestTenantRegister_CapabilityToggles_NoToggles_Legacy(t *testing.T) {
+	// AC-07: a tenant with no toggles keeps the exact same feature_flags
+	// as before Spec F023.
+	db := setupTestDB(t)
+	phone := uniquePhone()
+	t.Cleanup(func() { cleanupByPhone(t, db, phone) })
+
+	payload := defaultPayload(phone) // tienda_barrio, no toggles
+
+	w := postJSON(setupRouter(db), payload)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	tenantID := resp["tenant_id"].(string)
+
+	var tenant models.Tenant
+	require.NoError(t, db.Where("id = ?", tenantID).First(&tenant).Error)
+
+	// All flags must be false for tienda_barrio with no toggles (retrocompat)
+	assert.Equal(t, models.FeatureFlags{}, tenant.FeatureFlags,
+		"tienda_barrio sin toggles debe tener todos los flags en false (AC-07)")
 }

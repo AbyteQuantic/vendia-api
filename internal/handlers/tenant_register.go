@@ -39,9 +39,11 @@ type BusinessInput struct {
 }
 
 type ConfigInput struct {
-	SaleTypes    []string `json:"sale_types"    binding:"required,min=1"`
-	HasShowcases bool     `json:"has_showcases"`
-	HasTables    bool     `json:"has_tables"`
+	SaleTypes       []string `json:"sale_types"       binding:"required,min=1"`
+	HasShowcases    bool     `json:"has_showcases"`
+	HasTables       bool     `json:"has_tables"`
+	OffersServices  bool     `json:"offers_services"`
+	SellsByWeight   bool     `json:"sells_by_weight"`
 }
 
 type EmployeeInput struct {
@@ -82,7 +84,11 @@ func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 			return
 		}
 
-		flags := models.DefaultFeatureFlags(businessTypes, req.Config.HasTables)
+		flags := models.DefaultFeatureFlags(businessTypes, models.CapabilityToggles{
+			Tables:          req.Config.HasTables,
+			Services:        req.Config.OffersServices,
+			FractionalUnits: req.Config.SellsByWeight,
+		})
 
 		var tenant models.Tenant
 		var user models.User

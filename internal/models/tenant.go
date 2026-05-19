@@ -47,10 +47,26 @@ type FeatureFlags struct {
 	EnableFractionalUnits bool `json:"enable_fractional_units"`
 }
 
+// CapabilityToggles carries the three optional capability toggles that a
+// merchant can activate independently of their business type (Spec F023).
+// Tables replaces the old hasTables bool — all callers must migrate.
+type CapabilityToggles struct {
+	// Tables grants enable_tables WITHOUT enabling KDS or Tips (those
+	// remain exclusive to food-type businesses).
+	Tables bool
+	// Services grants enable_services + enable_custom_billing.
+	Services bool
+	// FractionalUnits grants enable_fractional_units.
+	FractionalUnits bool
+}
+
 // DefaultFeatureFlags computes the feature flag matrix from a list of
-// business types. Keep this in sync with the SQL backfill in
-// migration 021 — they must produce identical output.
-func DefaultFeatureFlags(types []string, hasTables bool) FeatureFlags {
+// business types combined with explicit capability toggles (Spec F023).
+// The result is (type-implied capabilities) OR (opts toggles) — toggles
+// can only add capabilities, never remove type-implied ones.
+// Keep this in sync with the SQL backfill in migration 021 — they must
+// produce identical output for opts == CapabilityToggles{}.
+func DefaultFeatureFlags(types []string, opts CapabilityToggles) FeatureFlags {
 	has := func(needles ...string) bool {
 		for _, n := range needles {
 			for _, t := range types {
@@ -66,12 +82,12 @@ func DefaultFeatureFlags(types []string, hasTables bool) FeatureFlags {
 	services := has(BusinessTypeReparacionMuebles, BusinessTypeManufactura, BusinessTypeEmprendimientoGen)
 
 	return FeatureFlags{
-		EnableTables:          food || hasTables,
-		EnableKDS:             food,
-		EnableTips:            food,
-		EnableServices:        services,
-		EnableCustomBilling:   services,
-		EnableFractionalUnits: has(BusinessTypeDepositoConstruccion),
+		EnableTables:          food || opts.Tables,
+		EnableKDS:             food, // KDS stays exclusive to food — D3
+		EnableTips:            food, // Tips stays exclusive to food — D3
+		EnableServices:        services || opts.Services,
+		EnableCustomBilling:   services || opts.Services,
+		EnableFractionalUnits: has(BusinessTypeDepositoConstruccion) || opts.FractionalUnits,
 	}
 }
 
