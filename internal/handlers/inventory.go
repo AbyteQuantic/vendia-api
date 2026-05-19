@@ -443,6 +443,11 @@ func downloadSourceImage(ctx context.Context, sourceURL string) ([]byte, string,
 // buildProductInfo assembles the descriptive string Gemini receives —
 // name plus optional presentation/content. The edit screen may pass a
 // fresher value via query params; otherwise the stored product wins.
+//
+// Used by the EnhancePhoto path (F017), where the attached photo is
+// the source of truth and productInfo is a mere context hint, so
+// folding the fields into one string is harmless. The generation path
+// must NOT use this — see buildProductGenInputs.
 func buildProductInfo(c *gin.Context, product models.Product) string {
 	name := c.Query("name")
 	if name == "" {
@@ -464,6 +469,57 @@ func buildProductInfo(c *gin.Context, product models.Product) string {
 		info += " " + content
 	}
 	return info
+}
+
+// buildProductGenInputs resolves the inputs for "Generar foto con IA"
+// (text-to-image generation, no source photo).
+//
+// Spec: specs/021-ia-generacion-respeta-tipo/spec.md — FR-01, FR-03.
+//
+// The bug: the old generation path reused buildProductInfo, which
+// glues name + presentation + content into ONE string. For a "Llavero
+// Hello Kitty" with presentation "Bolsa" the model received "Llavero
+// Hello Kitty Bolsa" and drew a Hello Kitty bag/purse — it read the
+// packaging word as the object.
+//
+// The fix keeps the TYPE+name separate from the packaging:
+//   - name: the product type and its brand/character — the object the
+//     model must draw. Content (a MEASURE such as "250ml", not
+//     packaging) is folded into the name because it qualifies the same
+//     object; the barcode is appended only as a labelled lookup hint.
+//   - presentation: the packaging/presentation ("Bolsa", "Lata",
+//     "Caja"…) — passed separately so the prompt builder can flag it
+//     as context and explicitly forbid drawing it as the object.
+//
+// Query params let the edit screen pass fresher values than the
+// stored product; otherwise the stored product wins.
+func buildProductGenInputs(c *gin.Context, product models.Product) (name, presentation string) {
+	name = c.Query("name")
+	if name == "" {
+		name = product.Name
+	}
+	presentation = c.Query("presentation")
+	if presentation == "" {
+		presentation = product.Presentation
+	}
+	content := c.Query("content")
+	if content == "" {
+		content = product.Content
+	}
+	// Content is a measure/volume/weight ("250ml", "500g") that
+	// qualifies the SAME object — safe to fold into the name.
+	if content != "" {
+		name += " " + content
+	}
+	// The barcode is a lookup hint, never part of the object phrase.
+	barcode := c.Query("barcode")
+	if barcode == "" {
+		barcode = product.Barcode
+	}
+	if barcode != "" {
+		name += " (código de barras: " + barcode + ")"
+	}
+	return name, presentation
 }
 
 // registerCatalogImage mirrors a freshly produced product photo into
@@ -595,14 +651,11 @@ func GenerateProductImage(db *gorm.DB, geminiSvc *services.GeminiService, storag
 			return
 		}
 
-		productInfo := buildProductInfo(c, product)
-		barcode := c.Query("barcode")
-		if barcode == "" {
-			barcode = product.Barcode
-		}
-		if barcode != "" {
-			productInfo += " (codigo de barras: " + barcode + ")"
-		}
+		// Spec: specs/021-ia-generacion-respeta-tipo/spec.md — FR-01, FR-03.
+		// The product TYPE+name and its packaging are resolved as
+		// SEPARATE values so the packaging never leaks into the object
+		// the model draws.
+		genName, genPresentation := buildProductGenInputs(c, product)
 
 		job, err := createAIJob(db, tenantID, productUUID, models.AIJobTypeGenerate)
 		if err != nil {
@@ -611,7 +664,7 @@ func GenerateProductImage(db *gorm.DB, geminiSvc *services.GeminiService, storag
 		}
 
 		worker := generateImageWorker(db, geminiSvc, storageSvc, catalogSvc,
-			product, tenantID, productUUID, productInfo)
+			product, tenantID, productUUID, genName, genPresentation)
 		launchAIJob(db, job.ID, productUUID, tenantID, worker)
 
 		respondAIJobAccepted(c, job.ID)
@@ -623,9 +676,12 @@ func GenerateProductImage(db *gorm.DB, geminiSvc *services.GeminiService, storag
 // product photo and image URL at it, and mirror it into the catalog.
 //
 // Spec: specs/016-ia-foto-async-polling/spec.md — §3, FR-01.
-func generateImageWorker(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage, catalogSvc *services.CatalogService, product models.Product, tenantID, productUUID, productInfo string) aiPhotoWorker {
+// Spec: specs/021-ia-generacion-respeta-tipo/spec.md — FR-01, FR-03 —
+// the product type+name and the packaging/presentation are passed as
+// SEPARATE arguments so the packaging never becomes the object drawn.
+func generateImageWorker(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage, catalogSvc *services.CatalogService, product models.Product, tenantID, productUUID, genName, genPresentation string) aiPhotoWorker {
 	return func(ctx context.Context) (string, error) {
-		generated, err := geminiSvc.GenerateProductImage(ctx, productInfo)
+		generated, err := geminiSvc.GenerateProductImage(ctx, genName, genPresentation)
 		if err != nil {
 			return "", fmt.Errorf("error al generar imagen: %w", err)
 		}

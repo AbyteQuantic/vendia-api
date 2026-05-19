@@ -265,3 +265,99 @@ func TestBuildEnhancePhotoPrompt_FramingRulesPreserved(t *testing.T) {
 			"framing rule lost during refactor: %q", anchor)
 	}
 }
+
+// Spec: specs/021-ia-generacion-respeta-tipo/spec.md — FR-01..FR-04.
+// buildGenerateProductPrompt is the prompt used by "Generar foto con
+// IA" — generating a catalog photo for a product that has NO source
+// photo, from its name alone. The bug it fixes: a "Llavero Hello
+// Kitty" with presentation "Bolsa" generated a Hello Kitty PURSE, not
+// a keychain. Two causes — the prompt let the famous character
+// ("Hello Kitty") outweigh the product type ("Llavero"), and the raw
+// presentation ("Bolsa" = packaging) leaked into the object text so
+// the model drew a bag. The rewritten prompt declares the product
+// TYPE (main noun of the name) as the physical object, the
+// brand/character as decoration only, and the presentation as
+// packaging context that must NEVER be drawn as the object. These
+// tests pin that contract so a refactor can't reintroduce the bug.
+func TestBuildGenerateProductPrompt_TypeIsTheObject(t *testing.T) {
+	prompt := buildGenerateProductPrompt("Llavero Hello Kitty", "Bolsa")
+
+	// FR-01: the product TYPE — main noun of the name — is the object.
+	typeAnchors := []string{
+		"main noun",
+		"physical object",
+		"TYPE of product",
+	}
+	for _, s := range typeAnchors {
+		assert.Contains(t, prompt, s,
+			"product-type-is-the-object anchor missing: %q", s)
+	}
+
+	// FR-02: the brand/character is decoration only, never the object.
+	themeAnchors := []string{
+		"brand or character",
+		"theme",
+		"decoration",
+	}
+	for _, s := range themeAnchors {
+		assert.Contains(t, prompt, s,
+			"brand-is-only-theme anchor missing: %q", s)
+	}
+	// The famous-character merch trap must be explicitly forbidden.
+	assert.Contains(t, prompt, "purse",
+		"prompt must explicitly forbid generating a purse/wallet/plush")
+	assert.Contains(t, prompt, "wallet",
+		"prompt must explicitly forbid generating generic character merch")
+
+	// FR-03: presentation is packaging/context — forbidden as the object.
+	packagingAnchors := []string{
+		"packaging",
+		"NOT the object",
+	}
+	for _, s := range packagingAnchors {
+		assert.Contains(t, prompt, s,
+			"presentation-is-packaging anchor missing: %q", s)
+	}
+
+	// FR-04: catalog-quality white-background result.
+	for _, s := range []string{"white", "e-commerce", "centered"} {
+		assert.Contains(t, prompt, s,
+			"catalog-quality anchor missing: %q", s)
+	}
+}
+
+// FR-01/FR-03: the product name and the presentation must reach the
+// model as SEPARATE, LABELLED fields — never concatenated into one
+// object phrase. With name "Llavero Hello Kitty" + presentation
+// "Bolsa", the model must see the type as the object and "Bolsa"
+// flagged as packaging, so it never reads "Llavero ... Bolsa" as one
+// object and draws a bag.
+func TestBuildGenerateProductPrompt_PresentationIsLabelledSeparately(t *testing.T) {
+	prompt := buildGenerateProductPrompt("Llavero Hello Kitty", "Bolsa")
+
+	// The name is the object brief.
+	assert.Contains(t, prompt, "Llavero Hello Kitty",
+		"the product name must appear as the object brief")
+	// The presentation appears flagged as packaging — never glued to
+	// the name as part of the object phrase.
+	assert.Contains(t, prompt, "Bolsa",
+		"the presentation must appear, labelled as packaging")
+	assert.NotContains(t, prompt, "Llavero Hello Kitty Bolsa",
+		"name and presentation must NOT be concatenated into one object phrase")
+}
+
+// FR-03: when there is no presentation, the prompt must still build a
+// complete instruction with no dangling packaging sentence.
+func TestBuildGenerateProductPrompt_EmptyPresentation(t *testing.T) {
+	prompt := buildGenerateProductPrompt("Camiseta Coca-Cola", "")
+
+	assert.Contains(t, prompt, "Camiseta Coca-Cola",
+		"the product name must always be present")
+	assert.NotContains(t, prompt, "PACKAGING CONTEXT:",
+		"with no presentation, the packaging line must not be emitted")
+	// Core type/theme anchors must survive regardless of presentation.
+	assert.Contains(t, prompt, "main noun",
+		"product-type anchor must always be present")
+	assert.Contains(t, prompt, "white",
+		"white-background anchor must always be present")
+}
