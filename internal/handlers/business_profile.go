@@ -27,6 +27,7 @@ func GetBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 			"data": gin.H{
 				"business_name":          tenant.BusinessName,
 				"business_types":         tenant.BusinessTypes,
+				"feature_flags":          tenant.FeatureFlags,
 				"nit":                    tenant.NIT,
 				"razon_social":           tenant.RazonSocial,
 				"address":                tenant.Address,
