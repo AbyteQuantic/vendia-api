@@ -816,27 +816,80 @@ func (s *GeminiService) GeneratePromoBanner(ctx context.Context, prompt string, 
 	return nil, fmt.Errorf("no image returned from Gemini for promo banner")
 }
 
-// GenerateProductImage creates a product image from just a text description (no source photo needed).
-func (s *GeminiService) GenerateProductImage(ctx context.Context, productInfo string) ([]byte, error) {
-	prompt := fmt.Sprintf(`Genera una foto profesional de e-commerce del siguiente producto: %s
+// buildGenerateProductPrompt assembles the text-to-image prompt for
+// "Generar foto con IA" — generating a catalog photo for a product
+// that has NO source photo, from its name alone.
+//
+// Spec: specs/021-ia-generacion-respeta-tipo/spec.md — FR-01..FR-04.
+//
+// The bug it fixes: a "Llavero Hello Kitty" with presentation "Bolsa"
+// generated a Hello Kitty PURSE instead of a keychain. Two causes:
+//  1. The old prompt fed a flat string ("Llavero Hello Kitty Bolsa")
+//     and let the famous character ("Hello Kitty") — a strong model
+//     prior — outweigh the product type ("Llavero"), so it drew
+//     generic character merch (a purse/wallet/plush).
+//  2. The product's `presentation` ("Bolsa" = packaging) was glued
+//     into the object text, so the model read "the object is a bag".
+//
+// The rewrite separates the inputs and gives explicit, forceful
+// instructions: the product TYPE (main noun of the name) is the
+// physical object to draw; the brand/character is ONLY the theme /
+// printed decoration; the presentation is packaging context that must
+// NEVER be drawn as the object. `name` and `presentation` arrive as
+// distinct, labelled fields — never concatenated — so the model can
+// never misread "Llavero ... Bolsa" as one object phrase.
+//
+// Extracted as a builder so unit tests can pin this contract and stop
+// a future refactor from reintroducing the regression. EnhancePhoto
+// (F017) is a separate, faithful EDIT path and is intentionally NOT
+// touched here.
+func buildGenerateProductPrompt(name, presentation string) string {
+	name = strings.TrimSpace(name)
+	presentation = strings.TrimSpace(presentation)
 
-ENCUADRE (REGLA CRÍTICA — no violar):
-- Formato cuadrado 1:1.
-- El producto NUNCA debe tocar los bordes de la imagen.
-- El producto debe ocupar como máximo el 75%% del área de la imagen.
-- Dejar un margen de "safe zone" BLANCO de al menos 12%% en los cuatro lados.
-- Centrar el producto horizontal y verticalmente dentro de ese margen.
-- Prohibido acercamientos (close-up) que recorten el producto o hagan que roce los bordes.
+	packagingLine := ""
+	if presentation != "" {
+		packagingLine = fmt.Sprintf(`
 
-Estilo fotográfico:
-- Fondo BLANCO puro (#FFFFFF), limpio, sin sombras de fondo.
-- Producto completo y entero visible, sin recortar.
-- Iluminación suave y uniforme tipo estudio fotográfico.
-- Colores fieles al producto real, nítidos y vibrantes.
-- Sin texto, logos adicionales, ni marcas de agua.
-- Estilo Amazon/MercadoLibre: producto aislado sobre fondo blanco.
-- La imagen debe ser digna de un catálogo de e-commerce profesional.
-- El producto debe verse realista, como una foto real del producto.`, productInfo)
+PACKAGING CONTEXT (read carefully — this is a trap):
+- This product is sold in the following packaging/presentation: "%s".
+- The packaging/presentation is ONLY commercial context — it is NOT the object to draw.
+- It is STRICTLY FORBIDDEN to draw the packaging as the product. If the packaging word is "Bolsa" (bag), "Lata" (can), "Caja" (box), "Paquete" (pack), "Frasco" (jar) or "Unidad" (unit), you must STILL draw the product type from the name above — never a bag, a can, a box or a jar.
+- Example of the exact mistake to avoid: name "Llavero Hello Kitty" + packaging "Bolsa" → you draw a KEYCHAIN with a Hello Kitty theme. You do NOT draw a bag, a purse or a pouch.`, presentation)
+	}
+
+	return fmt.Sprintf(`You are a professional e-commerce product photographer. Generate ONE realistic catalog photo of the product described below.
+
+THE PRODUCT TO DRAW: "%s"
+
+WHAT TO DRAW — READ THIS FIRST (most important rule):
+- The physical object you must draw is the TYPE of product — the main noun of the product name above (for example: "llavero" = a keychain, "gaseosa" = a soda bottle, "camiseta" = a t-shirt, "cuaderno" = a notebook). That main noun, and ONLY that noun, decides WHICH object appears in the image.
+- If the name also contains a brand or character ("Hello Kitty", "Kuromi", "Coca-Cola", "Spider-Man"), that brand or character is ONLY the theme — the print, pattern, colour scheme or decoration ON the object. It changes how the object LOOKS, it never changes WHICH object it is.
+- It is STRICTLY FORBIDDEN to generate generic character merchandise instead of the requested type. Do NOT draw a purse, a wallet, a coin pouch, a backpack, a plush toy or a figurine just because the name mentions a famous character. If the type says "llavero", you draw a keychain decorated with that character — nothing else.
+- If the product type is genuinely ambiguous or missing, draw a simple, neutral generic product — but NEVER a piece of packaging.%s
+
+PHOTOGRAPHY STYLE:
+- The product is centered, complete and fully visible, never cropped, never touching the edges.
+- Pure white background (#FFFFFF), clean, no background shadows; one subtle soft contact shadow under the product.
+- Soft, even studio lighting. Colours realistic, sharp and vibrant. Square 1:1 framing.
+- No added text, no extra logos, no watermarks.
+- Amazon / MercadoLibre style: the product isolated on white, e-commerce catalog quality. It must look like a real photo of the real product.
+
+Output ONLY the finished product photo. No mockups, no frames, no captions.`, name, packagingLine)
+}
+
+// GenerateProductImage creates a product image from a product name and
+// optional packaging/presentation (no source photo needed).
+//
+// Spec: specs/021-ia-generacion-respeta-tipo/spec.md — FR-01..FR-04.
+//
+// `name` and `presentation` are intentionally SEPARATE parameters:
+// the caller must NOT pre-concatenate them. The product TYPE lives in
+// `name` (its main noun is the object to draw); `presentation` is
+// packaging context only. See buildGenerateProductPrompt for the full
+// rationale on why mixing the two produced the wrong product.
+func (s *GeminiService) GenerateProductImage(ctx context.Context, name, presentation string) ([]byte, error) {
+	prompt := buildGenerateProductPrompt(name, presentation)
 
 	payload := map[string]any{
 		"contents": []map[string]any{
