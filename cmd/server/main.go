@@ -179,7 +179,7 @@ func main() {
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     cfg.AllowedOrigins,
 		AllowMethods:     []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Authorization", "Content-Type"},
+		AllowHeaders:     []string{"Authorization", "Content-Type", "X-Tenant-Override"},
 		ExposeHeaders:    []string{"Content-Length"},
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
@@ -383,6 +383,10 @@ func main() {
 		v1.GET("/customers", handlers.ListCustomers(db))
 		v1.POST("/customers", handlers.CreateCustomer(db))
 		v1.PATCH("/customers/:id", handlers.UpdateCustomer(db))
+		// F026 — bulk import from Excel/CSV wizard (Flutter + admin-web).
+		// No captcha — endpoint is authenticated (JWT required, handled by v1 group).
+		// God-mode: super_admin + X-Tenant-Override header → import for any tenant.
+		v1.POST("/customers/import", handlers.ImportCustomers(db))
 
 		// Credits (El Fiar)
 		v1.GET("/credits", handlers.ListCredits(db))
