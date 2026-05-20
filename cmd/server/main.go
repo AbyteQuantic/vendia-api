@@ -341,6 +341,10 @@ func main() {
 		v1.POST("/products/:id/restock", handlers.RestockProduct(db))
 		v1.DELETE("/products/:id", handlers.DeleteProduct(db))
 		v1.POST("/products/seed", middleware.DevOnly(cfg.Env), handlers.SeedProducts(db))
+		// F027 — bulk import from Excel/CSV wizard (Flutter + admin-web).
+		// No captcha — endpoint is authenticated (JWT required, handled by v1 group).
+		// God-mode: super_admin + X-Tenant-Override header → import for any tenant.
+		v1.POST("/products/import", handlers.ImportProducts(db))
 		v1.GET("/products/lookup", handlers.LookupBarcode(offSvc))
 		v1.GET("/products/search-off", handlers.SearchProductsOFF(catalogCacheSvc))
 		v1.GET("/products/catalog-sync", handlers.CatalogDump(db))
