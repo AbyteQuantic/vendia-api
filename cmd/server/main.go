@@ -1,8 +1,12 @@
+// Spec (parcial): specs/024-captcha-registro-login/spec.md — backend opt-in
 package main
 
 import (
 	"context"
 	"log"
+	"net/http"
+	"os"
+	"strings"
 	"time"
 	"vendia-backend/internal/config"
 	"vendia-backend/internal/database"
@@ -133,6 +137,33 @@ func main() {
 		log.Println("[SVC] ePayco gateway NOT configured — subscription checkout disabled")
 	}
 
+	// ── Captcha Cloudflare Turnstile (opt-in — F024) ────────────────────────
+	// El middleware solo se registra si TURNSTILE_ENABLED=true Y
+	// TURNSTILE_SECRET_KEY está presente. Default OFF para no romper
+	// producción hasta que Bryan active las claves (FR-08, AC-09, D4).
+	var captchaMiddleware gin.HandlerFunc
+	turnstileEnabled := strings.EqualFold(strings.TrimSpace(os.Getenv("TURNSTILE_ENABLED")), "true")
+	turnstileSecretKey := strings.TrimSpace(os.Getenv("TURNSTILE_SECRET_KEY"))
+	turnstileVerifyURL := strings.TrimSpace(os.Getenv("TURNSTILE_VERIFY_URL"))
+	if turnstileVerifyURL == "" {
+		turnstileVerifyURL = services.TurnstileVerifyURL
+	}
+
+	if turnstileEnabled {
+		if turnstileSecretKey == "" {
+			log.Fatal("[CAPTCHA] TURNSTILE_ENABLED=true pero TURNSTILE_SECRET_KEY está vacío — configuración inválida, corregir antes de arrancar")
+		}
+		turnstileSvc := services.NewTurnstileService(
+			turnstileSecretKey,
+			turnstileVerifyURL,
+			&http.Client{Timeout: 5 * time.Second},
+		)
+		captchaMiddleware = middleware.CaptchaMiddleware(turnstileSvc)
+		log.Println("[CAPTCHA] Cloudflare Turnstile activado en /login y /api/v1/tenant/register")
+	} else {
+		log.Println("[CAPTCHA] deshabilitado (TURNSTILE_ENABLED=false) — endpoints sin captcha")
+	}
+
 	// ── Gin setup ───────────────────────────────────────────────────────────
 	r := gin.New()
 
@@ -153,12 +184,17 @@ func main() {
 
 	// ── Public routes ────────────────────────────────────────────────────────
 	r.GET("/ping", handlers.Ping)
-	r.POST("/login", loginLimiter, handlers.Login(db, cfg.JWTSecret))
+
+	// F024: si el captcha está habilitado, el middleware se inserta entre
+	// el rate-limiter y el handler. En modo deshabilitado captchaMiddleware
+	// es nil y buildHandlers lo omite transparentemente.
+	r.POST("/login", buildHandlers(loginLimiter, captchaMiddleware, handlers.Login(db, cfg.JWTSecret))...)
 	// Admin login lives on its own path so the tenant login rate
 	// limiter, credentials table, and claim shape stay separate.
 	r.POST("/api/v1/admin/login",
 		loginLimiter, handlers.AdminLogin(db, cfg.JWTSecret))
-	r.POST("/api/v1/tenant/register", handlers.TenantRegister(db, cfg.JWTSecret))
+	r.POST("/api/v1/tenant/register",
+		buildHandlers(captchaMiddleware, handlers.TenantRegister(db, cfg.JWTSecret))...)
 
 	// Onboarding logo preview — public, rate-limited. Lets the
 	// merchant generate / upload their logo BEFORE registration so
@@ -602,4 +638,17 @@ func main() {
 	if err := r.Run(":" + cfg.Port); err != nil {
 		log.Fatalf("failed to start server: %v", err)
 	}
+}
+
+// buildHandlers construye una lista de gin.HandlerFunc omitiendo los
+// handlers nil. Permite insertar captchaMiddleware (nil cuando está
+// deshabilitado) sin cambiar la firma de r.POST(). (F024, FR-08, D4).
+func buildHandlers(handlers ...gin.HandlerFunc) []gin.HandlerFunc {
+	result := make([]gin.HandlerFunc, 0, len(handlers))
+	for _, h := range handlers {
+		if h != nil {
+			result = append(result, h)
+		}
+	}
+	return result
 }
