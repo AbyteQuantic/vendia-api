@@ -1,4 +1,5 @@
 // Spec (parcial): specs/024-captcha-registro-login/spec.md — backend opt-in
+// Spec (parcial): specs/025-captcha-pedidos-publicos/spec.md — extensión a rutas públicas
 package main
 
 import (
@@ -159,10 +160,15 @@ func main() {
 			&http.Client{Timeout: 5 * time.Second},
 		)
 		captchaMiddleware = middleware.CaptchaMiddleware(turnstileSvc)
-		log.Println("[CAPTCHA] Cloudflare Turnstile activado en /login y /api/v1/tenant/register")
+		log.Println("[CAPTCHA] Cloudflare Turnstile activado en /login, /api/v1/tenant/register y rutas de pedido público (F024+F025)")
 	} else {
 		log.Println("[CAPTCHA] deshabilitado (TURNSTILE_ENABLED=false) — endpoints sin captcha")
 	}
+
+	// F025 — rate-limit dedicado de 5 pedidos / 15 min / IP para las rutas
+	// de pedido público. Activo SIEMPRE (independiente de TURNSTILE_ENABLED)
+	// como defensa en capa (FR-02, AC-04, D4).
+	orderRateLimiter := middleware.NewRateLimiter(5, 15*time.Minute)
 
 	// ── Gin setup ───────────────────────────────────────────────────────────
 	r := gin.New()
@@ -229,7 +235,11 @@ func main() {
 	// Public store / catalog (no auth required)
 	r.GET("/api/v1/store/:slug/catalog", handlers.PublicCatalog(db))
 	r.GET("/api/v1/store/:slug/product/:uuid", handlers.PublicProductDetail(db))
-	r.POST("/api/v1/store/:slug/order", handlers.CreateWebOrder(db))
+	// F025: rate-limit dedicado 5/15min/IP + captcha (cuando TURNSTILE_ENABLED).
+	// GET /order/:uuid queda libre — solo los POSTs de creación son el vector
+	// de abuso. (spec §2, FR-02, AC-04, FR-08)
+	r.POST("/api/v1/store/:slug/order",
+		buildHandlers(orderRateLimiter, captchaMiddleware, handlers.CreateWebOrder(db))...)
 	r.GET("/api/v1/store/:slug/order/:uuid", handlers.GetWebOrderStatus(db))
 
 	// Public rockola (customer suggests song)
@@ -247,8 +257,13 @@ func main() {
 	// Two paths hit the same handler: the legacy shape and the
 	// brief's KDS-Phase-1 naming. Keeping both means older admin-web
 	// deploys still work while new clients migrate to `/catalog/.../orders`.
-	r.POST("/api/v1/store/:slug/online-order", handlers.PublicCreateOnlineOrder(db))
-	r.POST("/api/v1/public/catalog/:slug/orders", handlers.PublicCreateOnlineOrder(db))
+	// F025: rate-limit dedicado 5/15min/IP (always-on) + captchaMiddleware
+	// cuando TURNSTILE_ENABLED=true. El orderRateLimiter va primero para
+	// rechazar IPs abusivas antes de llamar a Cloudflare. (FR-02, AC-04, D4)
+	r.POST("/api/v1/store/:slug/online-order",
+		buildHandlers(orderRateLimiter, captchaMiddleware, handlers.PublicCreateOnlineOrder(db))...)
+	r.POST("/api/v1/public/catalog/:slug/orders",
+		buildHandlers(orderRateLimiter, captchaMiddleware, handlers.PublicCreateOnlineOrder(db))...)
 
 	// Privacy-safe customer lookup for the checkout UI. Accepts a
 	// phone number and returns ONLY {"needs_consent": bool} — never
