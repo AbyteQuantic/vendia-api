@@ -211,5 +211,15 @@ type Tenant struct {
 	PriceTier2Name string `gorm:"column:price_tier_2_name;type:varchar(50);not null;default:'Depósito crédito'" json:"price_tier_2_name"`
 	PriceTier3Name string `gorm:"column:price_tier_3_name;type:varchar(50);not null;default:'Cliente final'"   json:"price_tier_3_name"`
 
+	// Spec F030 — EnableCustomerManagement is the optional capability
+	// toggle for identified-clientele businesses (panaderías de pedido,
+	// restaurantes, ferreterías, peluquerías). Default OFF: the 95% of
+	// tiendas/minimercados whose volume makes per-sale customer capture
+	// pure friction see no UI change. When ON, the POS checkout exposes a
+	// "Cliente" tile and the main menu shows a "Mis clientes" entry.
+	// Additive — every pre-F030 tenant reads false and behaves exactly
+	// as before (Constitución Art. X).
+	EnableCustomerManagement bool `gorm:"not null;default:false" json:"enable_customer_management"`
+
 	Employees []Employee `gorm:"foreignKey:TenantID" json:"employees,omitempty"`
 }

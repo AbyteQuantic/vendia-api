@@ -1,6 +1,7 @@
 // Spec: specs/023-capacidades-opcionales-negocio/spec.md
 // Spec: specs/028-copy-fiar-credito-configurable/spec.md
 // Spec: specs/029-precios-multi-tier/spec.md
+// Spec: specs/030-administracion-clientes-no-tienda/spec.md
 package handlers
 
 import (
@@ -59,6 +60,11 @@ func GetBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 				"price_tier_1_name":  tenant.PriceTier1Name,
 				"price_tier_2_name":  tenant.PriceTier2Name,
 				"price_tier_3_name":  tenant.PriceTier3Name,
+				// Spec F030: gestión de clientes. El frontend lee
+				// `enable_customer_management` para decidir si pinta el
+				// tile "Cliente" en el checkout y la entrada "Mis clientes"
+				// en el menú principal.
+				"enable_customer_management": tenant.EnableCustomerManagement,
 			},
 		})
 	}
@@ -78,6 +84,10 @@ type ProfileConfigInput struct {
 	PriceTier1Name   *string `json:"price_tier_1_name"`
 	PriceTier2Name   *string `json:"price_tier_2_name"`
 	PriceTier3Name   *string `json:"price_tier_3_name"`
+
+	// Spec F030 — gestión de clientes y ventas. Toggle opcional, default
+	// OFF. Pointer para distinguir "no enviado" de "false explícito".
+	EnableCustomerManagement *bool `json:"enable_customer_management"`
 }
 
 // UpdateBusinessProfile partially updates the tenant's business profile.
@@ -204,6 +214,12 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 			}
 			if req.Config.EnablePriceTiers != nil {
 				updates["enable_price_tiers"] = *req.Config.EnablePriceTiers
+			}
+
+			// Spec F030 — gestión de clientes. Toggle simple sin validación
+			// adicional; sigue el mismo patrón que enable_price_tiers.
+			if req.Config.EnableCustomerManagement != nil {
+				updates["enable_customer_management"] = *req.Config.EnableCustomerManagement
 			}
 		}
 

@@ -60,6 +60,18 @@ func applyLedgerIndexes(db *gorm.DB) error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS uq_customer_phone
 		 ON customers (tenant_id, phone)
 		 WHERE phone <> '' AND deleted_at IS NULL`,
+
+		// Spec F030 — idx_sales_customer_created backs the "Mis clientes"
+		// per-customer aggregates (total_spent, purchase_count,
+		// last_purchase_at) and the customer-history timeline. created_at
+		// DESC matches the chronological order both queries read in, so
+		// the index serves the ORDER BY without a sort step. customer_id
+		// is the leading column so anonymous sales (customer_id NULL) are
+		// not indexed — keeps it lean for the typical tienda whose sales
+		// are mostly anonymous.
+		`CREATE INDEX IF NOT EXISTS idx_sales_customer_created
+		 ON sales (customer_id, created_at DESC)
+		 WHERE customer_id IS NOT NULL AND deleted_at IS NULL`,
 	}
 	for _, stmt := range statements {
 		if err := db.Exec(stmt).Error; err != nil {

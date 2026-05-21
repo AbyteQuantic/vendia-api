@@ -1,4 +1,5 @@
 // Spec: specs/029-precios-multi-tier/spec.md (PriceTier wiring)
+// Spec: specs/030-administracion-clientes-no-tienda/spec.md (customer_id validation)
 package handlers
 
 import (
@@ -230,17 +231,50 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 
-		// Snapshot customer identity BEFORE the transaction so reprinting
-		// an old receipt doesn't depend on the Customer row still matching.
+		// Spec F030 — validate the optional customer_id and snapshot the
+		// customer identity BEFORE the transaction. Reprinting an old
+		// receipt must not depend on the Customer row still matching, so
+		// name/phone are frozen onto the sale.
+		//
+		// Three cases:
+		//   - customer_id absent or empty string → anonymous sale. We
+		//     normalise it to a nil pointer via middleware.UUIDPtr so
+		//     GORM emits SQL NULL instead of an empty-string literal that
+		//     Postgres rejects on the uuid column (feedback_nullable_uuid_rule).
+		//   - customer_id present but not a UUID, or not owned by this
+		//     tenant → 404. Rejecting (instead of the pre-F030 behaviour
+		//     of silently persisting a blank snapshot) keeps a crafted or
+		//     stale payload from attaching a sale to another tenant's
+		//     customer (Constitución Art. III + VI).
+		//   - customer_id present and owned → snapshot + keep the link.
 		customerNameSnap, customerPhoneSnap := "", ""
+		var customerIDPtr *string
 		if req.CustomerID != nil && *req.CustomerID != "" {
+			cid := strings.TrimSpace(*req.CustomerID)
+			if !models.IsValidUUID(cid) {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"error": "customer_id debe ser un UUID válido",
+				})
+				return
+			}
 			var customer models.Customer
 			if err := db.Select("name", "phone").
-				Where("id = ? AND tenant_id = ?", *req.CustomerID, tenantID).
-				First(&customer).Error; err == nil {
-				customerNameSnap = customer.Name
-				customerPhoneSnap = customer.Phone
+				Where("id = ? AND tenant_id = ?", cid, tenantID).
+				First(&customer).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					c.JSON(http.StatusNotFound, gin.H{
+						"error": "cliente no encontrado",
+					})
+					return
+				}
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error": "no se pudo verificar el cliente",
+				})
+				return
 			}
+			customerNameSnap = customer.Name
+			customerPhoneSnap = customer.Phone
+			customerIDPtr = middleware.UUIDPtr(cid)
 		}
 
 		// saleInventory applies the inventory side effects of the sale —
@@ -402,7 +436,7 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 				TaxAmount:             req.TaxAmount,
 				TipAmount:             req.TipAmount,
 				PaymentMethod:         req.PaymentMethod,
-				CustomerID:            req.CustomerID,
+				CustomerID:            customerIDPtr,
 				CustomerNameSnapshot:  customerNameSnap,
 				CustomerPhoneSnapshot: customerPhoneSnap,
 				IsCredit:              req.PaymentMethod == models.PaymentCredit,
