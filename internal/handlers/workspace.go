@@ -39,21 +39,22 @@ func createWorkspaceTokenPair(db *gorm.DB, user models.User, tenantID, branchID,
 	}
 
 	var tenant models.Tenant
-	_ = db.Select("id", "business_types", "feature_flags").
+	_ = db.Select("id", "business_types", "feature_flags", "credit_label_mode").
 		First(&tenant, "id = ?", tenantID).Error
 
 	return &AuthResponse{
-		Token:         accessToken,
-		AccessToken:   accessToken,
-		RefreshToken:  refreshStr,
-		TenantID:      tenantID,
-		OwnerName:     user.Name,
-		BusinessName:  businessName,
-		BusinessTypes: tenant.BusinessTypes,
-		FeatureFlags:  tenant.FeatureFlags,
-		Role:          role,
-		BranchID:      branchID,
-		UserID:        user.ID,
+		Token:           accessToken,
+		AccessToken:     accessToken,
+		RefreshToken:    refreshStr,
+		TenantID:        tenantID,
+		OwnerName:       user.Name,
+		BusinessName:    businessName,
+		BusinessTypes:   tenant.BusinessTypes,
+		FeatureFlags:    tenant.FeatureFlags,
+		CreditLabelMode: tenant.CreditLabelMode,
+		Role:            role,
+		BranchID:        branchID,
+		UserID:          user.ID,
 	}, nil
 }
 

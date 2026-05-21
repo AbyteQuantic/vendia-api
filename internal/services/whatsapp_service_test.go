@@ -47,8 +47,9 @@ func TestWhatsAppService_CreditReminder(t *testing.T) {
 	svc := NewWhatsAppService()
 	msg := svc.CreditReminder("Carlos", "Tienda Don Pepe", 15000)
 	assert.Contains(t, msg, "Carlos")
-	assert.Contains(t, msg, "saldo pendiente")
 	assert.Contains(t, msg, "$15.000")
+	// The message uses "fiado pendiente de pago" in fiar mode (default).
+	assert.Contains(t, msg, "fiado pendiente de pago")
 }
 
 func TestWhatsAppService_SupplierOrder(t *testing.T) {
@@ -161,4 +162,73 @@ func TestWhatsAppService_BuildURL_SpecialChars(t *testing.T) {
 	url := svc.BuildURL("3001234567", "Hola! ¿Cómo estás?")
 	assert.Contains(t, url, "wa.me/573001234567")
 	assert.Contains(t, url, "text=")
+}
+
+// ── T-07: credit_label_mode in WhatsApp templates (Spec F028 FR-07, AC-04) ─
+
+// TestCreditHandshake_FiarMode verifies the handshake message uses "fiar"
+// vocabulary when credit_label_mode is "fiar" (default).
+func TestCreditHandshake_FiarMode(t *testing.T) {
+	svc := NewWhatsAppService()
+	msg := svc.CreditHandshakeWithMode("Carlos", "Tienda Don Pepe", 10000, "fiar")
+	assert.Contains(t, msg, "Carlos")
+	assert.Contains(t, msg, "Tienda Don Pepe")
+	assert.Contains(t, msg, "$10.000")
+	assert.Contains(t, msg, "ha fiado hoy",
+		"modo fiar debe usar 'ha fiado hoy' en el handshake")
+	assert.NotContains(t, msg, "crédito")
+}
+
+// TestCreditHandshake_CreditMode verifies the handshake message uses "crédito"
+// vocabulary when credit_label_mode is "credit" (AC-04).
+func TestCreditHandshake_CreditMode(t *testing.T) {
+	svc := NewWhatsAppService()
+	msg := svc.CreditHandshakeWithMode("Carlos", "Tienda Don Pepe", 10000, "credit")
+	assert.Contains(t, msg, "Carlos")
+	assert.Contains(t, msg, "Tienda Don Pepe")
+	assert.Contains(t, msg, "$10.000")
+	assert.Contains(t, msg, "venta a crédito",
+		"modo credit debe usar 'venta a crédito' en el handshake")
+	assert.NotContains(t, msg, "fiado")
+}
+
+// TestCreditReminder_FiarMode verifies the reminder message uses "fiar" vocabulary.
+func TestCreditReminder_FiarMode(t *testing.T) {
+	svc := NewWhatsAppService()
+	msg := svc.CreditReminderWithMode("Carlos", "Tienda Don Pepe", 15000, "fiar")
+	assert.Contains(t, msg, "Carlos")
+	assert.Contains(t, msg, "$15.000")
+	assert.Contains(t, msg, "fiado",
+		"modo fiar debe usar 'fiado' en el recordatorio")
+	assert.NotContains(t, msg, "crédito")
+}
+
+// TestCreditReminder_CreditMode verifies the reminder message uses "crédito"
+// vocabulary when mode is "credit" (AC-04, FR-07).
+func TestCreditReminder_CreditMode(t *testing.T) {
+	svc := NewWhatsAppService()
+	msg := svc.CreditReminderWithMode("Carlos", "Tienda Don Pepe", 15000, "credit")
+	assert.Contains(t, msg, "Carlos")
+	assert.Contains(t, msg, "$15.000")
+	assert.Contains(t, msg, "venta a crédito",
+		"modo credit debe usar 'venta a crédito' en el recordatorio (AC-04)")
+	assert.NotContains(t, msg, "fiado")
+}
+
+// TestCreditHandshake_LegacyMethodStillUsesFiar verifies backward compatibility:
+// the original CreditHandshake (no mode arg) still produces "fiar" text.
+func TestCreditHandshake_LegacyMethodStillUsesFiar(t *testing.T) {
+	svc := NewWhatsAppService()
+	msg := svc.CreditHandshake("Carlos", "Tienda Don Pepe", 10000)
+	assert.Contains(t, msg, "fiado", "el método legacy debe seguir usando 'fiado' (AC-06)")
+}
+
+// TestCreditReminder_LegacyMethodStillWorks verifies backward compatibility:
+// the original CreditReminder (no mode arg) still uses "fiar" vocabulary (AC-06).
+func TestCreditReminder_LegacyMethodStillWorks(t *testing.T) {
+	svc := NewWhatsAppService()
+	msg := svc.CreditReminder("Carlos", "Tienda Don Pepe", 15000)
+	assert.Contains(t, msg, "Carlos")
+	assert.Contains(t, msg, "$15.000")
+	assert.Contains(t, msg, "fiado", "el método legacy debe usar 'fiado' (AC-06, retrocompat)")
 }

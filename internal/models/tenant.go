@@ -186,5 +186,11 @@ type Tenant struct {
 	// Nullable — when null, frontend uses the global default (160_000_000).
 	DIANThresholdCOP *int64 `json:"dian_threshold_cop"`
 
+	// CreditLabelMode controls the vocabulary used in all user-facing strings
+	// related to "fiar"/"venta a crédito" (Spec F028). Valid values: "fiar"
+	// (default, backward-compatible) and "credit". Internal identifiers
+	// (fiado_token, /fiado/<token>, enable_fiados, etc.) are NOT affected.
+	CreditLabelMode string `gorm:"type:varchar(10);not null;default:'fiar';check:credit_label_mode IN ('fiar','credit')" json:"credit_label_mode"`
+
 	Employees []Employee `gorm:"foreignKey:TenantID" json:"employees,omitempty"`
 }
