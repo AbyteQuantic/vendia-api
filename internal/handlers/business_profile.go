@@ -1,4 +1,5 @@
 // Spec: specs/023-capacidades-opcionales-negocio/spec.md
+// Spec: specs/028-copy-fiar-credito-configurable/spec.md
 package handlers
 
 import (
@@ -39,6 +40,8 @@ func GetBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 				"payment_method_name":    tenant.PaymentMethodName,
 				"payment_account_number": tenant.PaymentAccountNumber,
 				"payment_account_holder": tenant.PaymentAccountHolder,
+				// Spec F028: vocabulary mode for "fiar"/"venta a crédito" copy.
+				"credit_label_mode": tenant.CreditLabelMode,
 			},
 		})
 	}
@@ -55,17 +58,19 @@ type ProfileConfigInput struct {
 // UpdateBusinessProfile partially updates the tenant's business profile.
 // When a config block is present, feature_flags are recomputed as
 // (type-implied capabilities) OR (toggle values) — Spec F023 FR-07.
+// Accepts optional credit_label_mode ("fiar"|"credit") — Spec F028 FR-02.
 // PATCH /api/v1/store/profile
 func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 	type Request struct {
-		BusinessName  *string             `json:"business_name"`
-		BusinessTypes []string            `json:"business_types"`
-		NIT           *string             `json:"nit"`
-		RazonSocial   *string             `json:"razon_social"`
-		Address       *string             `json:"address"`
-		Latitude      *float64            `json:"latitude"`
-		Longitude     *float64            `json:"longitude"`
-		Config        *ProfileConfigInput `json:"config"`
+		BusinessName    *string             `json:"business_name"`
+		BusinessTypes   []string            `json:"business_types"`
+		NIT             *string             `json:"nit"`
+		RazonSocial     *string             `json:"razon_social"`
+		Address         *string             `json:"address"`
+		Latitude        *float64            `json:"latitude"`
+		Longitude       *float64            `json:"longitude"`
+		Config          *ProfileConfigInput `json:"config"`
+		CreditLabelMode *string             `json:"credit_label_mode"`
 	}
 
 	return func(c *gin.Context) {
@@ -103,6 +108,16 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 		}
 		if req.Longitude != nil {
 			updates["longitude"] = *req.Longitude
+		}
+
+		// Spec F028 FR-02: validate and persist credit_label_mode when provided.
+		if req.CreditLabelMode != nil {
+			mode := *req.CreditLabelMode
+			if mode != "fiar" && mode != "credit" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "modo de etiqueta de crédito inválido: debe ser 'fiar' o 'credit'"})
+				return
+			}
+			updates["credit_label_mode"] = mode
 		}
 
 		// Spec F023 FR-07: when a config block is present, recompute

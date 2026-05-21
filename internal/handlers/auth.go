@@ -25,6 +25,10 @@ type AuthResponse struct {
 	BusinessName  string              `json:"business_name"`
 	BusinessTypes []string            `json:"business_types"`
 	FeatureFlags  models.FeatureFlags `json:"feature_flags"`
+	// CreditLabelMode is the vocabulary mode for fiar/crédito copy (Spec F028).
+	// Surfaced at login so the Flutter app can cache it alongside feature_flags
+	// and use it offline without an extra round-trip (FR-05, NFR offline).
+	CreditLabelMode string `json:"credit_label_mode"`
 	// Role / BranchID / UserID expose the workspace context the
 	// JWT already carries so the client can persist them without
 	// decoding the token. Empty on the legacy tenants-only path.
@@ -54,14 +58,15 @@ func createTokenPair(db *gorm.DB, tenant models.Tenant, jwtSecret string) (*Auth
 	}
 
 	return &AuthResponse{
-		Token:         accessToken,
-		AccessToken:   accessToken,
-		RefreshToken:  refreshStr,
-		TenantID:      tenant.ID,
-		OwnerName:     tenant.OwnerName,
-		BusinessName:  tenant.BusinessName,
-		BusinessTypes: tenant.BusinessTypes,
-		FeatureFlags:  tenant.FeatureFlags,
+		Token:           accessToken,
+		AccessToken:     accessToken,
+		RefreshToken:    refreshStr,
+		TenantID:        tenant.ID,
+		OwnerName:       tenant.OwnerName,
+		BusinessName:    tenant.BusinessName,
+		BusinessTypes:   tenant.BusinessTypes,
+		FeatureFlags:    tenant.FeatureFlags,
+		CreditLabelMode: tenant.CreditLabelMode,
 	}, nil
 }
 

@@ -1,3 +1,4 @@
+// Spec: specs/028-copy-fiar-credito-configurable/spec.md
 package handlers
 
 import (
@@ -9,6 +10,7 @@ import (
 	"time"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
+	"vendia-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -313,20 +315,23 @@ func buildFiadoResponse(db *gorm.DB, credit models.CreditAccount, tenantID strin
 		"total_amount":   credit.TotalAmount,
 	}
 
+	// Spec F028 FR-07: adapt user-facing copy to the tenant's vocabulary mode.
+	labels := services.GetCreditLabels(tenant.CreditLabelMode)
+
 	if customer.Phone != "" {
 		waMessage := fmt.Sprintf(
-			"Hola %s, %s le ha fiado productos por $%d.\n\nAcepte los términos aquí:\n%s",
-			customer.Name, tenant.BusinessName, credit.TotalAmount, acceptURL,
+			"Hola %s, %s %s productos por $%d.\n\nAcepte los términos aquí:\n%s",
+			customer.Name, tenant.BusinessName, labels.WhatsAppHandshakeVerb, credit.TotalAmount, acceptURL,
 		)
 		resp["whatsapp_url"] = fmt.Sprintf("https://wa.me/57%s?text=%s",
 			customer.Phone, url.QueryEscape(waMessage))
 	}
 
 	if customer.Email != "" {
-		subject := "Fiado en " + tenant.BusinessName
+		subject := labels.NounSingularCapitalized + " en " + tenant.BusinessName
 		body := fmt.Sprintf(
-			"Hola %s,\r\n\r\n%s le ha fiado productos por $%d.\r\n\r\nAcepte aquí: %s",
-			customer.Name, tenant.BusinessName, credit.TotalAmount, acceptURL,
+			"Hola %s,\r\n\r\n%s %s productos por $%d.\r\n\r\nAcepte aquí: %s",
+			customer.Name, tenant.BusinessName, labels.WhatsAppHandshakeVerb, credit.TotalAmount, acceptURL,
 		)
 		// Use url.PathEscape for spaces (not QueryEscape which uses +)
 		resp["email_url"] = fmt.Sprintf("mailto:%s?subject=%s&body=%s",
@@ -486,6 +491,9 @@ func GetFiadoPublic(db *gorm.DB) gin.HandlerFunc {
 				"payment_method_name":    tenant.PaymentMethodName,
 				"payment_account_number": tenant.PaymentAccountNumber,
 				"payment_account_holder": tenant.PaymentAccountHolder,
+				// Spec F028 FR-08: the public receipt page reads the mode
+				// to adapt its labels (ReceiptHeader, NounSingular, etc.).
+				"credit_label_mode": tenant.CreditLabelMode,
 			},
 		})
 	}

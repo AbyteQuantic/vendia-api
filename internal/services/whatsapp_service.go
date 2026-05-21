@@ -1,3 +1,4 @@
+// Spec: specs/028-copy-fiar-credito-configurable/spec.md
 package services
 
 import (
@@ -21,17 +22,32 @@ func (s *WhatsAppService) ReceiptMessage(businessName string, total float64, rec
 }
 
 func (s *WhatsAppService) CreditHandshake(customerName, businessName string, amount float64) string {
+	return s.CreditHandshakeWithMode(customerName, businessName, amount, "fiar")
+}
+
+// CreditHandshakeWithMode builds the credit-opening confirmation message.
+// The verb phrase adapts to the tenant's credit_label_mode (Spec F028 FR-07).
+// mode: "fiar" (default) or "credit".
+func (s *WhatsAppService) CreditHandshakeWithMode(customerName, businessName string, amount float64, mode string) string {
+	labels := GetCreditLabels(mode)
 	return fmt.Sprintf(
-		"Hola %s. %s le ha fiado hoy $%s. "+
+		"Hola %s. %s %s $%s. "+
 			"Para confirmar, responda 'Sí' a este mensaje.",
-		customerName, businessName, formatCOP(amount))
+		customerName, businessName, labels.WhatsAppHandshakeVerb, formatCOP(amount))
 }
 
 func (s *WhatsAppService) CreditReminder(customerName, businessName string, balance float64) string {
+	return s.CreditReminderWithMode(customerName, businessName, balance, "fiar")
+}
+
+// CreditReminderWithMode builds the credit-reminder message.
+// The noun phrase adapts to the tenant's credit_label_mode (Spec F028 FR-07, AC-04).
+// mode: "fiar" (default) or "credit".
+func (s *WhatsAppService) CreditReminderWithMode(customerName, businessName string, balance float64, mode string) string {
+	labels := GetCreditLabels(mode)
 	return fmt.Sprintf(
-		"Hola %s. Le recuerdo que tiene un saldo pendiente de "+
-			"$%s en %s. ¡Gracias!",
-		customerName, formatCOP(balance), businessName)
+		"Hola %s. Le recordamos que tiene un %s de $%s en %s. ¡Gracias!",
+		customerName, labels.WhatsAppReminderDebt, formatCOP(balance), businessName)
 }
 
 func (s *WhatsAppService) SupplierOrder(contactName, productName string, quantity int, ownerName string) string {

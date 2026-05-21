@@ -1,3 +1,4 @@
+// Spec: specs/028-copy-fiar-credito-configurable/spec.md
 package handlers
 
 import (
@@ -79,7 +80,8 @@ func RemindCredit(db *gorm.DB) gin.HandlerFunc {
 		db.Where("id = ?", tenantID).First(&tenant)
 
 		waSvc := services.NewWhatsAppService()
-		message := waSvc.CreditReminder(customer.Name, tenant.BusinessName, totalDebt)
+		// Spec F028 FR-07: render reminder with the tenant's vocabulary mode.
+		message := waSvc.CreditReminderWithMode(customer.Name, tenant.BusinessName, totalDebt, tenant.CreditLabelMode)
 		waURL := waSvc.BuildURL(customer.Phone, message)
 
 		c.JSON(http.StatusOK, gin.H{

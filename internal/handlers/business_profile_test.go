@@ -1,4 +1,5 @@
 // Spec: specs/023-capacidades-opcionales-negocio/spec.md
+// Spec: specs/028-copy-fiar-credito-configurable/spec.md
 package handlers_test
 
 import (
@@ -211,4 +212,124 @@ func TestGetBusinessProfile_ReturnsFeatureFlags(t *testing.T) {
 		"feature_flags.enable_services debe reflejar el toggle activado")
 	assert.Equal(t, true, flags["enable_custom_billing"],
 		"feature_flags.enable_custom_billing debe reflejar el toggle activado")
+}
+
+// ── T-04: credit_label_mode — Spec F028 ────────────────────────────────────
+
+// setupProfileSuiteWithGet returns (tenantID, patchRouter, getRouter, db)
+// for tests that need both PATCH and GET endpoints.
+func setupProfileSuiteWithGet(t *testing.T) (tenantID string, patchRouter *gin.Engine, getRouter *gin.Engine) {
+	t.Helper()
+	db := setupTestDB(t)
+
+	phone := uniquePhone()
+	t.Cleanup(func() { cleanupByPhone(t, db, phone) })
+
+	w := postJSON(setupRouter(db), defaultPayload(phone))
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	tenantID = resp["tenant_id"].(string)
+
+	gin.SetMode(gin.TestMode)
+
+	pr := gin.New()
+	pr.PATCH("/api/v1/store/profile", func(c *gin.Context) {
+		c.Set(middleware.TenantIDKey, tenantID)
+		c.Next()
+	}, handlers.UpdateBusinessProfile(db))
+
+	gr := gin.New()
+	gr.GET("/api/v1/store/profile", func(c *gin.Context) {
+		c.Set(middleware.TenantIDKey, tenantID)
+		c.Next()
+	}, handlers.GetBusinessProfile(db))
+
+	return tenantID, pr, gr
+}
+
+func getProfile(router *gin.Engine) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/api/v1/store/profile", nil)
+	router.ServeHTTP(w, req)
+	return w
+}
+
+// TestGetBusinessProfile_IncludesCreditLabelMode verifies that GET profile
+// always includes credit_label_mode (FR-03). Default value must be "fiar".
+func TestGetBusinessProfile_IncludesCreditLabelMode(t *testing.T) {
+	_, _, getRouter := setupProfileSuiteWithGet(t)
+
+	w := getProfile(getRouter)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	data, ok := resp["data"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "fiar", data["credit_label_mode"],
+		"GET profile debe incluir credit_label_mode con default 'fiar' (FR-03, AC-01)")
+}
+
+// TestUpdateBusinessProfile_CreditLabelMode_Valid verifies that PATCH with
+// credit_label_mode="credit" persists and is reflected in GET (FR-02, AC-02).
+func TestUpdateBusinessProfile_CreditLabelMode_Valid(t *testing.T) {
+	_, patchRouter, getRouter := setupProfileSuiteWithGet(t)
+
+	w := patchProfile(patchRouter, map[string]any{
+		"credit_label_mode": "credit",
+	})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	wg := getProfile(getRouter)
+	require.Equal(t, http.StatusOK, wg.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(wg.Body.Bytes(), &resp))
+	data := resp["data"].(map[string]any)
+	assert.Equal(t, "credit", data["credit_label_mode"],
+		"PATCH credit_label_mode='credit' debe persistir y reflejarse en GET (FR-02)")
+}
+
+// TestUpdateBusinessProfile_CreditLabelMode_ResetToFiar verifies that
+// switching back to "fiar" from "credit" also persists correctly.
+func TestUpdateBusinessProfile_CreditLabelMode_ResetToFiar(t *testing.T) {
+	_, patchRouter, getRouter := setupProfileSuiteWithGet(t)
+
+	// Set to credit
+	require.Equal(t, http.StatusOK,
+		patchProfile(patchRouter, map[string]any{"credit_label_mode": "credit"}).Code)
+
+	// Switch back to fiar
+	w := patchProfile(patchRouter, map[string]any{"credit_label_mode": "fiar"})
+	require.Equal(t, http.StatusOK, w.Code)
+
+	wg := getProfile(getRouter)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(wg.Body.Bytes(), &resp))
+	assert.Equal(t, "fiar", resp["data"].(map[string]any)["credit_label_mode"])
+}
+
+// TestUpdateBusinessProfile_CreditLabelMode_Invalid verifies that PATCH with
+// an invalid credit_label_mode returns 400 and does NOT persist (FR-02, AC-07).
+func TestUpdateBusinessProfile_CreditLabelMode_Invalid(t *testing.T) {
+	_, patchRouter, getRouter := setupProfileSuiteWithGet(t)
+
+	w := patchProfile(patchRouter, map[string]any{
+		"credit_label_mode": "credito_libre",
+	})
+	require.Equal(t, http.StatusBadRequest, w.Code,
+		"un credit_label_mode inválido debe devolver 400 (AC-07)")
+
+	var errResp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errResp))
+	assert.NotEmpty(t, errResp["error"], "debe incluir un mensaje de error")
+
+	// Confirm no persistence happened
+	wg := getProfile(getRouter)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(wg.Body.Bytes(), &resp))
+	assert.Equal(t, "fiar", resp["data"].(map[string]any)["credit_label_mode"],
+		"el modo inválido no debe haber sido persistido")
 }
