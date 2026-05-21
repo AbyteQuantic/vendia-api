@@ -61,7 +61,7 @@ func mountLoginWithCaptchaRouter(t *testing.T, mockSiteverifyURL string) *gin.En
 		`INSERT INTO tenants (id, business_name, store_slug, created_at) VALUES (?, 'Test', 'test', datetime('now'))`,
 		tenantID,
 	).Error)
-	pwd := "test-password-123"
+	pwd := "testpwd1"
 	h, _ := bcrypt.GenerateFromPassword([]byte(pwd), bcrypt.MinCost)
 	require.NoError(t, db.Exec(
 		`INSERT INTO employees (id, tenant_id, name, phone, role, password_hash, is_owner, is_active, created_at) VALUES (?, ?, 'Test', '3001234567', 'admin', ?, 1, 1, datetime('now'))`,
@@ -91,7 +91,7 @@ func TestLoginCaptcha_SinToken(t *testing.T) {
 
 	body, _ := json.Marshal(map[string]string{
 		"phone":    "3001234567",
-		"password": "test-password-123",
+		"password": "testpwd1",
 		// sin captcha_token
 	})
 	w := httptest.NewRecorder()
@@ -112,7 +112,7 @@ func TestLoginCaptcha_ConTokenDePrueba(t *testing.T) {
 
 	body, _ := json.Marshal(map[string]string{
 		"phone":         "3001234567",
-		"password":      "test-password-123",
+		"password":      "testpwd1",
 		"captcha_token": "XXXX.DUMMY.TOKEN.XXXX", // cualquier token; el mock siempre pasa
 	})
 	w := httptest.NewRecorder()

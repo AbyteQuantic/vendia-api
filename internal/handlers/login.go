@@ -15,8 +15,13 @@ import (
 )
 
 type LoginRequest struct {
-	Phone    string `json:"phone"    binding:"required"`
-	Password string `json:"password" binding:"required"`
+	Phone string `json:"phone"    binding:"required"`
+	// Mismo cap que en tenant_register: la UI Flutter aplica
+	// LengthLimitingTextInputFormatter(8). Mantener el contrato del
+	// backend simétrico evita estados raros donde una cuenta se crea
+	// con >8 (vía un cliente no-Flutter) y después no se puede loguear
+	// porque la UI trunca.
+	Password string `json:"password" binding:"required,min=4,max=8"`
 }
 
 // Login authenticates a phone+password pair and surfaces every

@@ -128,7 +128,7 @@ func TestLogin_EmployeeWithoutUserRow_AuthenticatesAndUpserts(t *testing.T) {
 		branchID, tenantID,
 	).Error)
 
-	pwd := "viviana-12"
+	pwd := "viviana1"
 	require.NoError(t, db.Exec(
 		`INSERT INTO employees (id, tenant_id, branch_id, name, phone, role, password_hash, is_owner, is_active, created_at) VALUES (?, ?, ?, 'Viviana', '3022798580', 'cashier', ?, 0, 1, datetime('now'))`,
 		uuid.NewString(), tenantID, branchID, bcryptHash(t, pwd),
@@ -162,7 +162,7 @@ func TestLogin_DigitsOnlyFallback(t *testing.T) {
 		`INSERT INTO tenants (id, business_name, store_slug, created_at) VALUES (?, 'Don Brayan', 'tenda', datetime('now'))`,
 		tenantID,
 	).Error)
-	pwd := "secreta-1"
+	pwd := "secreta1"
 	// Employee row with spaces + dashes — the format a tendero might
 	// type into the admin form (matches what we see in QA).
 	require.NoError(t, db.Exec(
@@ -190,11 +190,11 @@ func TestLogin_InactiveEmployee_Forbidden(t *testing.T) {
 	).Error)
 	require.NoError(t, db.Exec(
 		`INSERT INTO employees (id, tenant_id, name, phone, role, password_hash, is_owner, is_active, created_at) VALUES (?, ?, 'A', '3001112222', 'cashier', ?, 0, 0, datetime('now'))`,
-		uuid.NewString(), tenantID, bcryptHash(t, "x"),
+		uuid.NewString(), tenantID, bcryptHash(t, "xxxx"),
 	).Error)
 
 	w := postLogin(t, mountLogin(db), map[string]string{
-		"phone": "3001112222", "password": "x",
+		"phone": "3001112222", "password": "xxxx",
 	})
 	assert.Equal(t, http.StatusForbidden, w.Code)
 	assert.Contains(t, w.Body.String(), "employee_inactive")
@@ -215,8 +215,8 @@ func TestLogin_UserHashDiffersFromEmployee_FallsBackToEmployee(t *testing.T) {
 		tenantID,
 	).Error)
 
-	personalPwd := "mi-clave-global"
-	tenantAssignedPwd := "que-me-dio-brayan"
+	personalPwd := "globpwd1"
+	tenantAssignedPwd := "brayan01"
 
 	// User row carries the global personal password.
 	userID := uuid.NewString()
