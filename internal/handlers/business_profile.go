@@ -1,16 +1,25 @@
 // Spec: specs/023-capacidades-opcionales-negocio/spec.md
 // Spec: specs/028-copy-fiar-credito-configurable/spec.md
+// Spec: specs/029-precios-multi-tier/spec.md
 package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+// priceTierNameMaxLen mirrors the varchar(50) GORM constraint on the
+// three Tenant.PriceTierNName columns. Surfacing the limit at the app
+// layer keeps the 400 message in Spanish instead of a 500 from PG
+// truncation. Spec F029 §5.
+const priceTierNameMaxLen = 50
 
 // GetBusinessProfile returns the current tenant's business profile data.
 // GET /api/v1/store/profile
@@ -42,17 +51,33 @@ func GetBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 				"payment_account_holder": tenant.PaymentAccountHolder,
 				// Spec F028: vocabulary mode for "fiar"/"venta a crédito" copy.
 				"credit_label_mode": tenant.CreditLabelMode,
+				// Spec F029: precios multi-tier por tipo de cliente. El
+				// frontend lee `enable_price_tiers` para decidir si pinta
+				// el sub-formulario de nombres y el selector en POS, y los
+				// 3 `price_tier_N_name` para etiquetar las opciones.
+				"enable_price_tiers": tenant.EnablePriceTiers,
+				"price_tier_1_name":  tenant.PriceTier1Name,
+				"price_tier_2_name":  tenant.PriceTier2Name,
+				"price_tier_3_name":  tenant.PriceTier3Name,
 			},
 		})
 	}
 }
 
 // ProfileConfigInput carries the optional capability toggles that a merchant
-// can activate independently of their business type (Spec F023).
+// can activate independently of their business type (Spec F023). Spec F029
+// adds `enable_price_tiers` and the 3 tier-name overrides so the multi-tier
+// pricing capability lives in the same config block as F023's toggles.
 type ProfileConfigInput struct {
 	HasTables      *bool `json:"has_tables"`
 	OffersServices *bool `json:"offers_services"`
 	SellsByWeight  *bool `json:"sells_by_weight"`
+
+	// Spec F029 — precios multi-tier por tipo de cliente.
+	EnablePriceTiers *bool   `json:"enable_price_tiers"`
+	PriceTier1Name   *string `json:"price_tier_1_name"`
+	PriceTier2Name   *string `json:"price_tier_2_name"`
+	PriceTier3Name   *string `json:"price_tier_3_name"`
 }
 
 // UpdateBusinessProfile partially updates the tenant's business profile.
@@ -148,6 +173,38 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 			}
 			updates["feature_flags"] = string(flagsJSON)
 			updates["has_tables"] = flags.EnableTables
+
+			// Spec F029 — precios multi-tier. Validate names FIRST so an
+			// invalid name aborts the whole PATCH without leaving the
+			// enable flag half-applied. trim, reject empty, enforce
+			// varchar(50).
+			if req.Config.PriceTier1Name != nil {
+				name, err := validatePriceTierName(*req.Config.PriceTier1Name, "el nombre del tier 1")
+				if err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+					return
+				}
+				updates["price_tier_1_name"] = name
+			}
+			if req.Config.PriceTier2Name != nil {
+				name, err := validatePriceTierName(*req.Config.PriceTier2Name, "el nombre del tier 2")
+				if err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+					return
+				}
+				updates["price_tier_2_name"] = name
+			}
+			if req.Config.PriceTier3Name != nil {
+				name, err := validatePriceTierName(*req.Config.PriceTier3Name, "el nombre del tier 3")
+				if err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+					return
+				}
+				updates["price_tier_3_name"] = name
+			}
+			if req.Config.EnablePriceTiers != nil {
+				updates["enable_price_tiers"] = *req.Config.EnablePriceTiers
+			}
 		}
 
 		if len(updates) == 0 {
@@ -194,4 +251,26 @@ func resolveToggles(tenant models.Tenant, cfg *ProfileConfigInput, businessTypes
 		Services:        services,
 		FractionalUnits: fractional,
 	}
+}
+
+// validatePriceTierName normalises a tier label sent through the
+// PATCH /api/v1/store/profile config block (Spec F029 FR-02):
+//
+//  1. trim surrounding whitespace,
+//  2. reject empty (we never let a tier render as a blank label in the POS),
+//  3. enforce the same 50-char cap the GORM column declares — surfaced
+//     here in Spanish instead of bubbling up a PG truncation 500.
+//
+// label is the human-friendly noun used in the 400 message ("el nombre
+// del tier 1", "el nombre del tier 2", ...) so the tendero knows which
+// input to fix.
+func validatePriceTierName(raw, label string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", fmt.Errorf("%s no puede quedar vacío", label)
+	}
+	if len(trimmed) > priceTierNameMaxLen {
+		return "", fmt.Errorf("%s debe tener máximo %d caracteres", label, priceTierNameMaxLen)
+	}
+	return trimmed, nil
 }

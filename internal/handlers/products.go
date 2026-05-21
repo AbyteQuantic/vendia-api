@@ -142,6 +142,16 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		Presentation      string  `json:"presentation"`
 		Content           string  `json:"content"`
 		ExpiryDate        string  `json:"expiry_date"`
+
+		// Spec F029 — optional tier prices. Nullable pointer so we
+		// can distinguish "not sent" from "explicit 0" (invalid). When
+		// the tenant has EnablePriceTiers=false these are ignored on the
+		// read side, but they are accepted/persisted regardless so a
+		// merchant can pre-load tier prices and flip the capacity later
+		// without losing the data (case borde §9).
+		PriceTier1 *float64 `json:"price_tier_1"`
+		PriceTier2 *float64 `json:"price_tier_2"`
+		PriceTier3 *float64 `json:"price_tier_3"`
 	}
 
 	return func(c *gin.Context) {
@@ -216,6 +226,23 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			return
 		}
 
+		// Spec F029 — validate tier prices (>0 when provided). Reject
+		// 0/negative early instead of relying on the DB; the message stays
+		// in Spanish for the tendero. Pointer dereference is safe under
+		// the nil guard.
+		if err := validateOptionalTierPrice(req.PriceTier1, 1); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if err := validateOptionalTierPrice(req.PriceTier2, 2); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if err := validateOptionalTierPrice(req.PriceTier3, 3); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
 		product := models.Product{
 			TenantID:          tenantID,
 			CreatedBy:         middleware.UUIDPtr(userID),
@@ -231,6 +258,9 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			Presentation:      req.Presentation,
 			Content:           req.Content,
 			ExpiryDate:        expiry,
+			PriceTier1:        req.PriceTier1,
+			PriceTier2:        req.PriceTier2,
+			PriceTier3:        req.PriceTier3,
 		}
 		if req.ID != "" {
 			product.ID = req.ID
@@ -292,6 +322,12 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		Presentation      *string `json:"presentation"`
 		Content           *string `json:"content"`
 		ExpiryDate        *string `json:"expiry_date"`
+
+		// Spec F029 — optional tier prices on PATCH. Same nullable
+		// semantics as CreateProduct.
+		PriceTier1 *float64 `json:"price_tier_1"`
+		PriceTier2 *float64 `json:"price_tier_2"`
+		PriceTier3 *float64 `json:"price_tier_3"`
 	}
 
 	return func(c *gin.Context) {
@@ -351,6 +387,29 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			}
 			// nil means "clear the expiry" — store NULL.
 			updates["expiry_date"] = expiry
+		}
+
+		// Spec F029 — tier prices on PATCH. >0 validation matches Create.
+		if req.PriceTier1 != nil {
+			if err := validateOptionalTierPrice(req.PriceTier1, 1); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+			updates["price_tier_1"] = *req.PriceTier1
+		}
+		if req.PriceTier2 != nil {
+			if err := validateOptionalTierPrice(req.PriceTier2, 2); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+			updates["price_tier_2"] = *req.PriceTier2
+		}
+		if req.PriceTier3 != nil {
+			if err := validateOptionalTierPrice(req.PriceTier3, 3); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+			updates["price_tier_3"] = *req.PriceTier3
 		}
 
 		if err := db.Model(&product).Updates(updates).Error; err != nil {
@@ -503,4 +562,19 @@ func SeedProducts(db *gorm.DB) gin.HandlerFunc {
 
 		c.JSON(http.StatusCreated, gin.H{"message": "productos de ejemplo creados", "count": len(samples)})
 	}
+}
+
+// validateOptionalTierPrice enforces the Spec F029 invariant that every
+// tier price, when provided, must be strictly positive. Nil is a valid
+// "not configured" state — the POS will fall back to the retail price
+// (with a visual note) when the cashier picks that tier (FR-06).
+// tierIndex is the 1-based label used in the Spanish error message.
+func validateOptionalTierPrice(p *float64, tierIndex int) error {
+	if p == nil {
+		return nil
+	}
+	if *p <= 0 {
+		return fmt.Errorf("el precio del tier %d debe ser mayor a 0", tierIndex)
+	}
+	return nil
 }

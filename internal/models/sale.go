@@ -60,8 +60,34 @@ type Sale struct {
 	// (transfer/QR/credit-app). Empty when payment is cash. The blob
 	// is purged automatically after 8 days by a server-side cron;
 	// the URL stays here as audit trail of the cashier's action.
-	ReceiptImageURL string     `gorm:"type:text;default:''" json:"receipt_image_url"`
-	Items           []SaleItem `gorm:"foreignKey:SaleID" json:"items"`
+	ReceiptImageURL string `gorm:"type:text;default:''" json:"receipt_image_url"`
+	// ── Spec F029 — precios multi-tier por tipo de cliente ──────────────
+	// PriceTier records WHICH tier was applied to the whole sale. Stored
+	// as enum string (no FK) so renaming a tier label later doesn't
+	// rewrite historical sales — `tier_N` is the stable identity, the
+	// label is presentation. Default 'retail' makes the legacy sale path
+	// invisible: every pre-F029 sale is interpreted as a retail sale.
+	// CHECK constraint enforces the four valid values at the DB layer.
+	PriceTier string     `gorm:"type:varchar(10);not null;default:'retail';check:price_tier IN ('retail','tier_1','tier_2','tier_3')" json:"price_tier"`
+	Items     []SaleItem `gorm:"foreignKey:SaleID" json:"items"`
+}
+
+// PriceTier enumerates the four valid values for Sale.PriceTier (F029).
+const (
+	PriceTierRetail = "retail"
+	PriceTier1      = "tier_1"
+	PriceTier2      = "tier_2"
+	PriceTier3      = "tier_3"
+)
+
+// IsValidPriceTier returns true when v is one of the four canonical
+// price-tier identifiers used by Sale.PriceTier (Spec F029 FR-07).
+func IsValidPriceTier(v string) bool {
+	switch v {
+	case PriceTierRetail, PriceTier1, PriceTier2, PriceTier3:
+		return true
+	}
+	return false
 }
 
 // SaleSource enumerates the source vocab for the unified ledger.

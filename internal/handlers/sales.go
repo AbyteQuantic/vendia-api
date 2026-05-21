@@ -1,3 +1,4 @@
+// Spec: specs/029-precios-multi-tier/spec.md (PriceTier wiring)
 package handlers
 
 import (
@@ -83,6 +84,12 @@ type CreateSaleRequest struct {
 	// sale. Pointer so we can distinguish "not sent" from "explicit
 	// empty string" if a future client cares.
 	ReceiptImageURL *string `json:"receipt_image_url"`
+
+	// Spec F029 — PriceTier records which tier the cashier picked in
+	// "Confirmar Venta". Optional: omitted/empty → defaults to 'retail'
+	// (retrocompat: pre-F029 clients keep working). Must match the enum
+	// {retail, tier_1, tier_2, tier_3} when provided.
+	PriceTier string `json:"price_tier"`
 }
 
 func CreateSale(db *gorm.DB) gin.HandlerFunc {
@@ -130,6 +137,18 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 
 		if req.ID != "" && !models.IsValidUUID(req.ID) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "id must be a valid UUID v4"})
+			return
+		}
+
+		// Spec F029 — validate price_tier enum. Empty string is the
+		// retrocompat default ('retail'), normalised below before
+		// inserting. Any other value outside the four canonical members
+		// is rejected with a Spanish 400 so the contract stays clear at
+		// the API boundary (instead of letting the DB CHECK throw 500).
+		if req.PriceTier != "" && !models.IsValidPriceTier(req.PriceTier) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "price_tier inválido: debe ser uno de 'retail', 'tier_1', 'tier_2', 'tier_3'",
+			})
 			return
 		}
 
@@ -363,6 +382,16 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 				}
 			}
 
+			// Spec F029 — normalise the tier so the persisted row never
+			// carries an empty string. The DB default would fire on
+			// omit, but GORM serialises non-pointer strings even when
+			// blank — pin 'retail' explicitly to keep the contract
+			// readable.
+			priceTier := req.PriceTier
+			if priceTier == "" {
+				priceTier = models.PriceTierRetail
+			}
+
 			sale = models.Sale{
 				TenantID:              tenantID,
 				CreatedBy:             middleware.UUIDPtr(userID),
@@ -381,6 +410,7 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 				PaymentStatus:         paymentStatus,
 				DynamicQRPayload:      req.DynamicQRPayload,
 				ReceiptImageURL:       receiptURL,
+				PriceTier:             priceTier,
 				Items:                 items,
 			}
 			if req.ID != "" {

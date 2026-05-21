@@ -1,5 +1,6 @@
 // Spec: specs/023-capacidades-opcionales-negocio/spec.md
 // Spec: specs/028-copy-fiar-credito-configurable/spec.md
+// Spec: specs/029-precios-multi-tier/spec.md
 package handlers_test
 
 import (
@@ -332,4 +333,125 @@ func TestUpdateBusinessProfile_CreditLabelMode_Invalid(t *testing.T) {
 	require.NoError(t, json.Unmarshal(wg.Body.Bytes(), &resp))
 	assert.Equal(t, "fiar", resp["data"].(map[string]any)["credit_label_mode"],
 		"el modo inválido no debe haber sido persistido")
+}
+
+// ── T-04 (F029): precios multi-tier ─────────────────────────────────────────
+
+// TestGetBusinessProfile_IncludesPriceTiers verifies GET profile includes
+// enable_price_tiers + the 3 tier names with their canonical defaults
+// (F029 FR-01, FR-02 / AC-01).
+func TestGetBusinessProfile_IncludesPriceTiers(t *testing.T) {
+	_, _, getRouter := setupProfileSuiteWithGet(t)
+
+	w := getProfile(getRouter)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	data := resp["data"].(map[string]any)
+
+	assert.Equal(t, false, data["enable_price_tiers"],
+		"un tenant nuevo arranca con enable_price_tiers=false (FR-01)")
+	assert.Equal(t, "Depósito contado", data["price_tier_1_name"],
+		"price_tier_1_name default canónico (FR-02)")
+	assert.Equal(t, "Depósito crédito", data["price_tier_2_name"],
+		"price_tier_2_name default canónico (FR-02)")
+	assert.Equal(t, "Cliente final", data["price_tier_3_name"],
+		"price_tier_3_name default canónico (FR-02)")
+}
+
+// TestUpdateBusinessProfile_EnablePriceTiersWithCustomNames verifies that
+// PATCH activates the capacity AND renames the three tiers in a single
+// request (F029 FR-01, FR-02 / AC-02).
+func TestUpdateBusinessProfile_EnablePriceTiersWithCustomNames(t *testing.T) {
+	_, patchRouter, getRouter := setupProfileSuiteWithGet(t)
+
+	w := patchProfile(patchRouter, map[string]any{
+		"config": map[string]any{
+			"enable_price_tiers": true,
+			"price_tier_1_name":  "Mayorista x12",
+			"price_tier_2_name":  "Mayorista x6",
+			"price_tier_3_name":  "Detal",
+		},
+	})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	wg := getProfile(getRouter)
+	require.Equal(t, http.StatusOK, wg.Code, wg.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(wg.Body.Bytes(), &resp))
+	data := resp["data"].(map[string]any)
+
+	assert.Equal(t, true, data["enable_price_tiers"],
+		"enable_price_tiers debe persistir (FR-01)")
+	assert.Equal(t, "Mayorista x12", data["price_tier_1_name"])
+	assert.Equal(t, "Mayorista x6", data["price_tier_2_name"])
+	assert.Equal(t, "Detal", data["price_tier_3_name"])
+}
+
+// TestUpdateBusinessProfile_EmptyTierName_400 verifies that an empty
+// tier name returns 400 and does NOT persist any change (F029 FR-02
+// validation — los nombres no pueden quedar vacíos).
+func TestUpdateBusinessProfile_EmptyTierName_400(t *testing.T) {
+	_, patchRouter, getRouter := setupProfileSuiteWithGet(t)
+
+	w := patchProfile(patchRouter, map[string]any{
+		"config": map[string]any{
+			"enable_price_tiers": true,
+			"price_tier_1_name":  "   ", // solo espacios → tras trim queda vacío
+		},
+	})
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+
+	// El tier 1 default debe permanecer intacto.
+	wg := getProfile(getRouter)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(wg.Body.Bytes(), &resp))
+	data := resp["data"].(map[string]any)
+	assert.Equal(t, "Depósito contado", data["price_tier_1_name"],
+		"nombre vacío no debe persistir — default intacto")
+	assert.Equal(t, false, data["enable_price_tiers"],
+		"si el PATCH falla, enable_price_tiers no debe haberse activado")
+}
+
+// TestUpdateBusinessProfile_TierNameTooLong_400 verifies that a tier
+// name longer than 50 chars returns 400 (F029 FR-02 — varchar(50)).
+func TestUpdateBusinessProfile_TierNameTooLong_400(t *testing.T) {
+	_, patchRouter, _ := setupProfileSuiteWithGet(t)
+
+	// 51 'x' chars — uno por encima del límite de varchar(50).
+	long := ""
+	for i := 0; i < 51; i++ {
+		long += "x"
+	}
+
+	w := patchProfile(patchRouter, map[string]any{
+		"config": map[string]any{
+			"enable_price_tiers": true,
+			"price_tier_2_name":  long,
+		},
+	})
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+}
+
+// TestUpdateBusinessProfile_TierNamesTrimmed verifies that surrounding
+// whitespace is trimmed before persisting (FR-02 — sanitización básica).
+func TestUpdateBusinessProfile_TierNamesTrimmed(t *testing.T) {
+	_, patchRouter, getRouter := setupProfileSuiteWithGet(t)
+
+	w := patchProfile(patchRouter, map[string]any{
+		"config": map[string]any{
+			"enable_price_tiers": true,
+			"price_tier_1_name":  "  Mayorista x12  ",
+		},
+	})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	wg := getProfile(getRouter)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(wg.Body.Bytes(), &resp))
+	data := resp["data"].(map[string]any)
+	assert.Equal(t, "Mayorista x12", data["price_tier_1_name"],
+		"los nombres deben quedar trim()ados antes de persistir")
 }

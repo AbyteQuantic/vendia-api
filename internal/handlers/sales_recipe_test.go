@@ -74,7 +74,8 @@ func setupSaleRecipeDB(t *testing.T) *gorm.DB {
 			payment_status TEXT DEFAULT 'COMPLETED',
 			dynamic_qr_payload TEXT,
 			source TEXT NOT NULL DEFAULT 'POS',
-			receipt_image_url TEXT DEFAULT ''
+			receipt_image_url TEXT DEFAULT '',
+			price_tier TEXT NOT NULL DEFAULT 'retail'
 		)`,
 		`CREATE TABLE sale_items (
 			id TEXT PRIMARY KEY, created_at DATETIME, updated_at DATETIME,

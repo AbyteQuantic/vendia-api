@@ -260,3 +260,68 @@ func TestPublicCatalog_ExposesActivePaymentMethods(t *testing.T) {
 	_, hasLeak := byID["m-leak"]
 	assert.False(t, hasLeak, "other tenants' methods must never leak in")
 }
+
+// ── T-11 (F029): catálogo público NUNCA expone tiers ────────────────────────
+//
+// Spec F029 §6 AC-08 + FR-09: el storefront del cliente final muestra
+// únicamente el precio retail. Aun cuando el dueño tiene la capacidad ON
+// y configuró los 3 tiers en el producto, el JSON público debe llevar
+// solo `price` — los `price_tier_*` quedan privados (uso interno del POS).
+// Este test bloquea regresiones donde alguien suma campos al
+// `CatalogProduct` struct.
+func TestPublicCatalog_NeverExposesPriceTiers(t *testing.T) {
+	db := setupStoreTestDB()
+	gin.SetMode(gin.TestMode)
+
+	slug := "tier-shop"
+	tenant := models.Tenant{
+		BaseModel:        models.BaseModel{ID: "tenant-tier"},
+		BusinessName:     "Depósito con tiers",
+		StoreSlug:        &slug,
+		IsDeliveryOpen:   true,
+		EnablePriceTiers: true,
+	}
+	db.Create(&tenant)
+
+	t1, t2, t3 := 25000.0, 26500.0, 28500.0
+	db.Create(&models.Product{
+		BaseModel:   models.BaseModel{ID: "p-cemento"},
+		TenantID:    "tenant-tier",
+		Name:        "Cemento Fortecem",
+		Price:       28500,
+		IsAvailable: true,
+		Stock:       50,
+		PriceTier1:  &t1,
+		PriceTier2:  &t2,
+		PriceTier3:  &t3,
+	})
+
+	r := gin.New()
+	r.GET("/catalog/:slug", PublicCatalog(db))
+	req, _ := http.NewRequest(http.MethodGet, "/catalog/tier-shop", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Unmarshal as raw map so we can assert WHICH keys exist on the
+	// product. The product struct in the response must NOT carry any
+	// price_tier_* key.
+	var res struct {
+		Data struct {
+			Products []map[string]any `json:"products"`
+		} `json:"data"`
+	}
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &res))
+	assert.Equal(t, 1, len(res.Data.Products))
+
+	prod := res.Data.Products[0]
+	assert.Equal(t, 28500.0, prod["price"], "el retail debe seguir visible")
+
+	for _, leak := range []string{
+		"price_tier_1", "price_tier_2", "price_tier_3",
+	} {
+		_, exists := prod[leak]
+		assert.False(t, exists,
+			"el catálogo público NO debe exponer %s (FR-09, AC-08)", leak)
+	}
+}

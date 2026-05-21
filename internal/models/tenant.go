@@ -192,5 +192,24 @@ type Tenant struct {
 	// (fiado_token, /fiado/<token>, enable_fiados, etc.) are NOT affected.
 	CreditLabelMode string `gorm:"type:varchar(10);not null;default:'fiar';check:credit_label_mode IN ('fiar','credit')" json:"credit_label_mode"`
 
+	// ── Spec F029 — precios multi-tier por tipo de cliente ──────────────
+	// EnablePriceTiers is the optional capability toggle for multi-tier
+	// pricing (depósito mayorista vs cliente final). Default OFF — the
+	// 95% of tiendas de barrio that need a single price see no UI change.
+	// When ON, products gain 3 optional precio_tier_* columns and the POS
+	// shows a tier selector in Confirmar Venta.
+	EnablePriceTiers bool `gorm:"not null;default:false" json:"enable_price_tiers"`
+
+	// PriceTier1Name / PriceTier2Name / PriceTier3Name are the per-tenant
+	// labels shown in the POS selector and the product edit form. Defaults
+	// match the canonical depósito-de-construcción taxonomy; the owner can
+	// rename them when activating the capacity (e.g. "Mayorista x12",
+	// "Mayorista x6", "Detal"). varchar(50) keeps the UI readable.
+	// Explicit `column:` tags pin the snake_case + underscore-before-digit
+	// naming GORM's default snake_case converter omits.
+	PriceTier1Name string `gorm:"column:price_tier_1_name;type:varchar(50);not null;default:'Depósito contado'" json:"price_tier_1_name"`
+	PriceTier2Name string `gorm:"column:price_tier_2_name;type:varchar(50);not null;default:'Depósito crédito'" json:"price_tier_2_name"`
+	PriceTier3Name string `gorm:"column:price_tier_3_name;type:varchar(50);not null;default:'Cliente final'"   json:"price_tier_3_name"`
+
 	Employees []Employee `gorm:"foreignKey:TenantID" json:"employees,omitempty"`
 }

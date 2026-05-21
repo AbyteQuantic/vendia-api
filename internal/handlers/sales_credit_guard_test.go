@@ -74,7 +74,8 @@ func setupSaleCreditDB(t *testing.T) *gorm.DB {
 			credit_account_id TEXT,
 			payment_status TEXT DEFAULT 'COMPLETED',
 			dynamic_qr_payload TEXT,
-			source TEXT NOT NULL DEFAULT 'POS'
+			source TEXT NOT NULL DEFAULT 'POS',
+			price_tier TEXT NOT NULL DEFAULT 'retail'
 		)`,
 		`CREATE TABLE sale_items (
 			id TEXT PRIMARY KEY, created_at DATETIME, updated_at DATETIME,
