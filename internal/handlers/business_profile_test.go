@@ -1,6 +1,7 @@
 // Spec: specs/023-capacidades-opcionales-negocio/spec.md
 // Spec: specs/028-copy-fiar-credito-configurable/spec.md
 // Spec: specs/029-precios-multi-tier/spec.md
+// Spec: specs/030-administracion-clientes-no-tienda/spec.md
 package handlers_test
 
 import (
@@ -454,4 +455,88 @@ func TestUpdateBusinessProfile_TierNamesTrimmed(t *testing.T) {
 	data := resp["data"].(map[string]any)
 	assert.Equal(t, "Mayorista x12", data["price_tier_1_name"],
 		"los nombres deben quedar trim()ados antes de persistir")
+}
+
+// ── T-04 (F030): gestión de clientes — enable_customer_management ───────────
+
+// TestGetBusinessProfile_IncludesCustomerManagement verifies GET profile
+// includes enable_customer_management, defaulting to false for a fresh
+// tenant (F030 AC-01).
+func TestGetBusinessProfile_IncludesCustomerManagement(t *testing.T) {
+	_, _, getRouter := setupProfileSuiteWithGet(t)
+
+	w := getProfile(getRouter)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	data := resp["data"].(map[string]any)
+
+	assert.Equal(t, false, data["enable_customer_management"],
+		"un tenant nuevo arranca con enable_customer_management=false (AC-01)")
+}
+
+// TestUpdateBusinessProfile_EnableCustomerManagement verifies PATCH with
+// config.enable_customer_management=true persists and is reflected in GET
+// (F030 AC-01, AC-02).
+func TestUpdateBusinessProfile_EnableCustomerManagement(t *testing.T) {
+	_, patchRouter, getRouter := setupProfileSuiteWithGet(t)
+
+	w := patchProfile(patchRouter, map[string]any{
+		"config": map[string]any{"enable_customer_management": true},
+	})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	wg := getProfile(getRouter)
+	require.Equal(t, http.StatusOK, wg.Code, wg.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(wg.Body.Bytes(), &resp))
+	data := resp["data"].(map[string]any)
+	assert.Equal(t, true, data["enable_customer_management"],
+		"enable_customer_management=true debe persistir y reflejarse en GET (AC-01)")
+}
+
+// TestUpdateBusinessProfile_DisableCustomerManagement verifies the toggle
+// can be turned OFF again after being enabled (F030 AC-07 — capacidad OFF
+// devuelve la app a su estado anterior).
+func TestUpdateBusinessProfile_DisableCustomerManagement(t *testing.T) {
+	_, patchRouter, getRouter := setupProfileSuiteWithGet(t)
+
+	require.Equal(t, http.StatusOK, patchProfile(patchRouter, map[string]any{
+		"config": map[string]any{"enable_customer_management": true},
+	}).Code)
+
+	w := patchProfile(patchRouter, map[string]any{
+		"config": map[string]any{"enable_customer_management": false},
+	})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	wg := getProfile(getRouter)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(wg.Body.Bytes(), &resp))
+	assert.Equal(t, false, resp["data"].(map[string]any)["enable_customer_management"],
+		"enable_customer_management=false debe desactivar la capacidad (AC-07)")
+}
+
+// TestUpdateBusinessProfile_CustomerManagement_NoConfig_KeepsToggle verifies
+// a PATCH without a config block leaves enable_customer_management untouched.
+func TestUpdateBusinessProfile_CustomerManagement_NoConfig_KeepsToggle(t *testing.T) {
+	tenantID, patchRouter, _ := setupProfileSuiteWithGet(t)
+	db := setupTestDB(t)
+
+	// Activate it first.
+	require.Equal(t, http.StatusOK, patchProfile(patchRouter, map[string]any{
+		"config": map[string]any{"enable_customer_management": true},
+	}).Code)
+
+	// A PATCH with no config block must not flip it back.
+	require.Equal(t, http.StatusOK, patchProfile(patchRouter, map[string]any{
+		"business_name": "Panadería La Espiga",
+	}).Code)
+
+	var after models.Tenant
+	require.NoError(t, db.Where("id = ?", tenantID).First(&after).Error)
+	assert.True(t, after.EnableCustomerManagement,
+		"un PATCH sin config no debe tocar enable_customer_management")
 }

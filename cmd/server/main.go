@@ -387,6 +387,8 @@ func main() {
 		v1.GET("/customers", handlers.ListCustomers(db))
 		v1.POST("/customers", handlers.CreateCustomer(db))
 		v1.PATCH("/customers/:id", handlers.UpdateCustomer(db))
+		// F030 — per-customer purchase history (summary + paged sales).
+		v1.GET("/customers/:id/history", handlers.GetCustomerHistory(db))
 		// F026 — bulk import from Excel/CSV wizard (Flutter + admin-web).
 		// No captcha — endpoint is authenticated (JWT required, handled by v1 group).
 		// God-mode: super_admin + X-Tenant-Override header → import for any tenant.

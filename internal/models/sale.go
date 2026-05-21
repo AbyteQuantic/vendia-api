@@ -24,7 +24,15 @@ type Sale struct {
 	// re-parsing line items.
 	TipAmount     float64       `gorm:"type:numeric(12,2);not null;default:0" json:"tip_amount"`
 	PaymentMethod PaymentMethod `gorm:"not null;default:'cash'" json:"payment_method"`
-	CustomerID    *string       `gorm:"type:uuid" json:"customer_id,omitempty"`
+	// CustomerID links the sale to an identified Customer (Spec F030).
+	// Nullable: most cash sales stay anonymous (customer_id = null) and
+	// that is a valid state — association is opt-in. The composite
+	// partial index that powers the "Mis clientes" aggregates and the
+	// per-customer history timeline is installed in the bootstrap as
+	// `idx_sales_customer_created` (database/ledger_constraints.go) —
+	// AutoMigrate can't express a Postgres partial index with a DESC
+	// column over a BaseModel field.
+	CustomerID *string `gorm:"type:uuid;index" json:"customer_id,omitempty"`
 	// CustomerNameSnapshot / CustomerPhoneSnapshot freeze the customer's
 	// identity at the moment of sale. Reprinting an old receipt must not
 	// depend on the Customer row still existing or still matching the
@@ -70,6 +78,12 @@ type Sale struct {
 	// CHECK constraint enforces the four valid values at the DB layer.
 	PriceTier string     `gorm:"type:varchar(10);not null;default:'retail';check:price_tier IN ('retail','tier_1','tier_2','tier_3')" json:"price_tier"`
 	Items     []SaleItem `gorm:"foreignKey:SaleID" json:"items"`
+	// Customer is the optional identified-clientele relation (Spec F030).
+	// Populated only when the handler Preloads it; nil for anonymous
+	// sales. The receipt-time identity is still frozen in
+	// CustomerNameSnapshot / CustomerPhoneSnapshot — this relation is for
+	// the live "Mis clientes" views, not for reprinting old receipts.
+	Customer *Customer `gorm:"foreignKey:CustomerID" json:"customer,omitempty"`
 }
 
 // PriceTier enumerates the four valid values for Sale.PriceTier (F029).
