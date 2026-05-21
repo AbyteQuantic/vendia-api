@@ -104,7 +104,7 @@ func TestRegisterCaptcha_SinToken_NoRequiereDB(t *testing.T) {
 		"owner": map[string]string{
 			"name":     "Don Brayan",
 			"phone":    "3001234567",
-			"password": "supersecreto",
+			"password": "passw0rd",
 		},
 		"business": map[string]string{
 			"name": "La Tiendita",
@@ -135,7 +135,7 @@ func TestRegisterCaptcha_ConTokenDePrueba(t *testing.T) {
 		"owner": map[string]string{
 			"name":     "Don Test",
 			"phone":    phone,
-			"password": "supersecreto123",
+			"password": "passw0rd",
 		},
 		"business": map[string]string{
 			"name": "La Tiendita Test",

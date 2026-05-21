@@ -19,9 +19,15 @@ type TenantRegisterRequest struct {
 }
 
 type OwnerInput struct {
-	Name     string `json:"name"     binding:"required"`
-	Phone    string `json:"phone"    binding:"required,min=7,max=15"`
-	Password string `json:"password" binding:"required,min=4"`
+	Name  string `json:"name"     binding:"required"`
+	Phone string `json:"phone"    binding:"required,min=7,max=15"`
+	// La UI Flutter (login + onboarding step_owner) aplica
+	// LengthLimitingTextInputFormatter(8) en el campo de clave/PIN. El
+	// backend tiene que cumplir el mismo contrato — sin max, un cliente
+	// distinto (curl, móvil con bug, integración futura) puede crear
+	// cuentas con >8 chars que después no entren por la UI normal. El
+	// max=8 alinea ambos lados y previene ese estado inválido.
+	Password string `json:"password" binding:"required,min=4,max=8"`
 }
 
 type BusinessInput struct {
@@ -47,10 +53,11 @@ type ConfigInput struct {
 }
 
 type EmployeeInput struct {
-	Name     string              `json:"name"     binding:"required"`
-	Phone    string              `json:"phone"`
-	Role     models.EmployeeRole `json:"role"     binding:"required"`
-	Password string              `json:"password" binding:"required,min=4"`
+	Name  string              `json:"name"     binding:"required"`
+	Phone string              `json:"phone"`
+	Role  models.EmployeeRole `json:"role"     binding:"required"`
+	// Mismo cap que el dueño — la UI de empleados también limita a 8.
+	Password string `json:"password" binding:"required,min=4,max=8"`
 }
 
 func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {

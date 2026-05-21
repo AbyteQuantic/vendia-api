@@ -97,7 +97,7 @@ func seedMultiWorkspaceUser(
 func TestLogin_MultiWorkspace_ReturnsSelectorWithFlag(t *testing.T) {
 	db := setupLoginDB(t)
 	phone := "3022798580"
-	seedMultiWorkspaceUser(t, db, phone, "owner-pw", "cashier-pw")
+	seedMultiWorkspaceUser(t, db, phone, "owner-pw", "cashpw01")
 
 	w := postLogin(t, mountLoginAndSelect(db), map[string]string{
 		"phone":    phone,
@@ -120,14 +120,14 @@ func TestLogin_MultiWorkspace_ReturnsSelectorWithFlag(t *testing.T) {
 func TestSelectWorkspace_CorrectPassword_MintsJWT(t *testing.T) {
 	db := setupLoginDB(t)
 	phone := "3022798580"
-	userID, _, _, _, cashierWSID := seedMultiWorkspaceUser(t, db, phone, "owner-pw", "cashier-pw")
+	userID, _, _, _, cashierWSID := seedMultiWorkspaceUser(t, db, phone, "owner-pw", "cashpw01")
 
 	tempToken, err := auth.GenerateToken(userID, phone, "", loginTestJWTSecret)
 	require.NoError(t, err)
 
 	body, _ := json.Marshal(map[string]string{
 		"workspace_id": cashierWSID,
-		"password":     "cashier-pw",
+		"password":     "cashpw01",
 	})
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest(http.MethodPost, "/select-workspace", bytes.NewReader(body))
@@ -147,7 +147,7 @@ func TestSelectWorkspace_CorrectPassword_MintsJWT(t *testing.T) {
 func TestSelectWorkspace_CrossTenantPassword_Rejected(t *testing.T) {
 	db := setupLoginDB(t)
 	phone := "3022798580"
-	userID, _, _, _, cashierWSID := seedMultiWorkspaceUser(t, db, phone, "owner-pw", "cashier-pw")
+	userID, _, _, _, cashierWSID := seedMultiWorkspaceUser(t, db, phone, "owner-pw", "cashpw01")
 
 	tempToken, err := auth.GenerateToken(userID, phone, "", loginTestJWTSecret)
 	require.NoError(t, err)
@@ -172,14 +172,14 @@ func TestSelectWorkspace_CrossTenantPassword_Rejected(t *testing.T) {
 func TestSelectWorkspace_WrongPassword_Rejected(t *testing.T) {
 	db := setupLoginDB(t)
 	phone := "3022798580"
-	userID, _, _, ownerWSID, _ := seedMultiWorkspaceUser(t, db, phone, "owner-pw", "cashier-pw")
+	userID, _, _, ownerWSID, _ := seedMultiWorkspaceUser(t, db, phone, "owner-pw", "cashpw01")
 
 	tempToken, err := auth.GenerateToken(userID, phone, "", loginTestJWTSecret)
 	require.NoError(t, err)
 
 	body, _ := json.Marshal(map[string]string{
 		"workspace_id": ownerWSID,
-		"password":     "obviously-wrong",
+		"password":     "wrongpwd",
 	})
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest(http.MethodPost, "/select-workspace", bytes.NewReader(body))
@@ -196,7 +196,7 @@ func TestSelectWorkspace_WrongPassword_Rejected(t *testing.T) {
 func TestSelectWorkspace_MissingPassword_400(t *testing.T) {
 	db := setupLoginDB(t)
 	phone := "3022798580"
-	userID, _, _, ownerWSID, _ := seedMultiWorkspaceUser(t, db, phone, "owner-pw", "cashier-pw")
+	userID, _, _, ownerWSID, _ := seedMultiWorkspaceUser(t, db, phone, "owner-pw", "cashpw01")
 
 	tempToken, err := auth.GenerateToken(userID, phone, "", loginTestJWTSecret)
 	require.NoError(t, err)
@@ -229,8 +229,8 @@ func TestLogin_SingleWorkspace_UserPwdNotMatchingEmployee_FallsToSelector(t *tes
 	).Error)
 
 	phone := "3022798580"
-	personalPwd := "mi-clave-global"
-	tenantAssignedPwd := "lo-que-me-dio-brayan"
+	personalPwd := "globpwd1"
+	tenantAssignedPwd := "brayanpw"
 
 	userID := uuid.NewString()
 	require.NoError(t, db.Exec(
