@@ -36,4 +36,18 @@ type Product struct {
 	// stays a direct product and its sale path is untouched (AC-06).
 	IsRecipe bool    `gorm:"default:false" json:"is_recipe"`
 	RecipeID *string `gorm:"type:uuid;index" json:"recipe_id,omitempty"`
+
+	// ── Spec F029 — precios multi-tier por tipo de cliente ──────────────
+	// PriceTier1 / PriceTier2 / PriceTier3 are optional per-tier prices
+	// applied when Tenant.EnablePriceTiers is ON. Nullable (pointer)
+	// distinguishes "not configured" from "configured to 0". Cuando el
+	// tier elegido en POS no tiene precio para este producto, el carrito
+	// hace fallback al `price` retail y muestra una nota visual.
+	// Las columnas son ignoradas cuando la capacidad está OFF (AC-01).
+	// Explicit `column:` tags pin the snake_case + underscore-before-digit
+	// naming GORM otherwise omits (default would be `price_tier1`). The
+	// frontend, F027 importer mapper, and the spec all use `price_tier_1`.
+	PriceTier1 *float64 `gorm:"column:price_tier_1;type:numeric" json:"price_tier_1,omitempty"`
+	PriceTier2 *float64 `gorm:"column:price_tier_2;type:numeric" json:"price_tier_2,omitempty"`
+	PriceTier3 *float64 `gorm:"column:price_tier_3;type:numeric" json:"price_tier_3,omitempty"`
 }
