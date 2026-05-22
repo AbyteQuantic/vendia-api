@@ -71,3 +71,60 @@ func TestExpireQuotesJob_AuthAndRun(t *testing.T) {
 	require.NoError(t, db.Where("folio = ?", "COT-2026-9001").First(&stored).Error)
 	assert.Equal(t, models.QuoteStatusExpired, stored.Status)
 }
+
+// TestPromotionsPushJob_AuthAndRun covers the CRON_TOKEN gate of the
+// F033 promotions-push internal endpoint:
+//   - no CRON_TOKEN configured → 503 (fail closed)
+//   - wrong / missing Bearer   → 401
+//   - correct Bearer           → 200, runs the job and notifies the owner
+func TestPromotionsPushJob_AuthAndRun(t *testing.T) {
+	db := setupPromoDB(t)
+
+	// Seed a scheduled promotion whose send time has already arrived so
+	// a successful run reports work.
+	now := time.Now().UTC()
+	past := now.Add(-1 * time.Hour)
+	require.NoError(t, db.Create(&models.BroadcastPromotion{
+		BaseModel:    models.BaseModel{ID: "11111111-1111-1111-1111-111111111111"},
+		TenantID:     "cccccccc-cccc-cccc-cccc-cccccccccccc",
+		Title:        "Promo programada",
+		ValidFrom:    now,
+		ValidUntil:   now.AddDate(0, 0, 7),
+		PublicToken:  "22222222-2222-2222-2222-222222222222",
+		ScheduledFor: &past,
+	}).Error)
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/api/v1/internal/jobs/promotions-push", handlers.PromotionsPushJob(db))
+
+	call := func(authHeader string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest(http.MethodPost,
+			"/api/v1/internal/jobs/promotions-push", nil)
+		if authHeader != "" {
+			req.Header.Set("Authorization", authHeader)
+		}
+		r.ServeHTTP(w, req)
+		return w
+	}
+
+	t.Setenv("CRON_TOKEN", "")
+	assert.Equal(t, http.StatusServiceUnavailable, call("Bearer anything").Code,
+		"sin CRON_TOKEN el endpoint debe fallar cerrado (503)")
+
+	t.Setenv("CRON_TOKEN", "s3cr3t-cron-token")
+	assert.Equal(t, http.StatusUnauthorized, call("Bearer wrong").Code,
+		"token de cron incorrecto → 401")
+	assert.Equal(t, http.StatusUnauthorized, call("").Code,
+		"sin header Authorization → 401")
+
+	w := call("Bearer s3cr3t-cron-token")
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), `"notified":1`,
+		"el job debe reportar 1 promoción notificada")
+
+	var stored models.BroadcastPromotion
+	require.NoError(t, db.First(&stored, "id = ?", "11111111-1111-1111-1111-111111111111").Error)
+	assert.True(t, stored.SchedulePushSent, "la promo notificada queda marcada")
+}

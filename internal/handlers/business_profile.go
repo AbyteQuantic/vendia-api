@@ -69,6 +69,10 @@ func GetBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 				// `enable_quotes` para decidir si pinta la entrada
 				// "Cotizaciones" en el menú principal.
 				"enable_quotes": tenant.EnableQuotes,
+				// Spec F033: módulo de difusión de promociones. El frontend
+				// lee `enable_promotions` para decidir si pinta la entrada
+				// "Promociones" en el menú principal.
+				"enable_promotions": tenant.EnablePromotions,
 			},
 		})
 	}
@@ -96,6 +100,11 @@ type ProfileConfigInput struct {
 	// Spec F031 — módulo de cotizaciones. Toggle opcional, default OFF.
 	// Pointer para distinguir "no enviado" de "false explícito".
 	EnableQuotes *bool `json:"enable_quotes"`
+
+	// Spec F033 — módulo de difusión de promociones. Toggle opcional,
+	// default OFF. Pointer para distinguir "no enviado" de "false
+	// explícito".
+	EnablePromotions *bool `json:"enable_promotions"`
 }
 
 // UpdateBusinessProfile partially updates the tenant's business profile.
@@ -234,6 +243,12 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 			// validación adicional; mismo patrón que los toggles previos.
 			if req.Config.EnableQuotes != nil {
 				updates["enable_quotes"] = *req.Config.EnableQuotes
+			}
+
+			// Spec F033 — módulo de difusión de promociones. Toggle simple
+			// sin validación adicional; mismo patrón que los toggles previos.
+			if req.Config.EnablePromotions != nil {
+				updates["enable_promotions"] = *req.Config.EnablePromotions
 			}
 		}
 

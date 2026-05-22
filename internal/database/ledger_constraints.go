@@ -90,6 +90,15 @@ func applyLedgerIndexes(db *gorm.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_quotes_expiry_scan
 		 ON quotes (valid_until)
 		 WHERE status = 'enviada' AND deleted_at IS NULL`,
+
+		// Spec F033 — the promotions-push cron scans for scheduled
+		// broadcast promotions whose send time has arrived and that have
+		// not been pushed yet. A partial index on exactly that predicate
+		// keeps the 5-minute job O(matching rows) instead of a full scan.
+		`CREATE INDEX IF NOT EXISTS idx_broadcast_promotions_push_scan
+		 ON broadcast_promotions (scheduled_for)
+		 WHERE scheduled_for IS NOT NULL AND schedule_push_sent = false
+		   AND deleted_at IS NULL`,
 	}
 	for _, stmt := range statements {
 		if err := db.Exec(stmt).Error; err != nil {

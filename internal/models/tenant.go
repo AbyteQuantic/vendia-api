@@ -230,5 +230,16 @@ type Tenant struct {
 	// (Constitución Art. X).
 	EnableQuotes bool `gorm:"not null;default:false" json:"enable_quotes"`
 
+	// Spec F033 — EnablePromotions is the optional capability toggle for
+	// the customer-broadcast promotions module. Default OFF: the tiendas
+	// that don't run segmented WhatsApp campaigns never see the
+	// "Promociones" menu entry. When ON, the app exposes the broadcast
+	// promotions list, the promo form, the RFM audience selector and the
+	// assisted WhatsApp queue. Additive — every pre-F033 tenant reads
+	// false and behaves exactly as before (Constitución Art. X). Distinct
+	// from the legacy combo-promo module (migraciones 018-019), which is
+	// always available and unaffected by this flag.
+	EnablePromotions bool `gorm:"not null;default:false" json:"enable_promotions"`
+
 	Employees []Employee `gorm:"foreignKey:TenantID" json:"employees,omitempty"`
 }
