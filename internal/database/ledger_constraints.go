@@ -72,6 +72,24 @@ func applyLedgerIndexes(db *gorm.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_sales_customer_created
 		 ON sales (customer_id, created_at DESC)
 		 WHERE customer_id IS NOT NULL AND deleted_at IS NULL`,
+
+		// Spec F031 — idx_quotes_tenant_status_created backs the
+		// "Mis cotizaciones" list endpoint, whose default read is
+		// tenant-scoped, optionally status-filtered, ordered by
+		// created_at DESC. tenant_id leads (every read filters on it),
+		// status second (the FilterChips), created_at DESC last so the
+		// ORDER BY is served without a sort step. Partial on
+		// deleted_at IS NULL keeps soft-deleted drafts out of the index.
+		`CREATE INDEX IF NOT EXISTS idx_quotes_tenant_status_created
+		 ON quotes (tenant_id, status, created_at DESC)
+		 WHERE deleted_at IS NULL`,
+
+		// Spec F031 — the expire-quotes cron scans for sent quotes past
+		// their valid_until. A partial index on exactly that predicate
+		// keeps the hourly job O(matching rows) instead of a full scan.
+		`CREATE INDEX IF NOT EXISTS idx_quotes_expiry_scan
+		 ON quotes (valid_until)
+		 WHERE status = 'enviada' AND deleted_at IS NULL`,
 	}
 	for _, stmt := range statements {
 		if err := db.Exec(stmt).Error; err != nil {

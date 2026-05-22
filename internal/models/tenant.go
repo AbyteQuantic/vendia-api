@@ -221,5 +221,14 @@ type Tenant struct {
 	// as before (Constitución Art. X).
 	EnableCustomerManagement bool `gorm:"not null;default:false" json:"enable_customer_management"`
 
+	// Spec F031 — EnableQuotes is the optional capability toggle for the
+	// quotes module (cotizaciones). Default OFF: the 95% of tiendas /
+	// minimercados that sell de contado from a fixed inventory never see
+	// the "Cotizaciones" menu entry. When ON, the app exposes the quotes
+	// list, the quote form, and the public approval link. Additive —
+	// every pre-F031 tenant reads false and behaves exactly as before
+	// (Constitución Art. X).
+	EnableQuotes bool `gorm:"not null;default:false" json:"enable_quotes"`
+
 	Employees []Employee `gorm:"foreignKey:TenantID" json:"employees,omitempty"`
 }
