@@ -73,6 +73,10 @@ func GetBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 				// lee `enable_promotions` para decidir si pinta la entrada
 				// "Promociones" en el menú principal.
 				"enable_promotions": tenant.EnablePromotions,
+				// Spec F036: bandera del onboarding. El frontend la lee
+				// tras el login; si es `false`, muestra el wizard de
+				// onboarding antes del Dashboard.
+				"onboarding_completed": tenant.OnboardingCompleted,
 			},
 		})
 	}
@@ -123,6 +127,11 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 		Longitude       *float64            `json:"longitude"`
 		Config          *ProfileConfigInput `json:"config"`
 		CreditLabelMode *string             `json:"credit_label_mode"`
+
+		// Spec F036 — bandera del onboarding. El wizard la manda en
+		// `true` al terminar o al saltarse ("Configurar después").
+		// Pointer para distinguir "no enviado" de "false explícito".
+		OnboardingCompleted *bool `json:"onboarding_completed"`
 	}
 
 	return func(c *gin.Context) {
@@ -160,6 +169,11 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 		}
 		if req.Longitude != nil {
 			updates["longitude"] = *req.Longitude
+		}
+
+		// Spec F036: persist the onboarding flag when the wizard sends it.
+		if req.OnboardingCompleted != nil {
+			updates["onboarding_completed"] = *req.OnboardingCompleted
 		}
 
 		// Spec F028 FR-02: validate and persist credit_label_mode when provided.

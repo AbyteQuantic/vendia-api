@@ -241,5 +241,14 @@ type Tenant struct {
 	// always available and unaffected by this flag.
 	EnablePromotions bool `gorm:"not null;default:false" json:"enable_promotions"`
 
+	// Spec F036 — OnboardingCompleted gates the first-run onboarding
+	// wizard. Born false for every new registration so the merchant sees
+	// the 3-step wizard once; the wizard PATCHes it to true on finish or
+	// skip. Pre-F036 tenants are backfilled to true on boot
+	// (BackfillOnboardingCompleted) so an established business never sees
+	// the wizard. Additive, not-null with a false default — every
+	// pre-F036 read is well-defined (Constitución Art. X).
+	OnboardingCompleted bool `gorm:"not null;default:false" json:"onboarding_completed"`
+
 	Employees []Employee `gorm:"foreignKey:TenantID" json:"employees,omitempty"`
 }

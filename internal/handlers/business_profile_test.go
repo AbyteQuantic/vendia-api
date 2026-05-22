@@ -601,3 +601,41 @@ func TestUpdateBusinessProfile_DisableQuotes(t *testing.T) {
 	assert.Equal(t, false, resp["data"].(map[string]any)["enable_quotes"],
 		"enable_quotes=false debe desactivar la capacidad (F031 AC-13)")
 }
+
+// ── Spec F036 — onboarding flag en GET/PATCH /store/profile ─────────────────
+
+// TestGetBusinessProfile_IncludesOnboardingCompleted verifies AC-07: GET
+// /store/profile exposes onboarding_completed so the client knows whether
+// to show the first-run wizard. A freshly-registered tenant has it false.
+func TestGetBusinessProfile_IncludesOnboardingCompleted(t *testing.T) {
+	_, _, getRouter := setupProfileSuiteWithGet(t)
+
+	wg := getProfile(getRouter)
+	require.Equal(t, http.StatusOK, wg.Code, wg.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(wg.Body.Bytes(), &resp))
+	data := resp["data"].(map[string]any)
+
+	val, present := data["onboarding_completed"]
+	require.True(t, present, "GET /store/profile debe incluir onboarding_completed")
+	assert.Equal(t, false, val,
+		"un tenant recién registrado nace con onboarding_completed=false")
+}
+
+// TestUpdateBusinessProfile_PersistsOnboardingCompleted verifies AC-07: the
+// wizard's PATCH onboarding_completed=true persists and is reflected by GET.
+func TestUpdateBusinessProfile_PersistsOnboardingCompleted(t *testing.T) {
+	_, patchRouter, getRouter := setupProfileSuiteWithGet(t)
+
+	w := patchProfile(patchRouter, map[string]any{
+		"onboarding_completed": true,
+	})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	wg := getProfile(getRouter)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(wg.Body.Bytes(), &resp))
+	assert.Equal(t, true, resp["data"].(map[string]any)["onboarding_completed"],
+		"onboarding_completed=true debe persistir y reflejarse en GET (F036 AC-07)")
+}
