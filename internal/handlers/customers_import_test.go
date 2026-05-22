@@ -508,3 +508,108 @@ func TestImportCustomers_PhoneNormalizationDedup(t *testing.T) {
 	assert.Equal(t, float64(0), data2["created"])
 	assert.Equal(t, float64(1), data2["updated"])
 }
+
+// ── (F032 AC-03) Email format validation in the importer ────────────────────
+
+// A row carrying a malformed email is reported as failed, like any other
+// validation error, and is NOT persisted.
+func TestImportCustomers_InvalidEmail_Failed(t *testing.T) {
+	db := setupImportDB(t)
+	r := importRouter(db, "tenant-1", false)
+
+	payload := map[string]any{
+		"rows": []map[string]any{
+			{"name": "Cliente Malo", "phone": "3009998877", "email": "no-es-un-email"},
+		},
+		"dedup_strategy": "merge_by_phone",
+	}
+
+	w := postImport(r, payload)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	data := resp["data"].(map[string]any)
+	assert.Equal(t, float64(0), data["created"])
+
+	failed := data["failed"].([]any)
+	require.Len(t, failed, 1)
+	f := failed[0].(map[string]any)
+	assert.Contains(t, strings.ToLower(f["reason"].(string)), "email")
+
+	// Nothing persisted.
+	var count int64
+	db.Model(&models.Customer{}).Count(&count)
+	assert.Equal(t, int64(0), count)
+}
+
+// An empty email is valid — the field is optional (AC-07). The row is created.
+func TestImportCustomers_EmptyEmail_Created(t *testing.T) {
+	db := setupImportDB(t)
+	r := importRouter(db, "tenant-1", false)
+
+	payload := map[string]any{
+		"rows": []map[string]any{
+			{"name": "Sin Correo", "phone": "3001112222", "email": ""},
+		},
+		"dedup_strategy": "merge_by_phone",
+	}
+
+	w := postImport(r, payload)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	data := resp["data"].(map[string]any)
+	assert.Equal(t, float64(1), data["created"])
+	assert.Empty(t, data["failed"])
+}
+
+// A well-formed email is accepted and stored on the customer record.
+func TestImportCustomers_ValidEmail_Created(t *testing.T) {
+	db := setupImportDB(t)
+	r := importRouter(db, "tenant-1", false)
+
+	payload := map[string]any{
+		"rows": []map[string]any{
+			{"name": "Cliente Bueno", "phone": "3003334444", "email": "cliente@correo.com"},
+		},
+		"dedup_strategy": "merge_by_phone",
+	}
+
+	w := postImport(r, payload)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	data := resp["data"].(map[string]any)
+	assert.Equal(t, float64(1), data["created"])
+
+	var customer models.Customer
+	require.NoError(t, db.Where("phone = ?", "3003334444").First(&customer).Error)
+	assert.Equal(t, "cliente@correo.com", customer.Email)
+}
+
+// isValidEmail unit coverage — accepts valid forms, rejects malformed ones.
+func TestIsValidEmail(t *testing.T) {
+	valid := []string{
+		"a@b.co",
+		"don.pedro@gmail.com",
+		"cliente+ventas@ferreteria.com.co",
+	}
+	for _, e := range valid {
+		assert.True(t, isValidEmail(e), "expected %q to be valid", e)
+	}
+
+	invalid := []string{
+		"abc",
+		"abc@",
+		"@xyz.com",
+		"abc@xyz",
+		"abc xyz@mail.com",
+		"Nombre <a@b.co>",
+	}
+	for _, e := range invalid {
+		assert.False(t, isValidEmail(e), "expected %q to be invalid", e)
+	}
+}
