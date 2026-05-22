@@ -150,6 +150,17 @@ func Migrate(db *gorm.DB) error {
 		&models.Quote{},
 		&models.QuoteItem{},
 		&models.QuoteSequence{},
+		// Spec F033 — broadcast promotions module. Three new tables
+		// (BroadcastPromotion, BroadcastPromotionItem,
+		// BroadcastPromotionDelivery) plus the EnablePromotions bool on
+		// tenants picked up on the already-registered Tenant struct.
+		// Deliberately separate from the legacy combo-promo Promotion /
+		// PromotionItem tables above — the carousel module is untouched.
+		// Additive and backward-compatible — zero legacy rows, no
+		// backfill (Art. X).
+		&models.BroadcastPromotion{},
+		&models.BroadcastPromotionItem{},
+		&models.BroadcastPromotionDelivery{},
 	)
 	if err != nil {
 		return err

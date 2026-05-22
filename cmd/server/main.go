@@ -268,6 +268,21 @@ func main() {
 	// Bearer secret read from CRON_TOKEN inside the handler.
 	r.POST("/api/v1/internal/jobs/expire-quotes", handlers.ExpireQuotesJob(db))
 
+	// Spec F033 — public broadcast-promotion link (customer views the
+	// promo + tracks a visit). No JWT: the unguessable public_token is
+	// the only credential, same pattern as the public quote/fiado links.
+	// Rate-limited with the dedicated 5/15min/IP limiter so a scraper
+	// cannot enumerate tokens or spam the visit endpoint.
+	r.GET("/api/v1/public/broadcast-promotions/:token",
+		orderRateLimiter, handlers.GetPublicBroadcastPromotion(db))
+	r.POST("/api/v1/public/broadcast-promotions/:token/visit",
+		orderRateLimiter, handlers.VisitPublicBroadcastPromotion(db))
+
+	// Spec F033 — internal cron endpoint for the promotions-push batch
+	// job (runs every 5 min). Same auth model as expire-quotes: no JWT,
+	// gated by the shared CRON_TOKEN Bearer secret.
+	r.POST("/api/v1/internal/jobs/promotions-push", handlers.PromotionsPushJob(db))
+
 	// Public online orders (customer places order from catalog).
 	// Two paths hit the same handler: the legacy shape and the
 	// brief's KDS-Phase-1 naming. Keeping both means older admin-web
@@ -558,6 +573,19 @@ func main() {
 		v1.DELETE("/promotions/:uuid", handlers.DeletePromotion(db))
 		v1.GET("/promotions/suggestions", handlers.PromotionSuggestions(db))
 		v1.POST("/promotions/apply-to-pos", handlers.ApplyPromoToPOS(db))
+
+		// Spec F033 — broadcast promotions module. CRUD + RFM audience
+		// selector + assisted-queue deliveries. Deliberately under
+		// /broadcast-promotions so there is no path collision with the
+		// legacy combo /promotions routes above.
+		v1.GET("/broadcast-promotions", handlers.ListBroadcastPromotions(db))
+		v1.POST("/broadcast-promotions", handlers.CreateBroadcastPromotion(db))
+		v1.GET("/broadcast-promotions/:id", handlers.GetBroadcastPromotion(db))
+		v1.PATCH("/broadcast-promotions/:id", handlers.UpdateBroadcastPromotion(db))
+		v1.DELETE("/broadcast-promotions/:id", handlers.DeleteBroadcastPromotion(db))
+		v1.POST("/broadcast-promotions/:id/audience", handlers.BroadcastPromotionAudience(db))
+		v1.POST("/broadcast-promotions/:id/deliveries", handlers.CreateBroadcastDeliveries(db))
+		v1.PATCH("/broadcast-promotions/:id/deliveries/:deliveryId", handlers.UpdateBroadcastDelivery(db))
 
 		// Marketing — AI banner generator (auth'd, rate-limited via global middleware)
 		v1.POST("/marketing/generate-banner", handlers.GenerateMarketingBanner(geminiSvc, storageSvc))
