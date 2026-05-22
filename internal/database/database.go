@@ -161,6 +161,11 @@ func Migrate(db *gorm.DB) error {
 		&models.BroadcastPromotion{},
 		&models.BroadcastPromotionItem{},
 		&models.BroadcastPromotionDelivery{},
+		// Spec F036 — dashboard adaptativo + onboarding. Adds the
+		// OnboardingCompleted bool on the already-registered Tenant
+		// struct and the BootstrapMarker table that guards the one-shot
+		// onboarding backfill. Additive and backward-compatible (Art. X).
+		&models.BootstrapMarker{},
 	)
 	if err != nil {
 		return err

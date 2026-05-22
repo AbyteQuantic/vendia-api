@@ -76,6 +76,17 @@ func main() {
 		log.Printf("[BOOTSTRAP] tenant-subscription backfill seeded %d trials", created)
 	}
 
+	// Spec F036 self-heal: mark every tenant that existed before the
+	// F036 deploy as onboarding_completed=true so an established
+	// business never gets the first-run wizard. One-shot — guarded by a
+	// BootstrapMarker row, so subsequent boots are no-ops and a brand-new
+	// post-deploy tenant keeps onboarding_completed=false.
+	if touched, err := database.BackfillOnboardingCompleted(db); err != nil {
+		log.Printf("[BOOTSTRAP] onboarding backfill failed: %v", err)
+	} else if touched > 0 {
+		log.Printf("[BOOTSTRAP] onboarding backfill marked %d pre-F036 tenants", touched)
+	}
+
 	// ── Initialize external services (optional, nil-safe) ───────────────────
 	var geminiSvc *services.GeminiService
 	if cfg.GeminiAPIKey != "" {

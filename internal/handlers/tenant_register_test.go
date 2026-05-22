@@ -402,3 +402,90 @@ func TestTenantRegister_CapabilityToggles_NoToggles_Legacy(t *testing.T) {
 	assert.Equal(t, models.FeatureFlags{}, tenant.FeatureFlags,
 		"tienda_barrio sin toggles debe tener todos los flags en false (AC-07)")
 }
+
+// ── Spec F036 — auto-activación de capacidades por tipo de negocio ──────────
+
+// loadTenantByPhone fetches the freshly-registered tenant so a test can
+// assert on its enable_* columns and onboarding flag.
+func loadTenantByPhone(t *testing.T, db *gorm.DB, phone string) models.Tenant {
+	t.Helper()
+	var tenant models.Tenant
+	require.NoError(t, db.Where("phone = ?", phone).First(&tenant).Error)
+	return tenant
+}
+
+// TestTenantRegister_Restaurante_PreActivatesCapabilities verifies AC-05:
+// registering a restaurante pre-activates recetas/mesas/servicios. Recetas
+// is a by-type module (no column) so we assert the persisted enable_* set:
+// enable_tables + enable_services + enable_custom_billing ON.
+func TestTenantRegister_Restaurante_PreActivatesCapabilities(t *testing.T) {
+	db := setupTestDB(t)
+	phone := uniquePhone()
+	t.Cleanup(func() { cleanupByPhone(t, db, phone) })
+
+	payload := defaultPayload(phone)
+	payload.Business.Type = "restaurante"
+
+	w := postJSON(setupRouter(db), payload)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	tenant := loadTenantByPhone(t, db, phone)
+	assert.True(t, tenant.FeatureFlags.EnableTables,
+		"restaurante debe nacer con mesas activas (F036 §4.2)")
+	assert.True(t, tenant.FeatureFlags.EnableServices,
+		"restaurante debe nacer con servicios activos (F036 §4.2)")
+	assert.True(t, tenant.HasTables,
+		"has_tables se deriva de enable_tables")
+	assert.False(t, tenant.OnboardingCompleted,
+		"un tenant nuevo nace con onboarding_completed=false (F036 AC-07)")
+}
+
+// TestTenantRegister_TiendaBarrio_OnlyCore verifies AC-03/AC-05: a
+// tienda_barrio registers with every OPTIONAL capability OFF — only core.
+func TestTenantRegister_TiendaBarrio_OnlyCore(t *testing.T) {
+	db := setupTestDB(t)
+	phone := uniquePhone()
+	t.Cleanup(func() { cleanupByPhone(t, db, phone) })
+
+	payload := defaultPayload(phone) // Type defaults to tienda_barrio
+
+	w := postJSON(setupRouter(db), payload)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	tenant := loadTenantByPhone(t, db, phone)
+	assert.False(t, tenant.FeatureFlags.EnableTables,
+		"tienda_barrio no debe nacer con mesas")
+	assert.False(t, tenant.FeatureFlags.EnableServices,
+		"tienda_barrio no debe nacer con servicios")
+	assert.False(t, tenant.EnablePriceTiers,
+		"tienda_barrio no debe nacer con precios multi-tier")
+	assert.False(t, tenant.EnableCustomerManagement,
+		"tienda_barrio no debe nacer con gestión de clientes")
+	assert.False(t, tenant.EnableQuotes,
+		"tienda_barrio no debe nacer con cotizaciones")
+	assert.False(t, tenant.OnboardingCompleted,
+		"un tenant nuevo nace con onboarding_completed=false")
+}
+
+// TestTenantRegister_DepositoConstruccion_PreActivatesCapabilities verifies
+// AC-05: a depósito de construcción pre-activates cotizaciones, precios
+// multi-tier y gestión de clientes — the three standalone enable_* columns.
+func TestTenantRegister_DepositoConstruccion_PreActivatesCapabilities(t *testing.T) {
+	db := setupTestDB(t)
+	phone := uniquePhone()
+	t.Cleanup(func() { cleanupByPhone(t, db, phone) })
+
+	payload := defaultPayload(phone)
+	payload.Business.Type = "deposito_construccion"
+
+	w := postJSON(setupRouter(db), payload)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	tenant := loadTenantByPhone(t, db, phone)
+	assert.True(t, tenant.EnableQuotes,
+		"deposito_construccion debe nacer con cotizaciones (F036 §4.2)")
+	assert.True(t, tenant.EnablePriceTiers,
+		"deposito_construccion debe nacer con precios multi-tier (F036 §4.2)")
+	assert.True(t, tenant.EnableCustomerManagement,
+		"deposito_construccion debe nacer con gestión de clientes (F036 §4.2)")
+}

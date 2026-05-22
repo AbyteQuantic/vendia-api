@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 	"vendia-backend/internal/models"
+	"vendia-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -91,9 +92,18 @@ func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 			return
 		}
 
+		// Spec F036 §4.2 — pre-activate the capabilities typical of the
+		// chosen business type. The map is a DEFAULT, not a restriction:
+		// the merchant can flip any capability afterwards from the
+		// "Capacidades del negocio" screen. We OR the type-default
+		// toggles with whatever the registration form already collected
+		// (F023's HasTables/OffersServices/SellsByWeight) so an explicit
+		// "yes" in the form never gets dropped.
+		caps := services.DefaultCapabilitiesForTypes(businessTypes)
+
 		flags := models.DefaultFeatureFlags(businessTypes, models.CapabilityToggles{
-			Tables:          req.Config.HasTables,
-			Services:        req.Config.OffersServices,
+			Tables:          req.Config.HasTables || caps.Tables,
+			Services:        req.Config.OffersServices || caps.Services,
 			FractionalUnits: req.Config.SellsByWeight,
 		})
 
@@ -126,6 +136,16 @@ func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 				HasShowcases:  req.Config.HasShowcases,
 				HasTables:     req.Config.HasTables || flags.EnableTables,
 				LogoURL:       req.Business.LogoURL,
+				// Spec F036 §4.2 — standalone capability columns
+				// pre-activated from the business type. OR'd with no
+				// form input (the register form doesn't collect these),
+				// so they come straight from DefaultCapabilitiesForTypes.
+				// They remain freely togglable later (Spec F036 §4.3).
+				EnablePriceTiers:         caps.PriceTiers,
+				EnableCustomerManagement: caps.CustomerMgmt,
+				EnableQuotes:             caps.Quotes,
+				// OnboardingCompleted is left as its zero value (false):
+				// every new tenant sees the onboarding wizard once.
 			}
 			if err := tx.Create(&tenant).Error; err != nil {
 				return err
