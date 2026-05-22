@@ -143,6 +143,13 @@ func Migrate(db *gorm.DB) error {
 		// its status instead of holding a long synchronous request.
 		// Additive and backward-compatible (Art. X).
 		&models.AIJob{},
+		// Spec F031 — quotes module. Three new tables (Quote, QuoteItem,
+		// QuoteSequence) plus the EnableQuotes bool on tenants picked up
+		// on the already-registered Tenant struct. Additive and
+		// backward-compatible — zero legacy rows, no backfill (Art. X).
+		&models.Quote{},
+		&models.QuoteItem{},
+		&models.QuoteSequence{},
 	)
 	if err != nil {
 		return err

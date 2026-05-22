@@ -65,6 +65,10 @@ func GetBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 				// tile "Cliente" en el checkout y la entrada "Mis clientes"
 				// en el menú principal.
 				"enable_customer_management": tenant.EnableCustomerManagement,
+				// Spec F031: módulo de cotizaciones. El frontend lee
+				// `enable_quotes` para decidir si pinta la entrada
+				// "Cotizaciones" en el menú principal.
+				"enable_quotes": tenant.EnableQuotes,
 			},
 		})
 	}
@@ -88,6 +92,10 @@ type ProfileConfigInput struct {
 	// Spec F030 — gestión de clientes y ventas. Toggle opcional, default
 	// OFF. Pointer para distinguir "no enviado" de "false explícito".
 	EnableCustomerManagement *bool `json:"enable_customer_management"`
+
+	// Spec F031 — módulo de cotizaciones. Toggle opcional, default OFF.
+	// Pointer para distinguir "no enviado" de "false explícito".
+	EnableQuotes *bool `json:"enable_quotes"`
 }
 
 // UpdateBusinessProfile partially updates the tenant's business profile.
@@ -220,6 +228,12 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 			// adicional; sigue el mismo patrón que enable_price_tiers.
 			if req.Config.EnableCustomerManagement != nil {
 				updates["enable_customer_management"] = *req.Config.EnableCustomerManagement
+			}
+
+			// Spec F031 — módulo de cotizaciones. Toggle simple sin
+			// validación adicional; mismo patrón que los toggles previos.
+			if req.Config.EnableQuotes != nil {
+				updates["enable_quotes"] = *req.Config.EnableQuotes
 			}
 		}
 

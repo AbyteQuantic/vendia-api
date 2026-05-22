@@ -253,6 +253,21 @@ func main() {
 	r.GET("/api/v1/public/fiado/:token", handlers.GetFiadoPublic(db))
 	r.POST("/api/v1/public/fiado/:token/accept", handlers.AcceptFiado(db))
 
+	// Spec F031 — public quote link (customer views + approves/rejects).
+	// No JWT: the unguessable public_token is the only credential, same
+	// pattern as the public fiado handshake. Rate-limited with the same
+	// dedicated 5/15min/IP limiter the public-order routes use, so a
+	// scraper cannot enumerate tokens or spam the decide endpoint.
+	r.GET("/api/v1/public/quotes/:token",
+		orderRateLimiter, handlers.GetPublicQuote(db))
+	r.POST("/api/v1/public/quotes/:token/decide",
+		orderRateLimiter, handlers.DecidePublicQuote(db))
+
+	// Spec F031 — internal cron endpoint for the expire-quotes batch job.
+	// No JWT (Render Cron carries no tenant token); gated by a shared
+	// Bearer secret read from CRON_TOKEN inside the handler.
+	r.POST("/api/v1/internal/jobs/expire-quotes", handlers.ExpireQuotesJob(db))
+
 	// Public online orders (customer places order from catalog).
 	// Two paths hit the same handler: the legacy shape and the
 	// brief's KDS-Phase-1 naming. Keeping both means older admin-web
@@ -393,6 +408,17 @@ func main() {
 		// No captcha — endpoint is authenticated (JWT required, handled by v1 group).
 		// God-mode: super_admin + X-Tenant-Override header → import for any tenant.
 		v1.POST("/customers/import", handlers.ImportCustomers(db))
+
+		// Quotes (Spec F031 — cotizaciones). CRUD + lifecycle actions.
+		// All tenant-scoped via the JWT (Constitución Art. III).
+		v1.GET("/quotes", handlers.ListQuotes(db))
+		v1.POST("/quotes", handlers.CreateQuote(db))
+		v1.GET("/quotes/:id", handlers.GetQuote(db))
+		v1.PATCH("/quotes/:id", handlers.UpdateQuote(db))
+		v1.DELETE("/quotes/:id", handlers.DeleteQuote(db))
+		v1.POST("/quotes/:id/send", handlers.SendQuote(db))
+		v1.POST("/quotes/:id/mark-status", handlers.MarkQuoteStatus(db))
+		v1.POST("/quotes/:id/convert", handlers.ConvertQuote(db))
 
 		// Credits (El Fiar)
 		v1.GET("/credits", handlers.ListCredits(db))

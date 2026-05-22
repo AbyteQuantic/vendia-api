@@ -76,8 +76,13 @@ type Sale struct {
 	// label is presentation. Default 'retail' makes the legacy sale path
 	// invisible: every pre-F029 sale is interpreted as a retail sale.
 	// CHECK constraint enforces the four valid values at the DB layer.
-	PriceTier string     `gorm:"type:varchar(10);not null;default:'retail';check:price_tier IN ('retail','tier_1','tier_2','tier_3')" json:"price_tier"`
-	Items     []SaleItem `gorm:"foreignKey:SaleID" json:"items"`
+	PriceTier string `gorm:"type:varchar(10);not null;default:'retail';check:price_tier IN ('retail','tier_1','tier_2','tier_3')" json:"price_tier"`
+	// QuoteID links a sale back to the Quote it was converted from
+	// (Spec F031 AC-09). Nullable — only the converted-quote path sets
+	// it; every regular POS / web / table sale leaves it NULL. The
+	// reverse link lives on Quote.SaleID. Convention: *string + UUIDPtr.
+	QuoteID *string    `gorm:"type:uuid;index" json:"quote_id,omitempty"`
+	Items   []SaleItem `gorm:"foreignKey:SaleID" json:"items"`
 	// Customer is the optional identified-clientele relation (Spec F030).
 	// Populated only when the handler Preloads it; nil for anonymous
 	// sales. The receipt-time identity is still frozen in

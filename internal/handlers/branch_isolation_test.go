@@ -88,7 +88,9 @@ func setupIsolationDB(t *testing.T) *gorm.DB {
 			source TEXT NOT NULL DEFAULT 'POS',
 			receipt_image_url TEXT DEFAULT '',
 			-- Spec F029: tier metadata on the sale row.
-			price_tier TEXT NOT NULL DEFAULT 'retail'
+			price_tier TEXT NOT NULL DEFAULT 'retail',
+			-- Spec F031: link back to the converted quote.
+			quote_id TEXT
 		)`,
 		`CREATE TABLE sale_items (
 			id TEXT PRIMARY KEY, created_at DATETIME, updated_at DATETIME,

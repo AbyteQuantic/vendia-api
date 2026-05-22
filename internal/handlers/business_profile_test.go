@@ -2,6 +2,7 @@
 // Spec: specs/028-copy-fiar-credito-configurable/spec.md
 // Spec: specs/029-precios-multi-tier/spec.md
 // Spec: specs/030-administracion-clientes-no-tienda/spec.md
+// Spec: specs/031-cotizaciones/spec.md
 package handlers_test
 
 import (
@@ -539,4 +540,64 @@ func TestUpdateBusinessProfile_CustomerManagement_NoConfig_KeepsToggle(t *testin
 	require.NoError(t, db.Where("id = ?", tenantID).First(&after).Error)
 	assert.True(t, after.EnableCustomerManagement,
 		"un PATCH sin config no debe tocar enable_customer_management")
+}
+
+// ── T-09 (F031): módulo de cotizaciones — enable_quotes ─────────────────────
+
+// TestGetBusinessProfile_IncludesEnableQuotes verifies GET profile includes
+// enable_quotes, defaulting to false for a fresh tenant (F031 AC-01).
+func TestGetBusinessProfile_IncludesEnableQuotes(t *testing.T) {
+	_, _, getRouter := setupProfileSuiteWithGet(t)
+
+	w := getProfile(getRouter)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	data := resp["data"].(map[string]any)
+
+	assert.Equal(t, false, data["enable_quotes"],
+		"un tenant nuevo arranca con enable_quotes=false (F031 AC-01)")
+}
+
+// TestUpdateBusinessProfile_EnableQuotes verifies PATCH with
+// config.enable_quotes=true persists and is reflected in GET (F031 AC-01).
+func TestUpdateBusinessProfile_EnableQuotes(t *testing.T) {
+	_, patchRouter, getRouter := setupProfileSuiteWithGet(t)
+
+	w := patchProfile(patchRouter, map[string]any{
+		"config": map[string]any{"enable_quotes": true},
+	})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	wg := getProfile(getRouter)
+	require.Equal(t, http.StatusOK, wg.Code, wg.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(wg.Body.Bytes(), &resp))
+	data := resp["data"].(map[string]any)
+	assert.Equal(t, true, data["enable_quotes"],
+		"enable_quotes=true debe persistir y reflejarse en GET (F031 AC-01)")
+}
+
+// TestUpdateBusinessProfile_DisableQuotes verifies the toggle can be turned
+// OFF again after being enabled (F031 AC-13 — capacidad OFF devuelve la app
+// a su estado anterior).
+func TestUpdateBusinessProfile_DisableQuotes(t *testing.T) {
+	_, patchRouter, getRouter := setupProfileSuiteWithGet(t)
+
+	require.Equal(t, http.StatusOK, patchProfile(patchRouter, map[string]any{
+		"config": map[string]any{"enable_quotes": true},
+	}).Code)
+
+	w := patchProfile(patchRouter, map[string]any{
+		"config": map[string]any{"enable_quotes": false},
+	})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	wg := getProfile(getRouter)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(wg.Body.Bytes(), &resp))
+	assert.Equal(t, false, resp["data"].(map[string]any)["enable_quotes"],
+		"enable_quotes=false debe desactivar la capacidad (F031 AC-13)")
 }
