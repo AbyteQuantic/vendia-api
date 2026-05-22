@@ -1,8 +1,10 @@
 // Spec: specs/026-importador-clientes/spec.md
+//       specs/032-email-saliente/spec.md  (validación de formato email — AC-03)
 package handlers
 
 import (
 	"net/http"
+	"net/mail"
 	"strings"
 	"vendia-backend/internal/auth"
 	"vendia-backend/internal/middleware"
@@ -159,6 +161,14 @@ func processImportRow(db *gorm.DB, tenantID string, idx int, row importRow, resu
 		return &importFailedRow{RowIndex: idx, Reason: "nombre muy corto (mínimo 2 caracteres)"}
 	}
 
+	// ── Validate email format (F032 AC-03) ────────────────────────────────
+	// Email is optional: an empty value is accepted. When present, it must
+	// have a valid RFC 5322 address format, otherwise the row is reported
+	// as failed like any other validation error.
+	if row.Email != "" && !isValidEmail(row.Email) {
+		return &importFailedRow{RowIndex: idx, Reason: "email con formato inválido"}
+	}
+
 	// ── Normalize phone ───────────────────────────────────────────────────
 	normalizedPhone := ""
 	if row.Phone != "" {
@@ -237,4 +247,29 @@ func buildUpdateMap(row importRow, normalizedPhone string) map[string]any {
 func normalizeWhitespace(s string) string {
 	fields := strings.Fields(s)
 	return strings.Join(fields, " ")
+}
+
+// isValidEmail reports whether s is a syntactically valid email address.
+// It uses the standard library mail.ParseAddress, which accepts the RFC 5322
+// address grammar. An address with display name or no domain dot (e.g.
+// "user@host") is rejected so the result matches the frontend validator
+// (specs/032-email-saliente/spec.md AC-03).
+func isValidEmail(s string) bool {
+	addr, err := mail.ParseAddress(s)
+	if err != nil {
+		return false
+	}
+	// ParseAddress accepts forms like "Name <a@b>"; require the parsed
+	// address to equal the trimmed input and to contain a dotted domain.
+	if addr.Address != strings.TrimSpace(s) {
+		return false
+	}
+	at := strings.LastIndex(addr.Address, "@")
+	if at < 0 {
+		return false
+	}
+	domain := addr.Address[at+1:]
+	return strings.Contains(domain, ".") &&
+		!strings.HasPrefix(domain, ".") &&
+		!strings.HasSuffix(domain, ".")
 }
