@@ -586,6 +586,7 @@ func main() {
 		v1.POST("/broadcast-promotions/:id/audience", handlers.BroadcastPromotionAudience(db))
 		v1.POST("/broadcast-promotions/:id/deliveries", handlers.CreateBroadcastDeliveries(db))
 		v1.PATCH("/broadcast-promotions/:id/deliveries/:deliveryId", handlers.UpdateBroadcastDelivery(db))
+		v1.POST("/broadcast-promotions/upload-image", handlers.UploadBroadcastPromotionImage(db, storageSvc))
 
 		// Marketing — AI banner generator (auth'd, rate-limited via global middleware)
 		v1.POST("/marketing/generate-banner", handlers.GenerateMarketingBanner(geminiSvc, storageSvc))
