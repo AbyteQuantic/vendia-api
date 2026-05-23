@@ -92,16 +92,25 @@ func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 			return
 		}
 
-		// Spec F036 §4.2 — pre-activate the capabilities typical of the
-		// chosen business type. The map is a DEFAULT, not a restriction:
-		// the merchant can flip any capability afterwards from the
-		// "Capacidades del negocio" screen. We OR the type-default
-		// toggles with whatever the registration form already collected
-		// (F023's HasTables/OffersServices/SellsByWeight) so an explicit
-		// "yes" in the form never gets dropped.
-		caps := services.DefaultCapabilitiesForTypes(businessTypes)
+		// Spec F037 §4.1 — defaults mínimos. F036 used to pre-activate
+		// capabilities typical of the chosen business type; F037 reverts
+		// that so every type lands on the same minimal Dashboard and the
+		// merchant discovers extras through the capabilities reel. Two
+		// pieces work together here:
+		//
+		//   - DefaultCapabilitiesForTypes returns Capabilities{} for every
+		//     type (kept for forward compatibility).
+		//   - DefaultFeatureFlags is called with []string{} instead of
+		//     businessTypes so the food/services/deposito branches that
+		//     auto-activate EnableTables/KDS/Tips/Services/FractionalUnits
+		//     by type are bypassed. Only the form toggles a tendero
+		//     explicitly ticked propagate.
+		//
+		// Net result: all enable_* columns land FALSE at registration
+		// (AC-01), except the ones the registration form itself opted into.
+		caps := services.DefaultCapabilitiesForTypes(businessTypes) // F037: always Capabilities{}
 
-		flags := models.DefaultFeatureFlags(businessTypes, models.CapabilityToggles{
+		flags := models.DefaultFeatureFlags(nil, models.CapabilityToggles{
 			Tables:          req.Config.HasTables || caps.Tables,
 			Services:        req.Config.OffersServices || caps.Services,
 			FractionalUnits: req.Config.SellsByWeight,

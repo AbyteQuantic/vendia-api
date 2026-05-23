@@ -3,6 +3,7 @@
 // Spec: specs/029-precios-multi-tier/spec.md
 // Spec: specs/030-administracion-clientes-no-tienda/spec.md
 // Spec: specs/031-cotizaciones/spec.md
+// Spec: specs/037-reel-capacidades-dashboard/spec.md
 package handlers_test
 
 import (
@@ -638,4 +639,95 @@ func TestUpdateBusinessProfile_PersistsOnboardingCompleted(t *testing.T) {
 	require.NoError(t, json.Unmarshal(wg.Body.Bytes(), &resp))
 	assert.Equal(t, true, resp["data"].(map[string]any)["onboarding_completed"],
 		"onboarding_completed=true debe persistir y reflejarse en GET (F036 AC-07)")
+}
+
+// ── Spec F037 — capacidades del reel del Dashboard ──────────────────────────
+
+// TestGetBusinessProfile_IncludesF037Capabilities verifies AC-11: GET
+// /store/profile exposes every F037 capability flag so the Dashboard
+// reel can decide which cards to show. A freshly-registered tenant has
+// every flag false (the reel will surface them all).
+func TestGetBusinessProfile_IncludesF037Capabilities(t *testing.T) {
+	_, _, getRouter := setupProfileSuiteWithGet(t)
+
+	wg := getProfile(getRouter)
+	require.Equal(t, http.StatusOK, wg.Code, wg.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(wg.Body.Bytes(), &resp))
+	data := resp["data"].(map[string]any)
+
+	cases := []string{
+		"enable_marketing_hub",
+		"enable_recipes",
+		"enable_supplies",
+		"enable_furniture_jobs",
+		"enable_purchase_orders",
+	}
+	for _, key := range cases {
+		val, present := data[key]
+		require.True(t, present, "GET /store/profile debe incluir %s (F037)", key)
+		assert.Equal(t, false, val,
+			"un tenant nuevo arranca con %s=false (F037 AC-01)", key)
+	}
+}
+
+// TestUpdateBusinessProfile_PersistsF037Capabilities verifies AC-11: a
+// PATCH that activates each F037 capability persists and is reflected
+// by the GET endpoint. The reel relies on this round-trip to update its
+// cards after the tendero toggles a capability.
+func TestUpdateBusinessProfile_PersistsF037Capabilities(t *testing.T) {
+	_, patchRouter, getRouter := setupProfileSuiteWithGet(t)
+
+	w := patchProfile(patchRouter, map[string]any{
+		"config": map[string]any{
+			"enable_marketing_hub":   true,
+			"enable_recipes":         true,
+			"enable_supplies":        true,
+			"enable_furniture_jobs":  true,
+			"enable_purchase_orders": true,
+		},
+	})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	wg := getProfile(getRouter)
+	require.Equal(t, http.StatusOK, wg.Code, wg.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(wg.Body.Bytes(), &resp))
+	data := resp["data"].(map[string]any)
+
+	cases := []string{
+		"enable_marketing_hub",
+		"enable_recipes",
+		"enable_supplies",
+		"enable_furniture_jobs",
+		"enable_purchase_orders",
+	}
+	for _, key := range cases {
+		assert.Equal(t, true, data[key],
+			"%s=true debe persistir y reflejarse en GET (F037 AC-11)", key)
+	}
+}
+
+// TestUpdateBusinessProfile_DisableF037Capabilities verifies that each
+// F037 capability can be turned OFF again after being activated —
+// mirrors the F031/F033 disable contract.
+func TestUpdateBusinessProfile_DisableF037Capabilities(t *testing.T) {
+	_, patchRouter, getRouter := setupProfileSuiteWithGet(t)
+
+	require.Equal(t, http.StatusOK, patchProfile(patchRouter, map[string]any{
+		"config": map[string]any{"enable_marketing_hub": true},
+	}).Code)
+
+	w := patchProfile(patchRouter, map[string]any{
+		"config": map[string]any{"enable_marketing_hub": false},
+	})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	wg := getProfile(getRouter)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(wg.Body.Bytes(), &resp))
+	assert.Equal(t, false, resp["data"].(map[string]any)["enable_marketing_hub"],
+		"enable_marketing_hub=false debe desactivar la capacidad (F037)")
 }

@@ -1,29 +1,22 @@
 // Spec: specs/036-dashboard-adaptativo-onboarding/spec.md
+// Spec: specs/037-reel-capacidades-dashboard/spec.md
 package services
 
-import "vendia-backend/internal/models"
-
-// Capabilities is the set of optional business capabilities that F036's
-// onboarding pre-activates from the merchant's business type.
+// Capabilities is the set of optional business capabilities the
+// registration handler could pre-activate from a tenant's business type.
 //
-// The fields split into two groups by where they are persisted:
+// Historical context (F036): the map used to switch on business_type and
+// turn ON specific capabilities (e.g. restaurante → recetas+mesas+
+// servicios). F037 reverts that — every type now resolves to the empty
+// set so a new tenant lands on a minimal Dashboard and discovers extras
+// from the capabilities reel.
 //
-//   - Tables / Services / PriceTiers / CustomerMgmt / Quotes — each maps
-//     to a real enable_* column on the Tenant row. The register handler
-//     writes these to the database so the Dashboard's "optional" layer
-//     renders the right modules.
-//   - Recipes / FurnitureJobs — have NO dedicated enable_* column; the
-//     Dashboard renders Recetas / Trabajos de Muebles in its "by type"
-//     layer, derived directly from business_type. They live here only so
-//     the Flutter onboarding wizard, which mirrors this map, can
-//     pre-check the matching checklist items.
-//
-// IMPORTANT: this map is the DEFAULT applied at registration only — it
-// is NOT a restriction. Any capability stays activable by ANY business
-// type through the normal PATCH /api/v1/store/profile flow (Spec F036
-// §4.2). Do not add type-based validation that blocks a capability.
+// The struct stays alive — the registration handler still calls
+// DefaultCapabilitiesForTypes, and a future spec could re-enable type-
+// based defaults by re-populating the switch body — but every field is
+// currently dead at registration time.
 type Capabilities struct {
-	// Recipes — recetas y platos. By-type module, no enable_* column.
+	// Recipes — recetas y platos.
 	Recipes bool
 	// Tables — mesas. Persisted via FeatureFlags.EnableTables.
 	Tables bool
@@ -35,36 +28,27 @@ type Capabilities struct {
 	CustomerMgmt bool
 	// Quotes — cotizaciones. Persisted via Tenant.EnableQuotes.
 	Quotes bool
-	// FurnitureJobs — trabajos de muebles. By-type module, no enable_* column.
+	// FurnitureJobs — trabajos de muebles.
 	FurnitureJobs bool
 }
 
 // DefaultCapabilitiesForType returns the capabilities pre-activated for a
-// single business type at registration time (Spec F036 §4.2). An unknown
-// type — including tienda_barrio / minimercado — falls back to the empty
-// (core-only) set: a fast-sale shop gets zero optional modules so its
-// Dashboard stays uncluttered.
-func DefaultCapabilitiesForType(t string) Capabilities {
-	switch t {
-	case models.BusinessTypeRestaurante, models.BusinessTypeComidasRapidas:
-		return Capabilities{Recipes: true, Tables: true, Services: true}
-	case models.BusinessTypeBar:
-		return Capabilities{Tables: true, Services: true}
-	case models.BusinessTypeDepositoConstruccion:
-		return Capabilities{Quotes: true, PriceTiers: true, CustomerMgmt: true}
-	case models.BusinessTypeManufactura, models.BusinessTypeReparacionMuebles:
-		return Capabilities{Quotes: true, CustomerMgmt: true, FurnitureJobs: true}
-	case models.BusinessTypeEmprendimientoGen:
-		return Capabilities{CustomerMgmt: true}
-	default: // tienda_barrio, minimercado, unknown — solo core
-		return Capabilities{}
-	}
+// single business type at registration time.
+//
+// Spec F037 §4.1: every type — including the legacy ones that F036
+// pre-activated — now resolves to the empty (core-only) set. The
+// merchant arrives at a minimal Dashboard and turns capabilities on
+// through the reel + BusinessCapabilitiesScreen. The function stays as
+// the single seam where type-based defaults would land if we ever need
+// them again.
+func DefaultCapabilitiesForType(_ string) Capabilities {
+	return Capabilities{}
 }
 
 // DefaultCapabilitiesForTypes unions the defaults of every business type
-// a tenant registered with. A tenant can carry several types
-// (business_types is an array); the result is the OR of each type's
-// capabilities — capabilities only add, never cancel each other.
+// a tenant registered with. Under F037 every per-type default is empty,
+// so the union is always Capabilities{}; the function is kept so callers
+// don't need to special-case the empty input.
 func DefaultCapabilitiesForTypes(types []string) Capabilities {
 	var out Capabilities
 	for _, t := range types {

@@ -250,5 +250,39 @@ type Tenant struct {
 	// pre-F036 read is well-defined (Constitución Art. X).
 	OnboardingCompleted bool `gorm:"not null;default:false" json:"onboarding_completed"`
 
+	// Spec F037 — capabilities migrated from byType→optional. F037 reverts
+	// F036's auto-activation by business_type: every tenant now arrives with
+	// zero optional capabilities and discovers them through the Dashboard
+	// reel. To keep PRE-existing tenants from losing access to modules they
+	// were already using (recetas, insumos, trabajos de muebles, órdenes de
+	// compra, marketing hub), the boot-time backfills flip the matching
+	// enable_* flag to true when the tenant has at least one row in the
+	// corresponding table. Additive, not-null with false default — every
+	// pre-F037 read is well-defined (Constitución Art. X).
+
+	// EnableMarketingHub gates the Marketing Hub bundle (combo-promos +
+	// banners + public catalog config) on the Dashboard. Default OFF — the
+	// 95% of tiendas that don't run campaigns never see the "Marketing"
+	// card. Backfilled to true for tenants with at least one Promotion row.
+	EnableMarketingHub bool `gorm:"not null;default:false" json:"enable_marketing_hub"`
+
+	// EnableRecipes gates the Recetas module on the Dashboard. Default OFF.
+	// Backfilled to true for tenants with at least one Recipe row.
+	EnableRecipes bool `gorm:"not null;default:false" json:"enable_recipes"`
+
+	// EnableSupplies gates the Insumos module on the Dashboard. Default OFF.
+	// Backfilled to true for tenants with at least one Ingredient row.
+	EnableSupplies bool `gorm:"not null;default:false" json:"enable_supplies"`
+
+	// EnableFurnitureJobs gates the Trabajos de Muebles module on the
+	// Dashboard. Default OFF. Backfilled to true for tenants with at least
+	// one WorkOrder row.
+	EnableFurnitureJobs bool `gorm:"not null;default:false" json:"enable_furniture_jobs"`
+
+	// EnablePurchaseOrders gates the Órdenes de Compra module on the
+	// Dashboard. Default OFF. Backfilled to true for tenants with at least
+	// one PurchaseOrder row.
+	EnablePurchaseOrders bool `gorm:"not null;default:false" json:"enable_purchase_orders"`
+
 	Employees []Employee `gorm:"foreignKey:TenantID" json:"employees,omitempty"`
 }

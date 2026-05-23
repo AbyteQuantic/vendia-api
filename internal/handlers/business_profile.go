@@ -2,6 +2,7 @@
 // Spec: specs/028-copy-fiar-credito-configurable/spec.md
 // Spec: specs/029-precios-multi-tier/spec.md
 // Spec: specs/030-administracion-clientes-no-tienda/spec.md
+// Spec: specs/037-reel-capacidades-dashboard/spec.md
 package handlers
 
 import (
@@ -77,6 +78,16 @@ func GetBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 				// tras el login; si es `false`, muestra el wizard de
 				// onboarding antes del Dashboard.
 				"onboarding_completed": tenant.OnboardingCompleted,
+				// Spec F037 — capacidades movidas de byType→opcional.
+				// El frontend lee estos flags para decidir si pinta las
+				// cards correspondientes en el Dashboard (Marketing Hub,
+				// Recetas, Insumos, Trabajos de Muebles, Órdenes de
+				// Compra). Default false; activables desde el reel.
+				"enable_marketing_hub":   tenant.EnableMarketingHub,
+				"enable_recipes":         tenant.EnableRecipes,
+				"enable_supplies":        tenant.EnableSupplies,
+				"enable_furniture_jobs":  tenant.EnableFurnitureJobs,
+				"enable_purchase_orders": tenant.EnablePurchaseOrders,
 			},
 		})
 	}
@@ -109,6 +120,16 @@ type ProfileConfigInput struct {
 	// default OFF. Pointer para distinguir "no enviado" de "false
 	// explícito".
 	EnablePromotions *bool `json:"enable_promotions"`
+
+	// Spec F037 — capacidades reclasificadas de byType→opcional. Cada
+	// flag es un toggle simple que el reel del Dashboard puede activar
+	// vía PATCH. Default OFF. Pointer para distinguir "no enviado" de
+	// "false explícito".
+	EnableMarketingHub   *bool `json:"enable_marketing_hub"`
+	EnableRecipes        *bool `json:"enable_recipes"`
+	EnableSupplies       *bool `json:"enable_supplies"`
+	EnableFurnitureJobs  *bool `json:"enable_furniture_jobs"`
+	EnablePurchaseOrders *bool `json:"enable_purchase_orders"`
 }
 
 // UpdateBusinessProfile partially updates the tenant's business profile.
@@ -263,6 +284,25 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 			// sin validación adicional; mismo patrón que los toggles previos.
 			if req.Config.EnablePromotions != nil {
 				updates["enable_promotions"] = *req.Config.EnablePromotions
+			}
+
+			// Spec F037 — capacidades del reel del Dashboard. Toggles
+			// simples sin validación adicional; mismo patrón que los
+			// toggles previos.
+			if req.Config.EnableMarketingHub != nil {
+				updates["enable_marketing_hub"] = *req.Config.EnableMarketingHub
+			}
+			if req.Config.EnableRecipes != nil {
+				updates["enable_recipes"] = *req.Config.EnableRecipes
+			}
+			if req.Config.EnableSupplies != nil {
+				updates["enable_supplies"] = *req.Config.EnableSupplies
+			}
+			if req.Config.EnableFurnitureJobs != nil {
+				updates["enable_furniture_jobs"] = *req.Config.EnableFurnitureJobs
+			}
+			if req.Config.EnablePurchaseOrders != nil {
+				updates["enable_purchase_orders"] = *req.Config.EnablePurchaseOrders
 			}
 		}
 

@@ -1,4 +1,5 @@
 // Spec: specs/036-dashboard-adaptativo-onboarding/spec.md
+// Spec: specs/037-reel-capacidades-dashboard/spec.md
 package services_test
 
 import (
@@ -11,94 +12,51 @@ import (
 )
 
 // TestDefaultCapabilitiesForType is the tabulated contract for the
-// type→capabilities default map (Spec F036 §4.2). It pins the exact set
-// of pre-activated capabilities for each of the 9 canonical business
-// types. The map is the DEFAULT applied at registration only — it is
-// NOT a restriction; any capability stays activable by any type via the
-// normal PATCH /store/profile flow.
+// type→capabilities default map.
+//
+// Spec F036 §4.2 originally pre-activated specific capabilities per
+// business_type at registration. Spec F037 reverts that: every type now
+// resolves to the empty (core-only) set so the merchant arrives at a
+// minimal Dashboard and discovers extra modules through the reel. The
+// function stays alive for forward compatibility — should we ever return
+// to type-based defaults, only the switch body changes.
 func TestDefaultCapabilitiesForType(t *testing.T) {
-	tests := []struct {
+	allTypes := []struct {
 		name string
 		typ  string
-		want services.Capabilities
 	}{
-		{
-			name: "tienda_barrio → solo core",
-			typ:  models.BusinessTypeTiendaBarrio,
-			want: services.Capabilities{},
-		},
-		{
-			name: "minimercado → solo core",
-			typ:  models.BusinessTypeMinimercado,
-			want: services.Capabilities{},
-		},
-		{
-			name: "restaurante → recetas + mesas + servicios",
-			typ:  models.BusinessTypeRestaurante,
-			want: services.Capabilities{Recipes: true, Tables: true, Services: true},
-		},
-		{
-			name: "comidas_rapidas → recetas + mesas + servicios",
-			typ:  models.BusinessTypeComidasRapidas,
-			want: services.Capabilities{Recipes: true, Tables: true, Services: true},
-		},
-		{
-			name: "bar → mesas + servicios",
-			typ:  models.BusinessTypeBar,
-			want: services.Capabilities{Tables: true, Services: true},
-		},
-		{
-			name: "deposito_construccion → cotizaciones + price tiers + clientes",
-			typ:  models.BusinessTypeDepositoConstruccion,
-			want: services.Capabilities{Quotes: true, PriceTiers: true, CustomerMgmt: true},
-		},
-		{
-			name: "manufactura → cotizaciones + clientes + trabajos de muebles",
-			typ:  models.BusinessTypeManufactura,
-			want: services.Capabilities{Quotes: true, CustomerMgmt: true, FurnitureJobs: true},
-		},
-		{
-			name: "reparacion_muebles → cotizaciones + clientes + trabajos de muebles",
-			typ:  models.BusinessTypeReparacionMuebles,
-			want: services.Capabilities{Quotes: true, CustomerMgmt: true, FurnitureJobs: true},
-		},
-		{
-			name: "emprendimiento_general → clientes",
-			typ:  models.BusinessTypeEmprendimientoGen,
-			want: services.Capabilities{CustomerMgmt: true},
-		},
-		{
-			name: "tipo desconocido → solo core (fallback seguro)",
-			typ:  "tipo_inexistente",
-			want: services.Capabilities{},
-		},
+		{"tienda_barrio → solo core (F037)", models.BusinessTypeTiendaBarrio},
+		{"minimercado → solo core (F037)", models.BusinessTypeMinimercado},
+		{"restaurante → solo core (F037)", models.BusinessTypeRestaurante},
+		{"comidas_rapidas → solo core (F037)", models.BusinessTypeComidasRapidas},
+		{"bar → solo core (F037)", models.BusinessTypeBar},
+		{"deposito_construccion → solo core (F037)", models.BusinessTypeDepositoConstruccion},
+		{"manufactura → solo core (F037)", models.BusinessTypeManufactura},
+		{"reparacion_muebles → solo core (F037)", models.BusinessTypeReparacionMuebles},
+		{"emprendimiento_general → solo core (F037)", models.BusinessTypeEmprendimientoGen},
+		{"tipo desconocido → solo core (fallback seguro)", "tipo_inexistente"},
 	}
 
-	for _, tc := range tests {
+	for _, tc := range allTypes {
 		t.Run(tc.name, func(t *testing.T) {
 			got := services.DefaultCapabilitiesForType(tc.typ)
-			assert.Equal(t, tc.want, got)
+			assert.Equal(t, services.Capabilities{}, got,
+				"F037: ningún tipo de negocio pre-activa capacidades opcionales")
 		})
 	}
 }
 
 // TestDefaultCapabilitiesForTypes verifies the multi-type union helper:
-// a tenant registered with several types gets the OR of every type's
-// defaults — capabilities only add, never cancel each other.
+// under F037 every type resolves to Capabilities{}, so the OR of any
+// combination is still empty. Function survives so its contract stays
+// stable if we ever revert to type-based defaults.
 func TestDefaultCapabilitiesForTypes(t *testing.T) {
 	got := services.DefaultCapabilitiesForTypes([]string{
 		models.BusinessTypeRestaurante,
 		models.BusinessTypeDepositoConstruccion,
 	})
-	want := services.Capabilities{
-		Recipes:      true, // restaurante
-		Tables:       true, // restaurante
-		Services:     true, // restaurante
-		Quotes:       true, // deposito
-		PriceTiers:   true, // deposito
-		CustomerMgmt: true, // deposito
-	}
-	assert.Equal(t, want, got)
+	assert.Equal(t, services.Capabilities{}, got,
+		"F037: la unión de múltiples tipos sigue siendo vacía")
 }
 
 // TestDefaultCapabilitiesForTypes_Empty verifies the no-type case

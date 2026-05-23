@@ -87,6 +87,21 @@ func main() {
 		log.Printf("[BOOTSTRAP] onboarding backfill marked %d pre-F036 tenants", touched)
 	}
 
+	// Spec F037 self-heal: F037 reclassifies several modules from
+	// byType→opt-in (Marketing Hub, Recetas, Insumos, Trabajos de
+	// Muebles, Órdenes de Compra). Without this backfill, every tenant
+	// who was already using one of those modules would see it disappear
+	// from the Dashboard the moment F037 deploys. Five one-shot
+	// backfills run here in sequence, each guarded by its own
+	// BootstrapMarker — a tenant with at least one row in the matching
+	// source table gets its enable_* flag flipped to true. Subsequent
+	// boots are no-ops.
+	if touched, err := database.BackfillF037Capabilities(db); err != nil {
+		log.Printf("[BOOTSTRAP] F037 capability backfill failed: %v", err)
+	} else if touched > 0 {
+		log.Printf("[BOOTSTRAP] F037 capability backfill flipped %d tenant×flags", touched)
+	}
+
 	// ── Initialize external services (optional, nil-safe) ───────────────────
 	var geminiSvc *services.GeminiService
 	if cfg.GeminiAPIKey != "" {
