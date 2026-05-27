@@ -36,7 +36,7 @@ func setupPromoDB(t *testing.T) *gorm.DB {
 	// Notifications uses a Postgres-only gen_random_uuid() default that
 	// SQLite can't parse; stand up an equivalent table by hand (the id
 	// is filled by the model's BeforeCreate hook). The promotions-push
-	// job writes here.
+	// job writes here. `data` is the F38 deep-link payload column.
 	require.NoError(t, db.Exec(`
 		CREATE TABLE IF NOT EXISTS notifications (
 			id TEXT PRIMARY KEY,
@@ -45,7 +45,8 @@ func setupPromoDB(t *testing.T) *gorm.DB {
 			title TEXT NOT NULL,
 			body TEXT DEFAULT '',
 			type TEXT DEFAULT 'info',
-			is_read INTEGER DEFAULT 0
+			is_read INTEGER DEFAULT 0,
+			data TEXT DEFAULT '{}'
 		)
 	`).Error)
 	return db

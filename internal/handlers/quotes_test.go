@@ -45,7 +45,7 @@ func setupQuoteDB(t *testing.T) *gorm.DB {
 	// that SQLite can't parse. Rather than mutate the production model,
 	// stand up an equivalent table by hand — the id is filled in by the
 	// app's BeforeCreate hook in this test (same pattern as
-	// table_sessions_test.go).
+	// table_sessions_test.go). `data` is the F38 deep-link payload.
 	require.NoError(t, db.Exec(`
 		CREATE TABLE IF NOT EXISTS notifications (
 			id TEXT PRIMARY KEY,
@@ -54,7 +54,8 @@ func setupQuoteDB(t *testing.T) *gorm.DB {
 			title TEXT NOT NULL,
 			body TEXT DEFAULT '',
 			type TEXT DEFAULT 'info',
-			is_read INTEGER DEFAULT 0
+			is_read INTEGER DEFAULT 0,
+			data TEXT DEFAULT '{}'
 		)
 	`).Error)
 	return db

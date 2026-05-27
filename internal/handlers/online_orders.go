@@ -145,11 +145,15 @@ func PublicCreateOnlineOrder(db *gorm.DB) gin.HandlerFunc {
 			req.AcceptedTerms,
 		)
 
-		// Create notification for the tenant
-		CreateNotification(db, tenant.ID,
+		// Create notification for the tenant. The order_id deep-links
+		// the in-app tile straight to the KDS detail screen.
+		CreateNotificationWithData(db, tenant.ID,
 			"Nuevo pedido en línea",
 			fmt.Sprintf("%s pidió por $%.0f (%s)", req.CustomerName, total, delivery),
 			"online_order",
+			models.NotificationData{
+				"order_id": order.ID,
+			},
 		)
 
 		c.JSON(http.StatusCreated, gin.H{
