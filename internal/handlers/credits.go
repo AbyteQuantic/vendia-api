@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
@@ -19,6 +20,14 @@ func ListCredits(db *gorm.DB) gin.HandlerFunc {
 		p := parsePagination(c)
 		status := c.Query("status")
 		groupBy := c.Query("group_by")
+		// F40 — Cuaderno tab Activos deep-link: the grouped list returns
+		// one row per customer with `accounts_count` (1..N) and exposes
+		// no account id. When the merchant taps a row, the client needs
+		// to load the live accounts for that customer to either route
+		// directly (count=1) or show a picker (count>1). Filtering the
+		// flat list by `customer_id` is the simplest API surface — no
+		// new endpoint, additive query param, scoped to the same tenant.
+		customerID := strings.TrimSpace(c.Query("customer_id"))
 
 		scope := ResolveBranchScope(c, db)
 		if scope.NotOwned {
@@ -39,6 +48,18 @@ func ListCredits(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		query := db.Model(&models.CreditAccount{}).Where("tenant_id = ?", tenantID)
+		if customerID != "" {
+			// Defensive: ignore malformed ids rather than 400, so a stale
+			// front sending an old id format doesn't crash the screen —
+			// it just returns an empty list, which the UI handles.
+			if models.IsValidUUID(customerID) {
+				query = query.Where("customer_id = ?", customerID)
+			} else {
+				c.JSON(http.StatusOK, newPaginatedResponse(
+					[]models.CreditAccount{}, 0, p))
+				return
+			}
+		}
 		// Bucket semantics for the cuaderno tabs (PO mandate — tabs
 		// must be mutually exclusive):
 		//

@@ -292,6 +292,92 @@ func TestListCredits_StatusPending_FiltersByFiadoStatus(t *testing.T) {
 	assert.Equal(t, custA, body.Data[0]["customer_id"])
 }
 
+// TestListCredits_FilterByCustomerID pins the F40 contract: the
+// cuaderno's "Activos" tap path needs to resolve every live ledger
+// row for a customer so it can route directly (count=1) or show a
+// picker (count>1). One row for the target customer + one for
+// another customer + a paid row for the target — the target's
+// paid row MUST still come back (the client filters by status
+// client-side; the API is dumb about that).
+func TestListCredits_FilterByCustomerID(t *testing.T) {
+	db := setupCreditsDB(t)
+	tenantID := "tenant-cust-filter"
+	require.NoError(t, db.Exec(`INSERT INTO tenants (id, business_name, created_at) VALUES (?, ?, ?)`,
+		tenantID, "Tienda Filter", time.Now()).Error)
+
+	target := "f0000000-0000-0000-0000-000000000001"
+	other := "f0000000-0000-0000-0000-000000000002"
+	require.NoError(t, db.Exec(`
+		INSERT INTO customers (id, created_at, updated_at, tenant_id, name, phone) VALUES
+			(?, datetime('now'), datetime('now'), ?, ?, ?),
+			(?, datetime('now'), datetime('now'), ?, ?, ?)`,
+		target, tenantID, "Viviana", "3001111111",
+		other, tenantID, "Pedro", "3002222222").Error)
+
+	now := time.Now()
+	require.NoError(t, db.Exec(`
+		INSERT INTO credit_accounts
+			(id, created_at, updated_at, tenant_id, customer_id, total_amount, paid_amount, status, fiado_status)
+		VALUES
+			(?, ?, ?, ?, ?, 26900, 0,    'open', 'accepted'),
+			(?, ?, ?, ?, ?, 15450, 0,    'open', 'accepted'),
+			(?, ?, ?, ?, ?, 9000,  9000, 'paid', 'accepted'),
+			(?, ?, ?, ?, ?, 5000,  0,    'open', 'accepted')`,
+		"a0000000-0000-0000-0000-000000000001", now, now, tenantID, target,
+		"a0000000-0000-0000-0000-000000000002", now, now, tenantID, target,
+		"a0000000-0000-0000-0000-000000000003", now, now, tenantID, target,
+		"b0000000-0000-0000-0000-000000000001", now, now, tenantID, other,
+	).Error)
+
+	r := mountCreditsList(db, tenantID)
+
+	t.Run("happy path returns all rows for that customer", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodGet,
+			"/api/v1/credits?customer_id="+target, nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		var body struct {
+			Data []map[string]any `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+		require.Len(t, body.Data, 3,
+			"target customer has 3 accounts (2 open + 1 paid)")
+		for _, row := range body.Data {
+			assert.Equal(t, target, row["customer_id"],
+				"no row from another customer leaks into the result")
+		}
+	})
+
+	t.Run("combines with status filter", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodGet,
+			"/api/v1/credits?customer_id="+target+"&status=open", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		var body struct {
+			Data []map[string]any `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+		assert.Len(t, body.Data, 2,
+			"only the 2 open accounts of the target customer")
+	})
+
+	t.Run("malformed id returns empty list (not 400)", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodGet,
+			"/api/v1/credits?customer_id=not-a-uuid", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		var body struct {
+			Data []map[string]any `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+		assert.Empty(t, body.Data,
+			"a malformed id degrades to empty rather than crashing")
+	})
+}
+
 // TestCloseCredit_StampsClosedAt verifies the timestamp lands on the
 // row when an admin closes a credit (write-off path with force=true).
 // Without it the "Pagados" tab can't sort by settlement date.
