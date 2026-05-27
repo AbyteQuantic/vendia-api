@@ -348,10 +348,15 @@ func SubmitPartialPayment(db *gorm.DB) gin.HandlerFunc {
 		if status == models.PartialPaymentStatusPendingScan {
 			notifBody = label + " — efectivo en espera de escaneo"
 		}
-		CreateNotification(db, order.TenantID,
+		CreateNotificationWithData(db, order.TenantID,
 			"Cliente envió un abono",
 			notifBody,
 			"partial_payment",
+			models.NotificationData{
+				"order_id":    order.ID,
+				"payment_id":  abono.ID,
+				"table_label": label,
+			},
 		)
 
 		c.JSON(http.StatusCreated, gin.H{
@@ -637,10 +642,14 @@ func CallWaiter(db *gorm.DB) gin.HandlerFunc {
 		if label == "" {
 			label = "Mesa sin nombre"
 		}
-		CreateNotification(db, order.TenantID,
+		CreateNotificationWithData(db, order.TenantID,
 			"Mesa llamando al mesero",
 			label+" necesita atención",
 			"waiter_call",
+			models.NotificationData{
+				"order_id":    order.ID,
+				"table_label": label,
+			},
 		)
 
 		c.JSON(http.StatusOK, gin.H{

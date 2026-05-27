@@ -315,7 +315,7 @@ func CancelCredit(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		// Inform the tendero in the notifications feed.
-		go func(tenantID, customerName, reason string, amount int64) {
+		go func(tenantID, customerName, reason, fiadoID string, amount int64) {
 			body := fmt.Sprintf("Stock restaurado. Monto cancelado: $%d.", amount)
 			if reason != "" {
 				body = body + " Motivo: " + reason
@@ -325,9 +325,12 @@ func CancelCredit(db *gorm.DB) gin.HandlerFunc {
 				Title:    fmt.Sprintf("Fiado cancelado — %s", customerName),
 				Body:     body,
 				Type:     "fiado_cancelled",
+				Data: models.NotificationData{
+					"fiado_id": fiadoID,
+				},
 			}
 			_ = db.Create(&notif).Error
-		}(credit.TenantID, credit.Customer.Name, req.Reason, credit.TotalAmount)
+		}(credit.TenantID, credit.Customer.Name, req.Reason, credit.ID, credit.TotalAmount)
 
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{

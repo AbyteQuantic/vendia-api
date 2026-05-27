@@ -23,7 +23,8 @@ func setupPushDB(t *testing.T) *gorm.DB {
 		&models.BroadcastPromotionDelivery{},
 	))
 	// Notifications uses a Postgres-only gen_random_uuid() default; stand
-	// up an equivalent table by hand (id filled by BeforeCreate).
+	// up an equivalent table by hand (id filled by BeforeCreate). The
+	// `data` column was added in F38 for deep-link payloads.
 	require.NoError(t, db.Exec(`
 		CREATE TABLE IF NOT EXISTS notifications (
 			id TEXT PRIMARY KEY,
@@ -32,7 +33,8 @@ func setupPushDB(t *testing.T) *gorm.DB {
 			title TEXT NOT NULL,
 			body TEXT DEFAULT '',
 			type TEXT DEFAULT 'info',
-			is_read INTEGER DEFAULT 0
+			is_read INTEGER DEFAULT 0,
+			data TEXT DEFAULT '{}'
 		)
 	`).Error)
 	return db

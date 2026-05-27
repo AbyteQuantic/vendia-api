@@ -35,6 +35,9 @@ func setupTableSessionsDB(t *testing.T) *gorm.DB {
 	// default that SQLite can't parse. Rather than mutate the
 	// production model, we stand up an equivalent table by hand —
 	// the id is filled in by the app (not the DB) in this test.
+	// `data` is the F38 deep-link payload (JSONB in Postgres, TEXT
+	// in SQLite — GORM's `serializer:json` writes a JSON string
+	// either way so the column type is irrelevant for the test).
 	if err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS notifications (
 			id TEXT PRIMARY KEY,
@@ -43,7 +46,8 @@ func setupTableSessionsDB(t *testing.T) *gorm.DB {
 			title TEXT NOT NULL,
 			body TEXT DEFAULT '',
 			type TEXT DEFAULT 'info',
-			is_read INTEGER DEFAULT 0
+			is_read INTEGER DEFAULT 0,
+			data TEXT DEFAULT '{}'
 		)
 	`).Error; err != nil {
 		t.Fatalf("migrate notifications: %v", err)
