@@ -101,11 +101,19 @@ func runAIJob(db *gorm.DB, jobID, productID, tenantID string, worker aiPhotoWork
 	}()
 
 	if err != nil {
-		msg := aiJobGenericFailMessage
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || ctx.Err() != nil {
+		var msg, category string
+		switch {
+		case errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || ctx.Err() != nil:
 			msg = aiTimeoutMessage
+			category = "timeout"
+		default:
+			msg = classifyAIJobError(err)
+			category = aiJobErrorCategory(msg)
 		}
-		log.Printf("[ai-job %s] failed: %v", jobID, err)
+		// Logging estructurado para grep en Render: la categoría va antes
+		// del error crudo, así un grep "[ai-job-fail category=" agrupa
+		// fallas por tipo sin tener que parsear el error completo.
+		log.Printf("[ai-job-fail category=%s id=%s] %v", category, jobID, err)
 		if uerr := db.Model(&models.AIJob{}).
 			Where("id = ?", jobID).
 			Updates(map[string]any{
