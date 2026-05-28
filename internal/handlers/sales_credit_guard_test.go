@@ -148,7 +148,7 @@ func TestCreateSale_RejectsCreditWithoutAccount(t *testing.T) {
 		c.Set(middleware.BranchIDKey, "55555555-5555-5555-5555-555555555555")
 		c.Next()
 	})
-	r.POST("/api/v1/sales", handlers.CreateSale(db))
+	r.POST("/api/v1/sales", handlers.CreateSale(db, nil))
 
 	customerID := "77777777-7777-7777-7777-777777777777"
 	body := map[string]any{

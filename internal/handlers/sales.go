@@ -11,6 +11,7 @@ import (
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
 	"vendia-backend/internal/services"
+	"vendia-backend/internal/services/push"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -93,7 +94,7 @@ type CreateSaleRequest struct {
 	PriceTier string `json:"price_tier"`
 }
 
-func CreateSale(db *gorm.DB) gin.HandlerFunc {
+func CreateSale(db *gorm.DB, dispatcher *push.Dispatcher) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
 		userID := middleware.GetUserID(c)
@@ -483,6 +484,23 @@ func CreateSale(db *gorm.DB) gin.HandlerFunc {
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
+		}
+
+		// Spec F038 — chequear si algún producto cruzó el umbral de
+		// stock bajo después de la venta. Best-effort fuera de la
+		// transacción: un fallo de push nunca aborta una venta (Art. II).
+		// El dedup_key del helper garantiza una sola push por producto
+		// por día aunque la venta repita SKUs (AC-08).
+		if dispatcher != nil {
+			productIDs := make([]string, 0, len(req.Items))
+			for _, item := range req.Items {
+				if item.ProductID != "" {
+					productIDs = append(productIDs, item.ProductID)
+				}
+			}
+			if len(productIDs) > 0 {
+				push.CheckStockLow(c.Request.Context(), db, dispatcher, tenantID, productIDs)
+			}
 		}
 
 		c.JSON(http.StatusCreated, gin.H{"data": sale})

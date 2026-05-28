@@ -166,6 +166,13 @@ func Migrate(db *gorm.DB) error {
 		// struct and the BootstrapMarker table that guards the one-shot
 		// onboarding backfill. Additive and backward-compatible (Art. X).
 		&models.BootstrapMarker{},
+		// Spec F038 — push notifications Fase 1 (Web + Android).
+		// Tabla nueva que almacena los tokens FCM por usuario y
+		// dispositivo. Aditiva y retrocompatible — los nuevos campos
+		// opcionales en Notification (DeepLink, PushedAt, DedupKey)
+		// son recogidos automáticamente por AutoMigrate sobre el
+		// struct Notification ya registrado más arriba (Art. X).
+		&models.DeviceToken{},
 	)
 	if err != nil {
 		return err

@@ -14,6 +14,7 @@ import (
 	"vendia-backend/internal/handlers"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/services"
+	"vendia-backend/internal/services/push"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -123,6 +124,30 @@ func main() {
 			log.Println("[SVC] Cloudflare R2 service initialized")
 		}
 	}
+
+	// ── Push Notifications (Spec 038) ────────────────────────────────────────
+	// FCMSender requiere credenciales reales en producción. En dev local
+	// (env vars vacías) caemos a FakeSender — el server arranca, las
+	// rutas /devices/* funcionan, pero las push reales no salen. Los
+	// tests de integración del dispatcher cubren la lógica sin red.
+	var pushSender push.Sender
+	if cfg.FCMServiceAccountJSON != "" && cfg.FCMProjectID != "" {
+		fcm, err := push.NewFCMSender(context.Background(), push.FCMConfig{
+			ServiceAccountJSON: cfg.FCMServiceAccountJSON,
+			ProjectID:          cfg.FCMProjectID,
+		})
+		if err != nil {
+			log.Printf("[PUSH] warning: FCM init failed: %v — falling back to FakeSender", err)
+			pushSender = &push.FakeSender{}
+		} else {
+			pushSender = fcm
+			log.Printf("[PUSH] FCM sender ready (project_id=%s)", cfg.FCMProjectID)
+		}
+	} else {
+		pushSender = &push.FakeSender{}
+		log.Println("[PUSH] FCM credentials not set — using FakeSender (push won't reach devices)")
+	}
+	pushDispatcher := push.NewDispatcher(pushSender)
 
 	offSvc := services.NewOpenFoodFactsService()
 	catalogCacheSvc := services.NewCatalogCacheService(db, offSvc)
@@ -307,7 +332,7 @@ func main() {
 	// Spec F033 — internal cron endpoint for the promotions-push batch
 	// job (runs every 5 min). Same auth model as expire-quotes: no JWT,
 	// gated by the shared CRON_TOKEN Bearer secret.
-	r.POST("/api/v1/internal/jobs/promotions-push", handlers.PromotionsPushJob(db))
+	r.POST("/api/v1/internal/jobs/promotions-push", handlers.PromotionsPushJob(db, pushDispatcher))
 
 	// Public online orders (customer places order from catalog).
 	// Two paths hit the same handler: the legacy shape and the
@@ -317,9 +342,9 @@ func main() {
 	// cuando TURNSTILE_ENABLED=true. El orderRateLimiter va primero para
 	// rechazar IPs abusivas antes de llamar a Cloudflare. (FR-02, AC-04, D4)
 	r.POST("/api/v1/store/:slug/online-order",
-		buildHandlers(orderRateLimiter, captchaMiddleware, handlers.PublicCreateOnlineOrder(db))...)
+		buildHandlers(orderRateLimiter, captchaMiddleware, handlers.PublicCreateOnlineOrder(db, pushDispatcher))...)
 	r.POST("/api/v1/public/catalog/:slug/orders",
-		buildHandlers(orderRateLimiter, captchaMiddleware, handlers.PublicCreateOnlineOrder(db))...)
+		buildHandlers(orderRateLimiter, captchaMiddleware, handlers.PublicCreateOnlineOrder(db, pushDispatcher))...)
 
 	// Privacy-safe customer lookup for the checkout UI. Accepts a
 	// phone number and returns ONLY {"needs_consent": bool} — never
@@ -432,7 +457,7 @@ func main() {
 		v1.GET("/inventory/invoice-logs", handlers.ListInvoiceLogs(db))
 
 		// Sales (POS)
-		v1.POST("/sales", handlers.CreateSale(db))
+		v1.POST("/sales", handlers.CreateSale(db, pushDispatcher))
 		v1.GET("/sales", handlers.ListSales(db))
 		v1.GET("/sales/history", handlers.SalesHistory(db))
 		v1.GET("/sales/:uuid/receipt", handlers.SaleReceipt(db))
@@ -465,11 +490,11 @@ func main() {
 		v1.GET("/credits", handlers.ListCredits(db))
 		v1.POST("/credits", handlers.CreateCredit(db))
 		v1.GET("/credits/:id", handlers.GetCredit(db))
-		v1.POST("/credits/:id/payments", handlers.CreatePayment(db))
+		v1.POST("/credits/:id/payments", handlers.CreatePayment(db, pushDispatcher))
 		// Append to an already-accepted open account (no handshake needed)
 		v1.POST("/credits/:id/append", handlers.AppendToFiado(db))
 		// Close a fiado manually — write off any residual balance
-		v1.POST("/credits/:id/close", handlers.CloseCredit(db))
+		v1.POST("/credits/:id/close", handlers.CloseCredit(db, pushDispatcher))
 		// Cancel a pending fiado — restores stock + voids linked sales
 		v1.POST("/credits/:id/cancel", handlers.CancelCredit(db))
 
@@ -670,6 +695,11 @@ func main() {
 		v1.GET("/analytics/sales-history", handlers.SalesHistoryByPeriod(db))
 		v1.GET("/analytics/products-insights", handlers.ProductInsights(db))
 
+		// Spec 038 — Push Notifications: registro y revocación de tokens.
+		v1.POST("/devices/register", handlers.RegisterDevice(db))
+		v1.GET("/devices/me", handlers.ListMyDevices(db))
+		v1.DELETE("/devices/me/:id", handlers.RevokeMyDevice(db))
+
 		// Rockola (admin)
 		v1.GET("/rockola/pending", handlers.PendingSongs(db))
 		v1.PATCH("/rockola/:uuid/played", handlers.MarkSongPlayed(db))
@@ -738,6 +768,9 @@ func main() {
 		admin.PATCH("/catalogs/templates/:id", handlers.AdminUpdateCatalogTemplate(db))
 		admin.DELETE("/catalogs/templates/:id", handlers.AdminDeleteCatalogTemplate(db))
 		admin.GET("/catalogs/analytics", handlers.AdminGetCatalogAnalytics(db))
+
+		// Spec 038 — Push broadcast manual (super_admin → un tenant).
+		admin.POST("/push/broadcast", handlers.BroadcastPush(db, pushDispatcher))
 	}
 
 	log.Printf("VendIA backend running on :%s (env=%s)", cfg.Port, cfg.Env)

@@ -94,7 +94,7 @@ func mountCloseCredit(db *gorm.DB, tenantID string) *gin.Engine {
 		c.Set(middleware.TenantIDKey, tenantID)
 		c.Next()
 	})
-	r.POST("/api/v1/credits/:id/close", handlers.CloseCredit(db))
+	r.POST("/api/v1/credits/:id/close", handlers.CloseCredit(db, nil))
 	return r
 }
 
@@ -105,7 +105,7 @@ func mountCreditPayment(db *gorm.DB, tenantID string) *gin.Engine {
 		c.Set(middleware.TenantIDKey, tenantID)
 		c.Next()
 	})
-	r.POST("/api/v1/credits/:id/payments", handlers.CreatePayment(db))
+	r.POST("/api/v1/credits/:id/payments", handlers.CreatePayment(db, nil))
 	return r
 }
 

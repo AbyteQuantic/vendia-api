@@ -95,7 +95,7 @@ func postOnlineOrder(t *testing.T, db *gorm.DB, slug string, body any) *httptest
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.POST("/api/v1/public/catalog/:slug/orders", handlers.PublicCreateOnlineOrder(db))
+	r.POST("/api/v1/public/catalog/:slug/orders", handlers.PublicCreateOnlineOrder(db, nil))
 
 	raw, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost,

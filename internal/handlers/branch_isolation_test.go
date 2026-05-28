@@ -138,7 +138,7 @@ func mountSalesHandler(db *gorm.DB, tenantID, branchID string) *gin.Engine {
 		}
 		c.Next()
 	})
-	r.POST("/api/v1/sales", handlers.CreateSale(db))
+	r.POST("/api/v1/sales", handlers.CreateSale(db, nil))
 	r.GET("/api/v1/products", handlers.ListProducts(db))
 	return r
 }
