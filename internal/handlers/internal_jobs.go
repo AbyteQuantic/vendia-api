@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"vendia-backend/internal/jobs"
+	"vendia-backend/internal/services/push"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -75,13 +76,13 @@ func ExpireQuotesJob(db *gorm.DB) gin.HandlerFunc {
 // has arrived, so the assisted WhatsApp queue is ready when they open
 // the app.
 // POST /api/v1/internal/jobs/promotions-push
-func PromotionsPushJob(db *gorm.DB) gin.HandlerFunc {
+func PromotionsPushJob(db *gorm.DB, dispatcher *push.Dispatcher) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !cronAuthOK(c) {
 			return
 		}
 
-		result, err := jobs.RunPromotionsPush(db, time.Now().UTC())
+		result, err := jobs.RunPromotionsPush(db, time.Now().UTC(), dispatcher)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": "no se pudo ejecutar el job de promociones",

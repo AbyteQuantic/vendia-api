@@ -9,6 +9,7 @@ import (
 	"strings"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
+	"vendia-backend/internal/services/push"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -53,7 +54,7 @@ func defaultBranchForTenant(db *gorm.DB, tenantID string) *string {
 // active branch is attached so the KDS on that sede sees the
 // pedido immediately. Phone is accepted empty for web orders that
 // only capture a name.
-func PublicCreateOnlineOrder(db *gorm.DB) gin.HandlerFunc {
+func PublicCreateOnlineOrder(db *gorm.DB, dispatcher *push.Dispatcher) gin.HandlerFunc {
 	type ItemReq struct {
 		ProductID string  `json:"product_id"`
 		Name      string  `json:"name"`
@@ -145,12 +146,23 @@ func PublicCreateOnlineOrder(db *gorm.DB) gin.HandlerFunc {
 			req.AcceptedTerms,
 		)
 
-		// Create notification for the tenant
-		CreateNotification(db, tenant.ID,
-			"Nuevo pedido en línea",
-			fmt.Sprintf("%s pidió por $%.0f (%s)", req.CustomerName, total, delivery),
-			"online_order",
-		)
+		// Notificación al tendero — push + in-app via dispatcher
+		// (Spec F038). Si no hay dispatcher inyectado (entornos sin
+		// FCM configurado), degradamos al modo legacy: solo in-app.
+		notifTitle := "Nuevo pedido en línea"
+		notifBody := fmt.Sprintf("%s pidió por $%.0f (%s)", req.CustomerName, total, delivery)
+		if dispatcher != nil {
+			_, _ = dispatcher.DispatchEvent(c.Request.Context(), db, push.Event{
+				TenantID: tenant.ID,
+				Type:     "online_order",
+				Title:    notifTitle,
+				Body:     notifBody,
+				DeepLink: "/pedidos/" + order.ID,
+				DedupKey: "web-order:" + order.ID,
+			})
+		} else {
+			CreateNotification(db, tenant.ID, notifTitle, notifBody, "online_order")
+		}
 
 		c.JSON(http.StatusCreated, gin.H{
 			"data": gin.H{

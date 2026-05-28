@@ -32,7 +32,10 @@ func setupPushDB(t *testing.T) *gorm.DB {
 			title TEXT NOT NULL,
 			body TEXT DEFAULT '',
 			type TEXT DEFAULT 'info',
-			is_read INTEGER DEFAULT 0
+			is_read INTEGER DEFAULT 0,
+			deep_link TEXT,
+			pushed_at DATETIME,
+			dedup_key TEXT
 		)
 	`).Error)
 	return db
@@ -64,7 +67,7 @@ func TestRunPromotionsPush_NotifiesDuePromotions(t *testing.T) {
 	mkPromo(t, db, "already-1", &past, true)   // due but already pushed → skip
 	mkPromo(t, db, "instant-1", nil, false)    // no schedule (enviar ahora) → skip
 
-	res, err := jobs.RunPromotionsPush(db, now)
+	res, err := jobs.RunPromotionsPush(db, now, nil)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, res.Notified, "solo la promo vencida y no avisada")
 
@@ -87,13 +90,13 @@ func TestRunPromotionsPush_IsIdempotent(t *testing.T) {
 	past := now.Add(-1 * time.Hour)
 	mkPromo(t, db, "due-1", &past, false)
 
-	first, err := jobs.RunPromotionsPush(db, now)
+	first, err := jobs.RunPromotionsPush(db, now, nil)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, first.Notified)
 
 	// Second run on the same data must notify nobody — schedule_push_sent
 	// already flipped, so the owner is never double-notified.
-	second, err := jobs.RunPromotionsPush(db, now)
+	second, err := jobs.RunPromotionsPush(db, now, nil)
 	require.NoError(t, err)
 	assert.EqualValues(t, 0, second.Notified, "segundo run no re-notifica")
 }
@@ -102,7 +105,7 @@ func TestRunPromotionsPush_NoDuePromotions(t *testing.T) {
 	db := setupPushDB(t)
 	now := time.Now().UTC()
 
-	res, err := jobs.RunPromotionsPush(db, now)
+	res, err := jobs.RunPromotionsPush(db, now, nil)
 	require.NoError(t, err)
 	assert.EqualValues(t, 0, res.Notified)
 }

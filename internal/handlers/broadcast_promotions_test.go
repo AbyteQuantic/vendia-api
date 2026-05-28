@@ -45,7 +45,10 @@ func setupPromoDB(t *testing.T) *gorm.DB {
 			title TEXT NOT NULL,
 			body TEXT DEFAULT '',
 			type TEXT DEFAULT 'info',
-			is_read INTEGER DEFAULT 0
+			is_read INTEGER DEFAULT 0,
+			deep_link TEXT,
+			pushed_at DATETIME,
+			dedup_key TEXT
 		)
 	`).Error)
 	return db

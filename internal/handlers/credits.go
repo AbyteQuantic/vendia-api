@@ -8,6 +8,7 @@ import (
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
 	"vendia-backend/internal/services"
+	"vendia-backend/internal/services/push"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -346,7 +347,7 @@ func CancelCredit(db *gorm.DB) gin.HandlerFunc {
 // opt in explicitly with {"force":true}. The residual is recorded as a
 // CreditPayment with method='write_off' so the books stay balanced and
 // the timeline has an auditable entry.
-func CloseCredit(db *gorm.DB) gin.HandlerFunc {
+func CloseCredit(db *gorm.DB, dispatcher *push.Dispatcher) gin.HandlerFunc {
 	type Request struct {
 		Reason string `json:"reason"`
 		Force  bool   `json:"force"`
@@ -441,6 +442,18 @@ func CloseCredit(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// Spec F038 — notificar cierre de cuenta al tendero.
+		if dispatcher != nil {
+			_, _ = dispatcher.DispatchEvent(c.Request.Context(), db, push.Event{
+				TenantID: tenantID,
+				Type:     "credit_close",
+				Title:    "Cuenta cerrada",
+				Body:     "Una cuenta de crédito quedó saldada",
+				DeepLink: "/cuaderno/" + credit.ID,
+				DedupKey: "credit-close:" + credit.ID,
+			})
+		}
+
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{
 				"credit_id":    credit.ID,
@@ -453,7 +466,7 @@ func CloseCredit(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-func CreatePayment(db *gorm.DB) gin.HandlerFunc {
+func CreatePayment(db *gorm.DB, dispatcher *push.Dispatcher) gin.HandlerFunc {
 	type Request struct {
 		Amount        int64  `json:"amount" binding:"required,gt=0"`
 		PaymentMethod string `json:"payment_method"`
@@ -495,6 +508,18 @@ func CreatePayment(db *gorm.DB) gin.HandlerFunc {
 			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
+		}
+
+		// Spec F038 — notificar abono al tendero (push + in-app).
+		if dispatcher != nil {
+			_, _ = dispatcher.DispatchEvent(c.Request.Context(), db, push.Event{
+				TenantID: tenantID,
+				Type:     "credit_payment",
+				Title:    "Abono recibido",
+				Body:     fmt.Sprintf("Se registró un abono por $%.0f", float64(req.Amount)),
+				DeepLink: "/cuaderno/" + creditID,
+				DedupKey: "credit-payment:" + payment.ID,
+			})
 		}
 
 		c.JSON(http.StatusCreated, gin.H{"data": payment})

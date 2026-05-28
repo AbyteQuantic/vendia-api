@@ -51,6 +51,15 @@ type Config struct {
 	EpaycoPCustID    string
 	EpaycoPKey       string
 	EpaycoTestMode   bool
+
+	// Spec 038 — Push Notifications (Web + Android via FCM). Ambos
+	// se setean como env vars en Render (Production). En dev local
+	// pueden quedar vacíos: el server arranca con FakeSender en su
+	// lugar y los tests de push siguen funcionando sin red real.
+	// Art. VI: el JSON contiene credenciales sensibles — NUNCA se
+	// loguea en plano, solo se confirma su presencia y el project_id.
+	FCMServiceAccountJSON string
+	FCMProjectID          string
 }
 
 func Load() *Config {
@@ -148,6 +157,9 @@ func Load() *Config {
 		EpaycoPCustID:    os.Getenv("EPAYCO_P_CUST_ID"),
 		EpaycoPKey:       os.Getenv("EPAYCO_P_KEY"),
 		EpaycoTestMode:   parseBoolEnv("EPAYCO_TEST_MODE", true),
+
+		FCMServiceAccountJSON: os.Getenv("FCM_SERVICE_ACCOUNT_JSON"),
+		FCMProjectID:          os.Getenv("FCM_PROJECT_ID"),
 	}
 }
 

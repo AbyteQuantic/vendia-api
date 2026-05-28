@@ -284,5 +284,19 @@ type Tenant struct {
 	// one PurchaseOrder row.
 	EnablePurchaseOrders bool `gorm:"not null;default:false" json:"enable_purchase_orders"`
 
+	// Spec F038 — umbral global de stock crítico por tenant.
+	// Cuando un producto cruza este valor hacia abajo en una venta,
+	// el dispatcher envía push "Stock bajo" al dueño + cashiers.
+	// Nullable para retrocompatibilidad (Art. X): tenants viejos lo
+	// leen como NULL → el dispatcher aplica el default StockLowThresholdDefault.
+	// El dueño lo cambia desde la pantalla de settings (PATCH /tenants/me).
+	StockLowThreshold *int `gorm:"type:int" json:"stock_low_threshold,omitempty"`
+
 	Employees []Employee `gorm:"foreignKey:TenantID" json:"employees,omitempty"`
 }
+
+// StockLowThresholdDefault es el valor que se aplica cuando un tenant
+// no tiene `StockLowThreshold` configurado (NULL). 3 unidades es lo
+// que el tendero típico considera "casi se acaba" — ajustable tras
+// observar producción.
+const StockLowThresholdDefault = 3

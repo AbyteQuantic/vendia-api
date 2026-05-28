@@ -96,7 +96,7 @@ func TestPromotionsPushJob_AuthAndRun(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.POST("/api/v1/internal/jobs/promotions-push", handlers.PromotionsPushJob(db))
+	r.POST("/api/v1/internal/jobs/promotions-push", handlers.PromotionsPushJob(db, nil))
 
 	call := func(authHeader string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()

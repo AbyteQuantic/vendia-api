@@ -15,6 +15,18 @@ type Notification struct {
 	Body      string    `gorm:"default:''" json:"body"`
 	Type      string    `gorm:"default:'info'" json:"type"`
 	IsRead    bool      `gorm:"default:false" json:"is_read"`
+
+	// Spec 038 — Push Notifications Fase 1. Campos opcionales que
+	// permiten que el push del OS y la entrada in-app compartan
+	// destino (DeepLink), que el sender lleve la cuenta del cap
+	// diario sin tabla aparte (PushedAt), y que el dispatcher
+	// deduplique reintentos dentro de la ventana de 5 min (DedupKey).
+	// Los 3 son punteros nullable → 100% retrocompatible (Art. X):
+	// filas antiguas leen sin error, clientes viejos siguen creando
+	// sin estos campos.
+	DeepLink *string    `gorm:"type:text" json:"deep_link,omitempty"`
+	PushedAt *time.Time `gorm:"index" json:"pushed_at,omitempty"`
+	DedupKey *string    `gorm:"type:varchar(120);index" json:"dedup_key,omitempty"`
 }
 
 // BeforeCreate fills the id client-side when the storage engine

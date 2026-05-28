@@ -114,7 +114,7 @@ func mountSaleRecipeHandler(db *gorm.DB, tenantID, branchID string) *gin.Engine 
 		}
 		c.Next()
 	})
-	r.POST("/api/v1/sales", handlers.CreateSale(db))
+	r.POST("/api/v1/sales", handlers.CreateSale(db, nil))
 	return r
 }
 
