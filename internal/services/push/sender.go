@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 
 	firebase "firebase.google.com/go/v4"
 	"firebase.google.com/go/v4/messaging"
@@ -212,13 +213,12 @@ func (s *UnifiedSender) Send(ctx context.Context, targets []Target, payload Payl
 
 func (s *UnifiedSender) sendFCM(ctx context.Context, targets []Target, payload Payload) (SendResult, error) {
 	if s.fcmClient == nil {
-		// FCM no configurado pero llegaron targets FCM — los reportamos
-		// como inválidos para que se invaliden y dejen de reintentar.
-		ids := make([]string, 0, len(targets))
-		for _, t := range targets {
-			ids = append(ids, t.DeviceID)
-		}
-		return SendResult{Invalid: ids}, nil
+		// FCM no configurado. NO invalidar los devices — son válidos,
+		// solo nos falta config nuestra. Reportar 0 sent y dejar los
+		// devices intactos. El operador (Bryan) ve el warning en
+		// logs y agrega FCM_SERVICE_ACCOUNT_JSON cuando pueda.
+		log.Printf("[PUSH] %d FCM target(s) descartados — FCM no configurado en este server", len(targets))
+		return SendResult{}, nil
 	}
 
 	tokens := make([]string, len(targets))
@@ -258,11 +258,11 @@ func (s *UnifiedSender) sendFCM(ctx context.Context, targets []Target, payload P
 
 func (s *UnifiedSender) sendWebPush(ctx context.Context, targets []Target, payload Payload) (SendResult, error) {
 	if s.vapidPublic == "" {
-		ids := make([]string, 0, len(targets))
-		for _, t := range targets {
-			ids = append(ids, t.DeviceID)
-		}
-		return SendResult{Invalid: ids}, nil
+		// VAPID no configurado. NO invalidar los devices Web Push —
+		// son válidos, falta la config (VAPID_PRIVATE_KEY/PUBLIC_KEY)
+		// en Render. El operador agrega las env vars y reintenta.
+		log.Printf("[PUSH] %d Web Push target(s) descartados — VAPID no configurado en este server", len(targets))
+		return SendResult{}, nil
 	}
 
 	body, _ := json.Marshal(map[string]string{
