@@ -699,6 +699,7 @@ func main() {
 		v1.POST("/devices/register", handlers.RegisterDevice(db))
 		v1.GET("/devices/me", handlers.ListMyDevices(db))
 		v1.DELETE("/devices/me/:id", handlers.RevokeMyDevice(db))
+		v1.POST("/devices/me/test", handlers.TestPushSelf(db, pushDispatcher))
 
 		// Rockola (admin)
 		v1.GET("/rockola/pending", handlers.PendingSongs(db))
