@@ -12,6 +12,7 @@ import (
 	"vendia-backend/internal/handlers"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
+	"vendia-backend/internal/services/push"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -320,4 +321,85 @@ func TestRevokeMyDevice_RequiresJWT(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/api/v1/devices/me/some-id", nil))
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+// ─── SELF TEST PUSH (POST /devices/me/test) ──────────────────────────
+
+// El endpoint dispara un push de prueba al tenant del caller — sirve
+// para que el tendero confirme in-situ que su dispositivo está bien.
+// Verifica que el dispatcher recibe el evento con tipo="self_test"
+// y que la respuesta indica si el OS lo recibió.
+func TestTestPushSelf_DispatchesToCurrentTenant(t *testing.T) {
+	db := setupDevicesDB(t)
+	// Necesitamos tenant + subscription + token activo para que el
+	// dispatcher tenga algo a quién enviar.
+	require.NoError(t, db.AutoMigrate(&models.Tenant{}, &models.TenantSubscription{}))
+	tenantID := "aaaaaaaa-1111-aaaa-aaaa-aaaaaaaaaaaa"
+	userID := "bbbbbbbb-1111-bbbb-bbbb-bbbbbbbbbbbb"
+	require.NoError(t, db.Create(&models.Tenant{
+		BaseModel: models.BaseModel{ID: tenantID}, BusinessName: "Test", Phone: "uniq-test1",
+	}).Error)
+	future := time.Now().Add(7 * 24 * time.Hour)
+	require.NoError(t, db.Create(&models.TenantSubscription{
+		TenantID: tenantID, Status: models.SubscriptionStatusTrial, TrialEndsAt: &future,
+	}).Error)
+	require.NoError(t, db.Create(&models.DeviceToken{
+		TenantID: tenantID, UserID: userID, Token: "tok-test",
+		Platform: models.DeviceTokenPlatformWeb, LastSeenAt: time.Now(),
+	}).Error)
+	// Notifications a mano (gen_random_uuid es Postgres-only).
+	require.NoError(t, db.Exec(`
+		CREATE TABLE IF NOT EXISTS notifications (
+			id TEXT PRIMARY KEY, created_at DATETIME, tenant_id TEXT NOT NULL,
+			title TEXT NOT NULL, body TEXT DEFAULT '', type TEXT DEFAULT 'info',
+			is_read INTEGER DEFAULT 0, deep_link TEXT, pushed_at DATETIME, dedup_key TEXT
+		)
+	`).Error)
+
+	fake := &push.FakeSender{}
+	dispatcher := push.NewDispatcher(fake)
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.TenantIDKey, tenantID)
+		c.Set(middleware.UserIDKey, userID)
+		c.Next()
+	})
+	r.POST("/api/v1/devices/me/test", handlers.TestPushSelf(db, dispatcher))
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/devices/me/test", nil))
+	require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
+
+	require.Len(t, fake.Calls, 1, "el dispatcher debe haber sido llamado")
+	assert.ElementsMatch(t, []string{"tok-test"}, fake.Calls[0].Tokens)
+	assert.Contains(t, fake.Calls[0].Payload.Title, "prueba")
+}
+
+func TestTestPushSelf_RequiresJWT(t *testing.T) {
+	db := setupDevicesDB(t)
+	fake := &push.FakeSender{}
+	dispatcher := push.NewDispatcher(fake)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/api/v1/devices/me/test", handlers.TestPushSelf(db, dispatcher))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/devices/me/test", nil))
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestTestPushSelf_NilDispatcherReturns503(t *testing.T) {
+	db := setupDevicesDB(t)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.TenantIDKey, "t")
+		c.Set(middleware.UserIDKey, "u")
+		c.Next()
+	})
+	r.POST("/api/v1/devices/me/test", handlers.TestPushSelf(db, nil))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/devices/me/test", nil))
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 }

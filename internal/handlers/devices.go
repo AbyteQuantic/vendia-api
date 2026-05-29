@@ -9,8 +9,10 @@ import (
 
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
+	"vendia-backend/internal/services/push"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -180,6 +182,57 @@ func RevokeMyDevice(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		c.Status(http.StatusNoContent)
+	}
+}
+
+// TestPushSelf es POST /api/v1/devices/me/test. Dispara un push de
+// prueba al tenant del usuario logueado. Sirve para que el tendero
+// pueda verificar in-situ que su dispositivo está bien configurado
+// sin tener que esperar a que ocurra un evento real (pedido, abono).
+//
+// Comparte el mismo dispatcher que los triggers automáticos, así que
+// respeta TODAS las reglas (suspensión, cap diario, dedup). El
+// dedup_key incluye el `user_id` + timestamp para permitir múltiples
+// pruebas del mismo dueño sin chocar con la ventana de 5 min.
+//
+// Spec: specs/038-push-notifications-web-android/spec.md — extension
+// del FR-11 (settings de notificaciones).
+func TestPushSelf(db *gorm.DB, dispatcher *push.Dispatcher) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		userID := middleware.GetUserID(c)
+		if tenantID == "" || userID == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "no autenticado"})
+			return
+		}
+		if dispatcher == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error": "el servicio de notificaciones no está configurado",
+			})
+			return
+		}
+
+		outcome, err := dispatcher.DispatchEvent(c.Request.Context(), db, push.Event{
+			TenantID: tenantID,
+			Type:     "self_test",
+			Title:    "¡Funciona! Notificación de prueba",
+			Body:     "Si lo ve, su dispositivo recibe notificaciones correctamente.",
+			DeepLink: "/",
+			// UUID nuevo por llamada → cada prueba es un evento único
+			// (no choca con la ventana de dedup de 5 min).
+			DedupKey: "self-test:" + userID + ":" + uuid.NewString(),
+		})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "no se pudo enviar la prueba",
+			})
+			return
+		}
+
+		c.JSON(http.StatusAccepted, gin.H{"data": gin.H{
+			"status":          outcome.Status,
+			"tokens_targeted": outcome.TokensSent,
+		}})
 	}
 }
 
