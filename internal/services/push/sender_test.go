@@ -10,84 +10,86 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// T-05a-1 — `FakeSender.Send` con lista de tokens vacía es no-op,
-// no falla, no captura una llamada. Defensa contra el caso "tenant
-// sin tokens registrados".
-func TestFakeSender_NoTokensIsNoop(t *testing.T) {
+func fcmTargets(ids ...string) []Target {
+	out := make([]Target, len(ids))
+	for i, id := range ids {
+		out[i] = Target{DeviceID: id, FCMToken: "fcm-" + id}
+	}
+	return out
+}
+
+// T-05a-1 — `FakeSender.Send` con targets vacíos es no-op.
+func TestFakeSender_NoTargetsIsNoop(t *testing.T) {
 	fs := &FakeSender{}
-	result, err := fs.Send(context.Background(), nil, Payload{
-		Title: "x",
-		Body:  "y",
-	})
+	result, err := fs.Send(context.Background(), nil, Payload{Title: "x", Body: "y"})
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.Sent)
 	assert.Empty(t, result.Invalid)
-	assert.Empty(t, fs.Calls, "no debe registrar la llamada — no había trabajo que hacer")
+	assert.Empty(t, fs.Calls)
 }
 
-// T-05a-2 — `FakeSender.Send` con tokens captura la llamada (tokens,
-// payload) para que los tests del dispatcher puedan assertear.
+// T-05a-2 — Captura targets y payload.
 func TestFakeSender_CapturesCall(t *testing.T) {
 	fs := &FakeSender{}
-	payload := Payload{Title: "Pedido nuevo", Body: "Pedro pidió 2 unidades", DeepLink: "/pedidos/abc"}
-	result, err := fs.Send(context.Background(), []string{"tok-a", "tok-b"}, payload)
+	payload := Payload{Title: "Pedido nuevo", Body: "Pedro pidió 2", DeepLink: "/pedidos/abc"}
+	targets := fcmTargets("d1", "d2")
+	result, err := fs.Send(context.Background(), targets, payload)
 
 	require.NoError(t, err)
 	assert.Equal(t, 2, result.Sent)
 	assert.Empty(t, result.Invalid)
 
 	require.Len(t, fs.Calls, 1)
-	call := fs.Calls[0]
-	assert.Equal(t, []string{"tok-a", "tok-b"}, call.Tokens)
-	assert.Equal(t, payload, call.Payload)
+	assert.Equal(t, targets, fs.Calls[0].Targets)
+	assert.Equal(t, payload, fs.Calls[0].Payload)
 }
 
-// T-05a-3 — `FakeSender` permite simular tokens reportados inválidos
-// por FCM en producción (caso `IsRegistrationTokenNotRegistered`). El
-// dispatcher consume `result.Invalid` para marcar los rows con
-// `invalidated_at`. AC-10.
-func TestFakeSender_SimulatesInvalidTokens(t *testing.T) {
-	fs := &FakeSender{InvalidateTokens: map[string]bool{"tok-bad": true}}
-	result, err := fs.Send(context.Background(), []string{"tok-good", "tok-bad", "tok-also-good"}, Payload{Title: "x"})
-
+// T-05a-3 — Simula device IDs reportados inválidos por el proveedor.
+func TestFakeSender_SimulatesInvalidDevices(t *testing.T) {
+	fs := &FakeSender{InvalidateDeviceIDs: map[string]bool{"d2": true}}
+	result, err := fs.Send(context.Background(), fcmTargets("d1", "d2", "d3"), Payload{Title: "x"})
 	require.NoError(t, err)
 	assert.Equal(t, 2, result.Sent)
-	assert.ElementsMatch(t, []string{"tok-bad"}, result.Invalid)
+	assert.ElementsMatch(t, []string{"d2"}, result.Invalid)
 }
 
-// T-05a-4 — `FakeSender` permite simular un error transitorio (red,
-// FCM 5xx) — el dispatcher debe registrar el error y NO setear
-// `pushed_at` en la notificación. El test del dispatcher consumirá
-// esto; acá solo verificamos que el fake propaga el error.
+// T-05a-4 — Error transitorio se propaga y NO se queda pegado.
 func TestFakeSender_PropagatesError(t *testing.T) {
-	wantErr := errors.New("simulated FCM 503")
+	wantErr := errors.New("simulated 503")
 	fs := &FakeSender{NextError: wantErr}
-	_, err := fs.Send(context.Background(), []string{"tok-x"}, Payload{Title: "x"})
+	_, err := fs.Send(context.Background(), fcmTargets("d1"), Payload{Title: "x"})
 	require.ErrorIs(t, err, wantErr)
-	// Un error transitorio no consume el "queue" — el siguiente Send
-	// no debe seguir fallando.
-	_, err = fs.Send(context.Background(), []string{"tok-x"}, Payload{Title: "x"})
+	_, err = fs.Send(context.Background(), fcmTargets("d1"), Payload{Title: "x"})
 	require.NoError(t, err)
 }
 
-// T-05a-5 — `Payload` lleva DeepLink opcional. Si no se setea, el
-// fake lo refleja vacío sin romper.
+// T-05a-5 — Payload sin DeepLink se refleja vacío sin romper.
 func TestFakeSender_PayloadWithoutDeepLink(t *testing.T) {
 	fs := &FakeSender{}
-	_, err := fs.Send(context.Background(), []string{"tok"}, Payload{Title: "x", Body: "y"})
+	_, err := fs.Send(context.Background(), fcmTargets("d1"), Payload{Title: "x", Body: "y"})
 	require.NoError(t, err)
 	require.Len(t, fs.Calls, 1)
 	assert.Empty(t, fs.Calls[0].Payload.DeepLink)
 }
 
-// T-05a-6 — La interfaz pública del paquete expone solamente lo que el
-// resto del backend necesita (Sender, Payload, SendResult). El
-// FCMSender concreto se construye con NewFCMSender(); error de init
-// es retornado al caller — un nil sender no debe colarse a runtime.
-func TestNewFCMSender_RejectsEmptyCredentials(t *testing.T) {
-	_, err := NewFCMSender(context.Background(), FCMConfig{
-		ServiceAccountJSON: "",
-		ProjectID:          "",
-	})
+// T-05a-6 — UnifiedSender falla si AMBOS backends están vacíos.
+func TestNewUnifiedSender_RejectsBothEmpty(t *testing.T) {
+	_, err := NewUnifiedSender(context.Background(),
+		FCMConfig{}, VAPIDConfig{})
 	require.Error(t, err)
+}
+
+// T-05a-7 — Targets Web Push (sin FCMToken) son aceptados por el
+// FakeSender. Es el caso iOS Safari.
+func TestFakeSender_AcceptsWebPushTargets(t *testing.T) {
+	fs := &FakeSender{}
+	targets := []Target{{
+		DeviceID: "d-ios",
+		Endpoint: "https://web.push.apple.com/abc",
+		P256dh:   "pubkey",
+		Auth:     "authsecret",
+	}}
+	result, err := fs.Send(context.Background(), targets, Payload{Title: "x"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Sent)
 }

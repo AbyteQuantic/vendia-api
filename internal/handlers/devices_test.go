@@ -373,7 +373,8 @@ func TestTestPushSelf_DispatchesToCurrentTenant(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
 
 	require.Len(t, fake.Calls, 1, "el dispatcher debe haber sido llamado")
-	assert.ElementsMatch(t, []string{"tok-test"}, fake.Calls[0].Tokens)
+	require.Len(t, fake.Calls[0].Targets, 1)
+	assert.Equal(t, "tok-test", fake.Calls[0].Targets[0].FCMToken)
 	assert.Contains(t, fake.Calls[0].Payload.Title, "prueba")
 }
 

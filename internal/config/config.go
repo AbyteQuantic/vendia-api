@@ -60,6 +60,16 @@ type Config struct {
 	// loguea en plano, solo se confirma su presencia y el project_id.
 	FCMServiceAccountJSON string
 	FCMProjectID          string
+
+	// Spec 038 — Web Push protocolo nativo (RFC 8030/8291) para iOS
+	// Safari. firebase_messaging falla con channel-error en Flutter
+	// web + WebKit (bug irresoluble, verificado 2026-05-29). Usamos
+	// la API estándar Push del browser + webpush-go en el backend.
+	// El par VAPID lo generamos nosotros (NO Firebase — Firebase no
+	// expone la clave privada de sus certificados Web Push).
+	VAPIDPublicKey  string
+	VAPIDPrivateKey string
+	VAPIDSubject    string // mailto:abytecorp@gmail.com
 }
 
 func Load() *Config {
@@ -160,6 +170,10 @@ func Load() *Config {
 
 		FCMServiceAccountJSON: os.Getenv("FCM_SERVICE_ACCOUNT_JSON"),
 		FCMProjectID:          os.Getenv("FCM_PROJECT_ID"),
+
+		VAPIDPublicKey:  os.Getenv("VAPID_PUBLIC_KEY"),
+		VAPIDPrivateKey: os.Getenv("VAPID_PRIVATE_KEY"),
+		VAPIDSubject:    os.Getenv("VAPID_SUBJECT"),
 	}
 }
 

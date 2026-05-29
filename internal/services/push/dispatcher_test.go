@@ -86,21 +86,36 @@ func seedSuspendedTenant(t *testing.T, db *gorm.DB, tenantID string) string {
 	return tenantID
 }
 
-func seedToken(t *testing.T, db *gorm.DB, tenantID, userID, token string) {
+func seedToken(t *testing.T, db *gorm.DB, tenantID, userID, token string) string {
 	t.Helper()
-	require.NoError(t, db.Create(&models.DeviceToken{
+	row := models.DeviceToken{
 		TenantID:   tenantID,
 		UserID:     userID,
 		Token:      token,
 		Platform:   models.DeviceTokenPlatformWeb,
 		LastSeenAt: time.Now(),
-	}).Error)
+	}
+	require.NoError(t, db.Create(&row).Error)
+	return row.ID
 }
 
 func newDispatcherWith(fake *FakeSender, now time.Time) *Dispatcher {
 	d := NewDispatcher(fake)
 	d.nowFn = func() time.Time { return now }
 	return d
+}
+
+// callTokens extrae los FCM tokens de una FakeCall (en el setup
+// actual los tests usan solo Targets FCM; los Web Push no aparecen
+// porque el seed no los crea).
+func callTokens(c FakeCall) []string {
+	out := make([]string, 0, len(c.Targets))
+	for _, t := range c.Targets {
+		if t.FCMToken != "" {
+			out = append(out, t.FCMToken)
+		}
+	}
+	return out
 }
 
 // ─── T-06a-1 — Happy path ────────────────────────────────────────────
@@ -148,7 +163,7 @@ func TestDispatcher_HappyPath(t *testing.T) {
 
 	// Sender was called once with both tokens.
 	require.Len(t, fake.Calls, 1)
-	assert.ElementsMatch(t, []string{"tok-admin", "tok-cashier"}, fake.Calls[0].Tokens)
+	assert.ElementsMatch(t, []string{"tok-admin", "tok-cashier"}, callTokens(fake.Calls[0]))
 	assert.Equal(t, "Pedido nuevo", fake.Calls[0].Payload.Title)
 	assert.Equal(t, "/pedidos/abc", fake.Calls[0].Payload.DeepLink)
 }
@@ -277,9 +292,9 @@ func TestDispatcher_InvalidTokenGetsMarked(t *testing.T) {
 	tenantID := "88888888-8888-8888-8888-888888888888"
 	seedActiveTenant(t, db, tenantID)
 	seedToken(t, db, tenantID, "u-good", "tok-good")
-	seedToken(t, db, tenantID, "u-bad", "tok-bad")
+	badID := seedToken(t, db, tenantID, "u-bad", "tok-bad")
 
-	fake := &FakeSender{InvalidateTokens: map[string]bool{"tok-bad": true}}
+	fake := &FakeSender{InvalidateDeviceIDs: map[string]bool{badID: true}}
 	d := newDispatcherWith(fake, time.Now())
 
 	out, err := d.DispatchEvent(context.Background(), db, Event{
@@ -321,7 +336,7 @@ func TestDispatcher_ExcludesInvalidatedTokens(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, OutcomeSent, out.Status)
 	require.Len(t, fake.Calls, 1)
-	assert.ElementsMatch(t, []string{"tok-active"}, fake.Calls[0].Tokens,
+	assert.ElementsMatch(t, []string{"tok-active"}, callTokens(fake.Calls[0]),
 		"tok-dead NO debe estar en el envío")
 }
 
@@ -345,7 +360,7 @@ func TestDispatcher_CrossTenantIsolation(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, fake.Calls, 1)
-	assert.ElementsMatch(t, []string{"tok-A"}, fake.Calls[0].Tokens,
+	assert.ElementsMatch(t, []string{"tok-A"}, callTokens(fake.Calls[0]),
 		"tok-B del tenant B NUNCA debe recibir el push de un evento de tenant A")
 
 	// La notification in-app debe pertenecer al tenant A.
