@@ -17,12 +17,22 @@ import (
 )
 
 // registerDeviceRequest es el contrato del POST /devices/register.
-// El tenant y el user vienen del JWT (no del body) — Art. III: jamás
-// confiar en lo que el cliente diga sobre su pertenencia a un tenant.
+// El tenant y el user vienen del JWT (no del body) — Art. III.
+//
+// Soporta dos modos:
+//   - FCM: cliente envía `token` (web/android con firebase_messaging).
+//   - Web Push nativo: cliente envía `endpoint` + `p256dh_key` + `auth_key`
+//     (iOS Safari, donde firebase_messaging no funciona).
+//
+// Al menos uno de los dos modos debe estar completo; el handler valida.
 type registerDeviceRequest struct {
-	Token       string `json:"token"`
+	Token       string `json:"token,omitempty"`
 	Platform    string `json:"platform"`
 	DeviceLabel string `json:"device_label,omitempty"`
+
+	Endpoint    string `json:"endpoint,omitempty"`
+	P256dhKey   string `json:"p256dh_key,omitempty"`
+	AuthKey     string `json:"auth_key,omitempty"`
 }
 
 // RegisterDevice es POST /api/v1/devices/register. Es idempotente: si
@@ -47,26 +57,53 @@ func RegisterDevice(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		req.Token = strings.TrimSpace(req.Token)
-		if req.Token == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "token requerido"})
+		req.Endpoint = strings.TrimSpace(req.Endpoint)
+		req.P256dhKey = strings.TrimSpace(req.P256dhKey)
+		req.AuthKey = strings.TrimSpace(req.AuthKey)
+
+		hasFCM := req.Token != ""
+		hasWebPush := req.Endpoint != "" && req.P256dhKey != "" && req.AuthKey != ""
+		if !hasFCM && !hasWebPush {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "se requiere `token` (FCM) o `endpoint`+`p256dh_key`+`auth_key` (Web Push)",
+			})
 			return
 		}
-		if req.Platform != models.DeviceTokenPlatformWeb &&
-			req.Platform != models.DeviceTokenPlatformAndroid {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "platform inválida (web o android)"})
+		switch req.Platform {
+		case models.DeviceTokenPlatformWeb,
+			models.DeviceTokenPlatformWebIOS,
+			models.DeviceTokenPlatformAndroid:
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "platform inválida (web, web_ios o android)",
+			})
 			return
 		}
 
 		now := time.Now()
 
-		// Si el token ya existe ACTIVO en este tenant + user → refresh.
+		// Lookup por la clave única del modo elegido.
 		var existing models.DeviceToken
-		err := db.Where("tenant_id = ? AND user_id = ? AND token = ? AND invalidated_at IS NULL",
-			tenantID, userID, req.Token).First(&existing).Error
+		var lookupQuery *gorm.DB
+		if hasFCM {
+			lookupQuery = db.Where(
+				"tenant_id = ? AND user_id = ? AND token = ? AND invalidated_at IS NULL",
+				tenantID, userID, req.Token)
+		} else {
+			lookupQuery = db.Where(
+				"tenant_id = ? AND user_id = ? AND endpoint = ? AND invalidated_at IS NULL",
+				tenantID, userID, req.Endpoint)
+		}
+		err := lookupQuery.First(&existing).Error
 		if err == nil {
 			updates := map[string]any{"last_seen_at": now}
 			if req.DeviceLabel != "" {
 				updates["device_label"] = req.DeviceLabel
+			}
+			// Refresh las claves Web Push (pueden rotar).
+			if hasWebPush {
+				updates["p256dh"] = req.P256dhKey
+				updates["auth"] = req.AuthKey
 			}
 			if err := db.Model(&existing).Updates(updates).Error; err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo actualizar el dispositivo"})
@@ -80,14 +117,21 @@ func RegisterDevice(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		// El token PUEDE existir bajo otro tenant (rotación de empleo).
-		// Lo invalidamos antes de crear el nuevo, respetando el invariante
-		// "un token nunca está activo en dos tenants a la vez".
-		if err := db.Model(&models.DeviceToken{}).
-			Where("token = ? AND invalidated_at IS NULL", req.Token).
-			Update("invalidated_at", &now).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo limpiar el registro previo"})
-			return
+		// Invalidar fila anterior bajo OTRO tenant (rotación de empleo).
+		if hasFCM {
+			if err := db.Model(&models.DeviceToken{}).
+				Where("token = ? AND invalidated_at IS NULL", req.Token).
+				Update("invalidated_at", &now).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo limpiar el registro previo"})
+				return
+			}
+		} else {
+			if err := db.Model(&models.DeviceToken{}).
+				Where("endpoint = ? AND invalidated_at IS NULL", req.Endpoint).
+				Update("invalidated_at", &now).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo limpiar el registro previo"})
+				return
+			}
 		}
 
 		// Crear el nuevo registro.
@@ -101,6 +145,12 @@ func RegisterDevice(db *gorm.DB) gin.HandlerFunc {
 		if req.DeviceLabel != "" {
 			l := req.DeviceLabel
 			newRow.DeviceLabel = &l
+		}
+		if hasWebPush {
+			ep, p, a := req.Endpoint, req.P256dhKey, req.AuthKey
+			newRow.Endpoint = &ep
+			newRow.P256dh = &p
+			newRow.Auth = &a
 		}
 		if err := db.Create(&newRow).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo registrar el dispositivo"})

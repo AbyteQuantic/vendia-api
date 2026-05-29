@@ -1,98 +1,106 @@
 // Spec: specs/038-push-notifications-web-android/spec.md
 //
-// Paquete `push` aísla la integración con FCM detrás de una interfaz
-// pequeña (`Sender`) que el dispatcher consume. Esto permite:
-//   - Tests unitarios sin red (FakeSender capturando llamadas).
-//   - Inyectar credenciales reales en producción vía
-//     `NewFCMSender(...)` desde `cmd/server/main.go`.
-//   - Sustituir FCM por otro proveedor (OneSignal, Pusher) en el
-//     futuro sin tocar el dispatcher.
+// Paquete `push` aísla la integración con FCM y Web Push (RFC 8030)
+// detrás de una interfaz pequeña (`Sender`) que el dispatcher consume.
+//
+// Por qué dos protocolos:
+//   - FCM: lo que usábamos en Android nativo + Web (Chrome, Firefox).
+//     firebase_messaging genera un token, backend envía vía Firebase
+//     Admin SDK.
+//   - Web Push nativo (RFC 8291): el browser registra un endpoint
+//     directamente con su propio servicio (Apple para iOS Safari,
+//     Mozilla, etc.). Backend firma con VAPID y envía con webpush-go.
+//     Necesario porque firebase_messaging FALLA en Flutter web +
+//     iOS Safari con un PlatformException(channel-error) sin
+//     solución upstream a 2026-05-29.
 //
 // Constitución:
-//   - Art. VI: las credenciales (`FCM_SERVICE_ACCOUNT_JSON`) viven en
-//     env de Render, nunca en el repo, y el token de cada dispositivo
-//     se manipula como bytes opacos — NO se loguea en plano.
-//   - Art. IX: archivo enfocado < 200 LOC; el dispatcher (siguiente
-//     archivo) usa esta interfaz sin conocer FCM directamente.
+//   - Art. VI: credenciales en env de Render (FCM_SERVICE_ACCOUNT_JSON,
+//     VAPID_PRIVATE_KEY), NUNCA en repo ni en logs.
+//   - Art. IX: archivo enfocado, los dos protocolos viven en helpers
+//     separados acá pero el `Sender` los unifica para el dispatcher.
 package push
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
 	firebase "firebase.google.com/go/v4"
 	"firebase.google.com/go/v4/messaging"
+	webpush "github.com/SherClockHolmes/webpush-go"
 	"google.golang.org/api/option"
 )
 
+// Target describe un destino genérico de push. El sender mira los
+// campos para decidir el protocolo: si `FCMToken` está lleno → FCM;
+// si `Endpoint` está lleno → Web Push nativo.
+//
+// `DeviceID` es el UUID del row en `device_tokens` y se usa para
+// que el sender reporte cuáles devices quedaron inválidos. Así el
+// dispatcher invalida por id (portable entre protocolos), no por
+// token (FCM token vs URL distinguibles).
+type Target struct {
+	DeviceID string
+	FCMToken string
+	Endpoint string
+	P256dh   string
+	Auth     string
+}
+
 // Payload describe el contenido a entregar al sistema operativo del
-// dispositivo. Es inmutable desde la perspectiva del sender — nunca se
-// muta después de pasarla a Send.
+// dispositivo. Es inmutable desde la perspectiva del sender.
 type Payload struct {
 	Title    string
 	Body     string
-	DeepLink string // Opcional. Si no está vacío, el cliente Flutter lo lee del data payload y navega a esa ruta.
+	DeepLink string
 }
 
-// SendResult resume el efecto de un Send. El dispatcher consume:
-//   - `Sent`: cuántos tokens recibieron OK (usa para decidir si
-//     `pushed_at` se setea en la Notification).
-//   - `Invalid`: lista de tokens que FCM marcó como inválidos
-//     (`UNREGISTERED`, `INVALID_ARGUMENT`); el dispatcher pone
-//     `invalidated_at` en esos rows (AC-10).
+// SendResult resume el efecto de un Send. `Invalid` lleva los
+// `DeviceID` (NO los tokens) que el proveedor reportó como muertos
+// — el dispatcher pone `invalidated_at` por id.
 type SendResult struct {
 	Sent    int
-	Invalid []string
+	Invalid []string // device IDs
 }
 
-// Sender es la abstracción consumida por el dispatcher. Todas las
-// implementaciones deben respetar la cancelación del ctx — un
-// dispatcher de prueba puede pasar un ctx con deadline corto para
-// validar timeouts.
+// Sender es la abstracción consumida por el dispatcher.
 type Sender interface {
-	Send(ctx context.Context, tokens []string, payload Payload) (SendResult, error)
+	Send(ctx context.Context, targets []Target, payload Payload) (SendResult, error)
 }
 
 // ─── FakeSender (tests) ──────────────────────────────────────────────
 
-// FakeSender captura cada llamada para que los tests del dispatcher
-// puedan assertear quién envió qué a quién. También permite simular
-// tokens inválidos y errores transitorios.
+// FakeSender captura cada llamada para que los tests assertean.
 type FakeSender struct {
-	// Calls acumula cada Send. Tests inspeccionan
-	// `fake.Calls[0].Tokens`, `fake.Calls[0].Payload`.
 	Calls []FakeCall
-
-	// InvalidateTokens es un set de tokens que el fake debe
-	// reportar como inválidos en el SendResult. Default vacío.
-	InvalidateTokens map[string]bool
-
-	// NextError, si no es nil, se retorna en la siguiente llamada y
-	// se limpia (one-shot). Permite simular un fallo transitorio.
-	NextError error
+	// InvalidateDeviceIDs es el set de device_ids que el fake reporta
+	// como inválidos. Default vacío.
+	InvalidateDeviceIDs map[string]bool
+	NextError           error
 }
 
 type FakeCall struct {
-	Tokens  []string
+	Targets []Target
 	Payload Payload
 }
 
-func (f *FakeSender) Send(ctx context.Context, tokens []string, payload Payload) (SendResult, error) {
+func (f *FakeSender) Send(ctx context.Context, targets []Target, payload Payload) (SendResult, error) {
 	if err := f.NextError; err != nil {
 		f.NextError = nil
 		return SendResult{}, err
 	}
-	if len(tokens) == 0 {
+	if len(targets) == 0 {
 		return SendResult{}, nil
 	}
-	f.Calls = append(f.Calls, FakeCall{Tokens: tokens, Payload: payload})
+	f.Calls = append(f.Calls, FakeCall{Targets: targets, Payload: payload})
 
 	var invalid []string
 	sent := 0
-	for _, t := range tokens {
-		if f.InvalidateTokens[t] {
-			invalid = append(invalid, t)
+	for _, t := range targets {
+		if f.InvalidateDeviceIDs[t.DeviceID] {
+			invalid = append(invalid, t.DeviceID)
 			continue
 		}
 		sent++
@@ -100,62 +108,127 @@ func (f *FakeSender) Send(ctx context.Context, tokens []string, payload Payload)
 	return SendResult{Sent: sent, Invalid: invalid}, nil
 }
 
-// ─── FCMSender (producción) ──────────────────────────────────────────
+// ─── UnifiedSender (producción) ──────────────────────────────────────
 
-// FCMConfig agrupa lo necesario para inicializar el cliente FCM.
-// `ServiceAccountJSON` es el contenido COMPLETO del JSON descargado
-// del Firebase Console — no la ruta a un archivo. Llega vía env var
-// `FCM_SERVICE_ACCOUNT_JSON` en Render.
+// UnifiedSender es el sender de producción: rutea cada Target al
+// protocolo correcto. Si FCMToken está lleno → FCM Admin SDK. Si
+// Endpoint está lleno → Web Push protocol con VAPID.
+//
+// Se construye una sola vez en cmd/server/main.go con NewUnifiedSender
+// y se inyecta al dispatcher.
+type UnifiedSender struct {
+	fcmClient    *messaging.Client // nil si FCM no está configurado
+	vapidPublic  string            // "" si Web Push no está configurado
+	vapidPrivate string
+	vapidSubject string
+}
+
+// FCMConfig agrupa lo necesario para el cliente FCM.
 type FCMConfig struct {
 	ServiceAccountJSON string
 	ProjectID          string
 }
 
-// FCMSender envuelve `firebase.google.com/go/v4/messaging`. Se
-// construye una sola vez en `cmd/server/main.go` y se inyecta al
-// dispatcher.
-type FCMSender struct {
-	client *messaging.Client
+// VAPIDConfig agrupa lo necesario para Web Push nativo.
+type VAPIDConfig struct {
+	PublicKey  string
+	PrivateKey string
+	Subject    string // mailto:contacto@vendia.store
 }
 
-// NewFCMSender inicializa el cliente FCM. Falla si el JSON está vacío
-// (defensa: en arranque local sin env, el server debe usar
-// FakeSender en su lugar — no un FCMSender con nil-client que se
-// crashe en runtime).
-func NewFCMSender(ctx context.Context, cfg FCMConfig) (*FCMSender, error) {
-	if cfg.ServiceAccountJSON == "" {
-		return nil, errors.New("push: FCM_SERVICE_ACCOUNT_JSON vacío — configurar env var en Render")
-	}
-	if cfg.ProjectID == "" {
-		return nil, errors.New("push: FCM_PROJECT_ID vacío")
+// NewUnifiedSender intenta inicializar ambos backends. Si uno falla
+// (env vars vacías), el sender funciona sin él: el dispatcher solo
+// puede enviar a targets del protocolo configurado. Falla solo si
+// AMBOS están vacíos.
+func NewUnifiedSender(ctx context.Context, fcm FCMConfig, vapid VAPIDConfig) (*UnifiedSender, error) {
+	s := &UnifiedSender{}
+
+	if fcm.ServiceAccountJSON != "" && fcm.ProjectID != "" {
+		creds := option.WithCredentialsJSON([]byte(fcm.ServiceAccountJSON))
+		app, err := firebase.NewApp(ctx, &firebase.Config{ProjectID: fcm.ProjectID}, creds)
+		if err != nil {
+			return nil, fmt.Errorf("push: firebase init: %w", err)
+		}
+		client, err := app.Messaging(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("push: messaging client: %w", err)
+		}
+		s.fcmClient = client
 	}
 
-	creds := option.WithCredentialsJSON([]byte(cfg.ServiceAccountJSON))
-	app, err := firebase.NewApp(ctx, &firebase.Config{ProjectID: cfg.ProjectID}, creds)
-	if err != nil {
-		return nil, fmt.Errorf("push: firebase init: %w", err)
+	if vapid.PublicKey != "" && vapid.PrivateKey != "" {
+		s.vapidPublic = vapid.PublicKey
+		s.vapidPrivate = vapid.PrivateKey
+		s.vapidSubject = vapid.Subject
+		if s.vapidSubject == "" {
+			s.vapidSubject = "mailto:contacto@vendia.store"
+		}
 	}
-	client, err := app.Messaging(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("push: messaging client: %w", err)
+
+	if s.fcmClient == nil && s.vapidPublic == "" {
+		return nil, errors.New(
+			"push: ningún backend configurado " +
+				"(falta FCM_SERVICE_ACCOUNT_JSON o VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY)")
 	}
-	return &FCMSender{client: client}, nil
+	return s, nil
 }
 
-// Send envía la misma `payload` a todos los tokens via FCM's
-// SendEachForMulticast (replacement de SendMulticast deprecado en v4
-// del SDK). Recolecta los tokens inválidos para que el dispatcher los
-// marque y deje de reintentarlos.
-func (s *FCMSender) Send(ctx context.Context, tokens []string, payload Payload) (SendResult, error) {
-	if len(tokens) == 0 {
+// Send rutea los targets a cada backend según el protocolo y agrega
+// los resultados.
+func (s *UnifiedSender) Send(ctx context.Context, targets []Target, payload Payload) (SendResult, error) {
+	if len(targets) == 0 {
 		return SendResult{}, nil
 	}
 
+	// Split: FCM vs Web Push.
+	var fcmTargets, webPushTargets []Target
+	for _, t := range targets {
+		if t.FCMToken != "" {
+			fcmTargets = append(fcmTargets, t)
+		} else if t.Endpoint != "" {
+			webPushTargets = append(webPushTargets, t)
+		}
+	}
+
+	var combined SendResult
+	if len(fcmTargets) > 0 {
+		r, err := s.sendFCM(ctx, fcmTargets, payload)
+		if err != nil {
+			return combined, err
+		}
+		combined.Sent += r.Sent
+		combined.Invalid = append(combined.Invalid, r.Invalid...)
+	}
+	if len(webPushTargets) > 0 {
+		r, err := s.sendWebPush(ctx, webPushTargets, payload)
+		if err != nil {
+			return combined, err
+		}
+		combined.Sent += r.Sent
+		combined.Invalid = append(combined.Invalid, r.Invalid...)
+	}
+	return combined, nil
+}
+
+func (s *UnifiedSender) sendFCM(ctx context.Context, targets []Target, payload Payload) (SendResult, error) {
+	if s.fcmClient == nil {
+		// FCM no configurado pero llegaron targets FCM — los reportamos
+		// como inválidos para que se invaliden y dejen de reintentar.
+		ids := make([]string, 0, len(targets))
+		for _, t := range targets {
+			ids = append(ids, t.DeviceID)
+		}
+		return SendResult{Invalid: ids}, nil
+	}
+
+	tokens := make([]string, len(targets))
+	for i, t := range targets {
+		tokens[i] = t.FCMToken
+	}
 	data := map[string]string{}
 	if payload.DeepLink != "" {
 		data["deep_link"] = payload.DeepLink
 	}
-
 	msg := &messaging.MulticastMessage{
 		Tokens: tokens,
 		Notification: &messaging.Notification{
@@ -164,12 +237,10 @@ func (s *FCMSender) Send(ctx context.Context, tokens []string, payload Payload) 
 		},
 		Data: data,
 	}
-
-	resp, err := s.client.SendEachForMulticast(ctx, msg)
+	resp, err := s.fcmClient.SendEachForMulticast(ctx, msg)
 	if err != nil {
-		return SendResult{}, fmt.Errorf("push: SendEachForMulticast: %w", err)
+		return SendResult{}, fmt.Errorf("push: FCM SendEachForMulticast: %w", err)
 	}
-
 	var invalid []string
 	sent := 0
 	for i, r := range resp.Responses {
@@ -177,22 +248,64 @@ func (s *FCMSender) Send(ctx context.Context, tokens []string, payload Payload) 
 			sent++
 			continue
 		}
-		// Tokens que FCM marca como muertos — el dispatcher los
-		// invalida en la BD para no reintentar.
 		if messaging.IsRegistrationTokenNotRegistered(r.Error) ||
 			messaging.IsInvalidArgument(r.Error) {
-			invalid = append(invalid, tokens[i])
+			invalid = append(invalid, targets[i].DeviceID)
 		}
-		// Otros errores (5xx de Google, red transitoria) no
-		// invalidan el token — quedan para reintento en el próximo
-		// evento.
 	}
-
 	return SendResult{Sent: sent, Invalid: invalid}, nil
 }
 
-// compile-time check de que ambos implementan Sender.
+func (s *UnifiedSender) sendWebPush(ctx context.Context, targets []Target, payload Payload) (SendResult, error) {
+	if s.vapidPublic == "" {
+		ids := make([]string, 0, len(targets))
+		for _, t := range targets {
+			ids = append(ids, t.DeviceID)
+		}
+		return SendResult{Invalid: ids}, nil
+	}
+
+	body, _ := json.Marshal(map[string]string{
+		"title":     payload.Title,
+		"body":      payload.Body,
+		"deep_link": payload.DeepLink,
+	})
+
+	var invalid []string
+	sent := 0
+	for _, t := range targets {
+		sub := &webpush.Subscription{
+			Endpoint: t.Endpoint,
+			Keys: webpush.Keys{
+				P256dh: t.P256dh,
+				Auth:   t.Auth,
+			},
+		}
+		resp, err := webpush.SendNotificationWithContext(ctx, body, sub, &webpush.Options{
+			Subscriber:      s.vapidSubject,
+			VAPIDPublicKey:  s.vapidPublic,
+			VAPIDPrivateKey: s.vapidPrivate,
+			TTL:             60 * 60, // 1 hora
+		})
+		if err != nil {
+			// Error de red transitorio — no invalidamos.
+			continue
+		}
+		resp.Body.Close()
+		// 404 (subscription expired) o 410 (gone) → invalidar.
+		if resp.StatusCode == 404 || resp.StatusCode == 410 {
+			invalid = append(invalid, t.DeviceID)
+			continue
+		}
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			sent++
+		}
+	}
+	return SendResult{Sent: sent, Invalid: invalid}, nil
+}
+
+// compile-time check.
 var (
 	_ Sender = (*FakeSender)(nil)
-	_ Sender = (*FCMSender)(nil)
+	_ Sender = (*UnifiedSender)(nil)
 )

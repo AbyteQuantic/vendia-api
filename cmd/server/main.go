@@ -126,26 +126,30 @@ func main() {
 	}
 
 	// ── Push Notifications (Spec 038) ────────────────────────────────────────
-	// FCMSender requiere credenciales reales en producción. En dev local
-	// (env vars vacías) caemos a FakeSender — el server arranca, las
-	// rutas /devices/* funcionan, pero las push reales no salen. Los
-	// tests de integración del dispatcher cubren la lógica sin red.
+	// UnifiedSender soporta FCM (Android/Chrome/Firefox) y Web Push
+	// nativo (iOS Safari). Si AMBAS env vars están vacías, arrancamos
+	// con FakeSender — el server vive, las rutas /devices/* funcionan,
+	// pero las push reales no salen.
 	var pushSender push.Sender
-	if cfg.FCMServiceAccountJSON != "" && cfg.FCMProjectID != "" {
-		fcm, err := push.NewFCMSender(context.Background(), push.FCMConfig{
+	unified, err := push.NewUnifiedSender(context.Background(),
+		push.FCMConfig{
 			ServiceAccountJSON: cfg.FCMServiceAccountJSON,
 			ProjectID:          cfg.FCMProjectID,
-		})
-		if err != nil {
-			log.Printf("[PUSH] warning: FCM init failed: %v — falling back to FakeSender", err)
-			pushSender = &push.FakeSender{}
-		} else {
-			pushSender = fcm
-			log.Printf("[PUSH] FCM sender ready (project_id=%s)", cfg.FCMProjectID)
-		}
-	} else {
+		},
+		push.VAPIDConfig{
+			PublicKey:  cfg.VAPIDPublicKey,
+			PrivateKey: cfg.VAPIDPrivateKey,
+			Subject:    cfg.VAPIDSubject,
+		},
+	)
+	if err != nil {
 		pushSender = &push.FakeSender{}
-		log.Println("[PUSH] FCM credentials not set — using FakeSender (push won't reach devices)")
+		log.Printf("[PUSH] no backend configured (%v) — using FakeSender", err)
+	} else {
+		pushSender = unified
+		fcmReady := cfg.FCMServiceAccountJSON != ""
+		vapidReady := cfg.VAPIDPublicKey != ""
+		log.Printf("[PUSH] UnifiedSender ready (FCM=%v, WebPush=%v)", fcmReady, vapidReady)
 	}
 	pushDispatcher := push.NewDispatcher(pushSender)
 

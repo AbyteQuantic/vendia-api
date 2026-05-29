@@ -154,12 +154,20 @@ func (d *Dispatcher) DispatchEvent(ctx context.Context, db *gorm.DB, evt Event) 
 		return Outcome{Status: OutcomeNoTokens, NotificationID: notifID}, nil
 	}
 
-	// Paso 6 — enviar.
-	tokenStrings := make([]string, 0, len(tokens))
+	// Paso 6 — construir Targets (FCM o Web Push según la fila) y enviar.
+	targets := make([]Target, 0, len(tokens))
 	for _, t := range tokens {
-		tokenStrings = append(tokenStrings, t.Token)
+		tgt := Target{DeviceID: t.ID}
+		if t.IsWebPush() {
+			tgt.Endpoint = *t.Endpoint
+			tgt.P256dh = *t.P256dh
+			tgt.Auth = *t.Auth
+		} else {
+			tgt.FCMToken = t.Token
+		}
+		targets = append(targets, tgt)
 	}
-	result, err := d.sender.Send(ctx, tokenStrings, Payload{
+	result, err := d.sender.Send(ctx, targets, Payload{
 		Title:    evt.Title,
 		Body:     evt.Body,
 		DeepLink: evt.DeepLink,
@@ -182,11 +190,12 @@ func (d *Dispatcher) DispatchEvent(ctx context.Context, db *gorm.DB, evt Event) 
 		}
 	}
 
-	// Paso 8 — invalidar tokens muertos.
+	// Paso 8 — invalidar tokens muertos (por device_id, portable
+	// entre protocolos — el sender reporta ids, no tokens).
 	if len(result.Invalid) > 0 {
 		invalidatedAt := now
 		if err := db.Model(&models.DeviceToken{}).
-			Where("tenant_id = ? AND token IN ?", evt.TenantID, result.Invalid).
+			Where("tenant_id = ? AND id IN ?", evt.TenantID, result.Invalid).
 			Update("invalidated_at", &invalidatedAt).Error; err != nil {
 			return Outcome{}, fmt.Errorf("push: invalidando tokens muertos: %w", err)
 		}

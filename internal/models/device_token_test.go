@@ -68,9 +68,10 @@ func TestDeviceToken_ValidatesPlatform(t *testing.T) {
 	assert.Contains(t, err.Error(), "platform")
 }
 
-// T-02a-3 — Token vacío es inválido (defensa contra clientes
-// mal portados que envían string vacío en vez de omitir el campo).
-func TestDeviceToken_RejectsEmptyToken(t *testing.T) {
+// T-02a-3 — Sin token Y sin Web Push subscription es inválido. Es
+// defensa: el cliente debe enviar al menos uno de los dos modos
+// (FCM o Web Push nativo).
+func TestDeviceToken_RejectsBothCredentialsMissing(t *testing.T) {
 	db := setupDeviceTokenDB(t)
 	tok := DeviceToken{
 		TenantID:   "11111111-1111-1111-1111-111111111111",
@@ -81,7 +82,29 @@ func TestDeviceToken_RejectsEmptyToken(t *testing.T) {
 	}
 	err := db.Create(&tok).Error
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "token")
+	assert.Contains(t, err.Error(), "credencial")
+}
+
+// T-02a-3b — Una fila Web Push (sin token FCM, con endpoint+p256dh+
+// auth + platform=web_ios) es VÁLIDA y se persiste correctamente.
+// Es el caso iOS Safari.
+func TestDeviceToken_AcceptsWebPushSubscription(t *testing.T) {
+	db := setupDeviceTokenDB(t)
+	endpoint := "https://web.push.apple.com/QH8wL5..."
+	p256 := "BFakeKeyForTestPurposesOnlyNotRealCryptoMaterial..."
+	auth := "fakeAuthSecret"
+	tok := DeviceToken{
+		TenantID:   "11111111-1111-1111-1111-111111111111",
+		UserID:     "22222222-2222-2222-2222-222222222222",
+		Token:      "",
+		Platform:   DeviceTokenPlatformWebIOS,
+		Endpoint:   &endpoint,
+		P256dh:     &p256,
+		Auth:       &auth,
+		LastSeenAt: time.Now(),
+	}
+	require.NoError(t, db.Create(&tok).Error)
+	assert.True(t, tok.IsWebPush())
 }
 
 // T-02a-4 — Un mismo token NO puede tener 2 filas activas en el mismo
@@ -95,18 +118,18 @@ func TestDeviceToken_RejectsEmptyToken(t *testing.T) {
 // chequeo en aplicación. Para mantener este test portable, validamos
 // que el modelo declara correctamente el índice via tag GORM — el
 // constraint real lo aplica Postgres en producción.
-func TestDeviceToken_DeclaresUniqueIndex(t *testing.T) {
-	// Inspect the struct tags directly to ensure the unique index
-	// annotation is present. This is a structural assertion: the
-	// real partial-WHERE constraint solo aplica en Postgres
-	// (producción), no en SQLite del test. El tag GORM es lo único
-	// portable de verificar.
+func TestDeviceToken_DeclaresPartialIndex(t *testing.T) {
+	// Inspect the struct tags directly. El uniqueIndex original se
+	// reemplazó por un parcial WHERE token != '' AND invalidated_at
+	// IS NULL — ahora las filas Web Push (token vacío) no chocan
+	// con el constraint. El index sigue ahí para optimizar la query
+	// del dispatcher.
 	tokType := reflect.TypeOf(DeviceToken{})
 	field, ok := tokType.FieldByName("Token")
 	require.True(t, ok, "campo Token debe existir en DeviceToken")
 	tag := field.Tag.Get("gorm")
-	assert.Contains(t, tag, "uniqueIndex",
-		"campo Token debe declarar uniqueIndex")
+	assert.Contains(t, tag, "idx_device_token_active",
+		"campo Token debe declarar el index parcial")
 }
 
 // T-02a-5 — DeviceTokenPlatform constants existen y son las dos
