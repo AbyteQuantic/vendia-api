@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 
 	firebase "firebase.google.com/go/v4"
 	"firebase.google.com/go/v4/messaging"
@@ -162,8 +163,19 @@ func NewUnifiedSender(ctx context.Context, fcm FCMConfig, vapid VAPIDConfig) (*U
 		s.vapidPrivate = vapid.PrivateKey
 		s.vapidSubject = vapid.Subject
 		if s.vapidSubject == "" {
-			s.vapidSubject = "mailto:contacto@vendia.store"
+			s.vapidSubject = "contacto@vendia.store"
 		}
+		// webpush-go v1.4.0 (vapid.go:78) tiene un bug: si el subject
+		// NO empieza con "https:", le prefija "mailto:" sin chequear
+		// si ya lo tiene. Si pasamos "mailto:foo@bar.com" queda
+		// "mailto:mailto:foo@bar.com" y Apple Push Service rechaza
+		// con HTTP 403 BadJwtToken (verificado 2026-05-30 vs
+		// web.push.apple.com).
+		//
+		// El operador suele pegar VAPID_SUBJECT=mailto:... porque
+		// es la convención RFC 8292. Strippeamos acá para que
+		// webpush-go agregue el prefijo una sola vez.
+		s.vapidSubject = strings.TrimPrefix(s.vapidSubject, "mailto:")
 	}
 
 	if s.fcmClient == nil && s.vapidPublic == "" {
