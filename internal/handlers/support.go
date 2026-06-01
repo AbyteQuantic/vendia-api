@@ -176,7 +176,10 @@ func AdminListSupportTickets(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		status := c.Query("status")
 		
-		var rows []AdminTicketRow
+		// Inicializar como slice vacío (no nil) para que Gin lo serialice
+		// como `[]` y no `null`. El frontend hace `.filter()` sobre la
+		// respuesta y se rompe ("This page couldn't load") si es `null`.
+		rows := []AdminTicketRow{}
 		query := db.Table("support_tickets AS st").
 			Select(`st.id, st.tenant_id, t.business_name, st.subject, st.status, st.priority, st.category, st.created_at, st.updated_at,
 			        COALESCE((SELECT content FROM support_ticket_messages WHERE ticket_id = st.id ORDER BY created_at DESC LIMIT 1), '') as last_message`).

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"vendia-backend/internal/handlers"
@@ -115,6 +116,26 @@ func TestAdminListSupportTickets_Ordering(t *testing.T) {
 	require.Len(t, res, 2)
 	assert.Equal(t, tk2.ID, res[0].ID) // Open first
 	assert.Equal(t, tk1.ID, res[1].ID) // Resolved last
+}
+
+// Regresión: cuando no hay tickets, el endpoint DEBE devolver `[]`
+// (no `null`). El frontend admin hace `.filter()` sobre la respuesta y
+// reventaba toda la página /admin/support con un crash silencioso de
+// React cuando el body venía como `null`.
+func TestAdminListSupportTickets_EmptyReturnsArrayNotNull(t *testing.T) {
+	db := setupSupportDB(t)
+	r := gin.New()
+	r.GET("/admin/tickets", handlers.AdminListSupportTickets(db))
+
+	req, _ := http.NewRequest(http.MethodGet, "/admin/tickets", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	// Comparación textual deliberada — `null` también deserializa a
+	// `[]AdminTicketRow{}` con Unmarshal, así que la verificación tiene
+	// que ser sobre el JSON crudo.
+	assert.Equal(t, "[]", strings.TrimSpace(w.Body.String()))
 }
 
 func TestAdminAddMessage_UpdatesStatusToInProgress(t *testing.T) {
