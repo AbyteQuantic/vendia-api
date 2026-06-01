@@ -92,6 +92,11 @@ func Migrate(db *gorm.DB) error {
 		&models.Branch{},
 		&models.TenantSubscription{},
 		&models.SupportTicket{},
+		// Spec 038/hotfix 2026-05-31: support_ticket_messages se omitió
+		// en migración original — el handler AdminListSupportTickets
+		// hace SELECT contra esta tabla y devolvía 500 en /admin/support.
+		// Aditivo y retrocompatible (Art. X).
+		&models.SupportTicketMessage{},
 		// Catalog CMS (migration 024). Registered here so a zero-state
 		// deploy doesn't 500 on GET /admin/catalogs/templates. The SQL
 		// migration file stays as canonical reference but Render runs
