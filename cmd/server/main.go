@@ -749,6 +749,9 @@ func main() {
 	admin.Use(middleware.Auth(cfg.JWTSecret))
 	admin.Use(middleware.SuperAdminOnly())
 	{
+		// Hotfix 2026-05-31 — agregador con 6 secciones que la
+		// pantalla /admin/analytics del admin-web consume.
+		admin.GET("/analytics", handlers.AdminAnalytics(db))
 		admin.GET("/analytics/overview", handlers.AdminOverview(db))
 		admin.GET("/analytics/ai-costs", handlers.AdminAICosts(db))
 		admin.GET("/analytics/revenue", handlers.AdminSubscriptionRevenue(db))
