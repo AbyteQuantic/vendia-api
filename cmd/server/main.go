@@ -793,6 +793,25 @@ func main() {
 
 		// Spec 038 — Push broadcast manual (super_admin → un tenant).
 		admin.POST("/push/broadcast", handlers.BroadcastPush(db, pushDispatcher))
+
+		// Spec F041 — gestión del catálogo dinámico de módulos y tipos.
+		admin.GET("/catalog/modules", handlers.AdminListBusinessModules(db))
+		admin.POST("/catalog/modules", handlers.AdminCreateBusinessModule(db))
+		// "modules-reorder" (no "/modules/reorder") para no chocar en el
+		// árbol de rutas POST con el wildcard ":id" de /modules/:id/archive.
+		admin.POST("/catalog/modules-reorder", handlers.AdminReorderBusinessModules(db))
+		admin.PATCH("/catalog/modules/:id", handlers.AdminUpdateBusinessModule(db))
+		admin.POST("/catalog/modules/:id/archive", handlers.AdminArchiveBusinessModule(db))
+		admin.PUT("/catalog/modules/:id/relations", handlers.AdminSetModuleRelations(db))
+		admin.GET("/catalog/business-types", handlers.AdminListBusinessTypes(db))
+		admin.POST("/catalog/business-types", handlers.AdminCreateBusinessType(db))
+		admin.PATCH("/catalog/business-types/:id", handlers.AdminUpdateBusinessType(db))
+		admin.POST("/catalog/business-types/:id/archive", handlers.AdminArchiveBusinessType(db))
+		admin.GET("/catalog/preview", handlers.AdminCatalogPreview(db))
+		admin.GET("/catalog/audit-logs", handlers.AdminListCatalogAuditLogs(db))
+		admin.GET("/tenants/:id/module-overrides", handlers.AdminListTenantOverrides(db))
+		admin.PUT("/tenants/:id/module-overrides/:moduleId", handlers.AdminPutTenantOverride(db))
+		admin.DELETE("/tenants/:id/module-overrides/:moduleId", handlers.AdminDeleteTenantOverride(db))
 	}
 
 	log.Printf("VendIA backend running on :%s (env=%s)", cfg.Port, cfg.Env)
