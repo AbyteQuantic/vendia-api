@@ -43,6 +43,14 @@ func setupCatalogHandlerDB(t *testing.T) *gorm.DB {
 		BaseModel: models.BaseModel{ID: "t-1"}, Value: "tienda_barrio",
 		Label: "Tienda de Barrio", Active: true,
 	}).Error)
+	// Tipo archivado: NO debe aparecer en /catalog (AC-17), pero la tienda
+	// que ya lo tuviera seleccionado lo conserva en su business_types.
+	archivedType := models.BusinessTypeCatalog{
+		BaseModel: models.BaseModel{ID: "t-old"}, Value: "tipo_viejo",
+		Label: "Tipo Viejo", Active: false,
+	}
+	require.NoError(t, db.Create(&archivedType).Error)
+	require.NoError(t, db.Model(&archivedType).Update("archived_at", gorm.Expr("CURRENT_TIMESTAMP")).Error)
 	// Override solo para la tienda A.
 	require.NoError(t, db.Create(&models.TenantModuleOverride{
 		BaseModel: models.BaseModel{ID: "ov-1"}, TenantID: "tienda-A",
@@ -106,6 +114,25 @@ func TestGetBusinessCatalog_ETag304(t *testing.T) {
 	second := doCatalogGet(db, "tienda-A", etag)
 	assert.Equal(t, http.StatusNotModified, second.Code)
 	assert.Empty(t, second.Body.String())
+}
+
+// AC-17 — un tipo archivado no aparece en el catálogo que consume la app.
+func TestGetBusinessCatalog_ExcludesArchivedTypes(t *testing.T) {
+	db := setupCatalogHandlerDB(t)
+	w := doCatalogGet(db, "tienda-A", "")
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Data struct {
+			Types []models.BusinessTypeCatalog `json:"types"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	values := map[string]bool{}
+	for _, t2 := range resp.Data.Types {
+		values[t2.Value] = true
+	}
+	assert.True(t, values["tienda_barrio"], "el tipo activo sí aparece")
+	assert.False(t, values["tipo_viejo"], "el tipo archivado NO aparece")
 }
 
 func TestGetBusinessCatalog_OverrideIsolation(t *testing.T) {

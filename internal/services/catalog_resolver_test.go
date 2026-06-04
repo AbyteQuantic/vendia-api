@@ -116,6 +116,36 @@ func TestResolveModules_PremiumGating(t *testing.T) {
 	assert.True(t, findResolved(ResolveModules(in), "marketing").InGrid)
 }
 
+// AC-04 — un módulo inactivo globalmente SIN override no se muestra.
+func TestResolveModules_GlobalInactiveHidden(t *testing.T) {
+	m := mod("promos", "enable_promotions")
+	m.Active = false // inactivo global, sin override
+	out := ResolveModules(ResolveInput{
+		Modules:         []models.BusinessModule{m},
+		CapabilityState: map[string]bool{"enable_promotions": true},
+	})
+	r := findResolved(out, "promos")
+	assert.False(t, r.InGrid)
+	assert.False(t, r.InReel, "inactivo global sin override → oculto del todo")
+}
+
+// AC-16 — cambiar el nivel a 'sugerido' NO enciende un módulo que el tendero
+// dejó apagado: el estado lo sigue dando la bandera (capState), no el nivel.
+func TestResolveModules_SuggestedRespectsTenderoChoice(t *testing.T) {
+	m := mod("recetas", "enable_recipes")
+	rel := models.ModuleTypeRelation{ModuleID: "recetas", BusinessTypeValue: "restaurante", RelationLevel: models.RelationSuggested}
+	out := ResolveModules(ResolveInput{
+		Modules:     []models.BusinessModule{m},
+		Relations:   []models.ModuleTypeRelation{rel},
+		TenantTypes: []string{"restaurante"},
+		// El tendero lo tenía apagado → 'sugerido' no lo fuerza al grid.
+		CapabilityState: map[string]bool{},
+	})
+	r := findResolved(out, "recetas")
+	assert.False(t, r.InGrid, "sugerido no pisa la elección apagada del tendero")
+	assert.True(t, r.InReel, "queda como descubrible, no encendido")
+}
+
 func TestResolveModules_ArchivedExcluded(t *testing.T) {
 	m := mod("viejo", "")
 	now := time.Now()
