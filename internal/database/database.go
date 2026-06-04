@@ -178,6 +178,16 @@ func Migrate(db *gorm.DB) error {
 		// son recogidos automáticamente por AutoMigrate sobre el
 		// struct Notification ya registrado más arriba (Art. X).
 		&models.DeviceToken{},
+		// Spec F041 — catálogo dinámico de módulos y tipos de negocio.
+		// Cinco tablas nuevas que mueven a la DB lo que estaba hardcodeado
+		// en Flutter + Go, para gestión desde el admin sin releases.
+		// Aditivo y retrocompatible: NO toca las columnas enable_* del
+		// Tenant (conviven como estado activado por tienda — D1) (Art. X).
+		&models.BusinessModule{},
+		&models.BusinessTypeCatalog{},
+		&models.ModuleTypeRelation{},
+		&models.TenantModuleOverride{},
+		&models.CatalogAuditLog{},
 	)
 	if err != nil {
 		return err

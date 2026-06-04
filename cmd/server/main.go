@@ -103,6 +103,16 @@ func main() {
 		log.Printf("[BOOTSTRAP] F037 capability backfill flipped %d tenant×flags", touched)
 	}
 
+	// Spec F041 — siembra el catálogo dinámico (módulos + tipos + relaciones)
+	// con paridad del catálogo actual. Idempotente: si ya hay módulos, no-op.
+	// Permite gestionar el dashboard desde el admin sin releases; el
+	// comportamiento inicial es idéntico al de hoy (AC-11).
+	if created, err := database.SeedBusinessCatalog(db); err != nil {
+		log.Printf("[BOOTSTRAP] catalog seed failed: %v", err)
+	} else if created > 0 {
+		log.Printf("[BOOTSTRAP] catalog seed inserted %d modules", created)
+	}
+
 	// ── Initialize external services (optional, nil-safe) ───────────────────
 	var geminiSvc *services.GeminiService
 	if cfg.GeminiAPIKey != "" {
@@ -386,6 +396,10 @@ func main() {
 		// ePayco confirmation webhook is mounted PUBLIC above.
 		v1.GET("/subscription/plans", handlers.GetSubscriptionPlans())
 		v1.GET("/subscription/status", handlers.GetSubscriptionStatus(db))
+
+		// Spec F041 — catálogo dinámico de módulos/tipos para el dashboard.
+		// Solo lectura; la app lo cachea (offline-first) y resuelve qué ver.
+		v1.GET("/catalog", handlers.GetBusinessCatalog(db))
 		v1.POST("/subscription/checkout", handlers.CreateSubscriptionCheckout(db, epaycoSvc))
 
 		// Sync (offline-first)
