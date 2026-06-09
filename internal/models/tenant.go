@@ -45,6 +45,10 @@ type FeatureFlags struct {
 	EnableServices        bool `json:"enable_services"`
 	EnableCustomBilling   bool `json:"enable_custom_billing"`
 	EnableFractionalUnits bool `json:"enable_fractional_units"`
+	// EnableEvents gates the Events module (Spec F042). Self-activated by
+	// the tenant from settings / the "descubre más opciones" reel — never
+	// type-implied, so DefaultFeatureFlags leaves it false (decision #2).
+	EnableEvents bool `json:"enable_events"`
 }
 
 // CapabilityToggles carries the three optional capability toggles that a

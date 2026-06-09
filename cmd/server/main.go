@@ -307,6 +307,14 @@ func main() {
 		buildHandlers(orderRateLimiter, captchaMiddleware, handlers.CreateWebOrder(db))...)
 	r.GET("/api/v1/store/:slug/order/:uuid", handlers.GetWebOrderStatus(db))
 
+	// Events public storefront (Spec F042). Listing/detail are open reads;
+	// the inscription POST carries the dedicated rate-limiter + Turnstile
+	// (F025) because it materializes a Customer and consumes resources.
+	r.GET("/api/v1/store/:slug/events", handlers.PublicListEvents(db))
+	r.GET("/api/v1/store/:slug/events/:id", handlers.PublicGetEvent(db))
+	r.POST("/api/v1/store/:slug/events/:id/register",
+		buildHandlers(orderRateLimiter, captchaMiddleware, handlers.PublicRegisterEvent(db))...)
+
 	// Public rockola (customer suggests song)
 	r.POST("/api/v1/rockola/:slug/suggest", handlers.SuggestSong(db))
 
@@ -503,6 +511,15 @@ func main() {
 		v1.POST("/quotes/:id/send", handlers.SendQuote(db))
 		v1.POST("/quotes/:id/mark-status", handlers.MarkQuoteStatus(db))
 		v1.POST("/quotes/:id/convert", handlers.ConvertQuote(db))
+
+		// Events (Spec F042) — organizer-side CRUD + publish. Attendee
+		// inscription, payment and check-in live on the public group below.
+		v1.GET("/events", handlers.ListEvents(db))
+		v1.POST("/events", handlers.CreateEvent(db))
+		v1.GET("/events/:id", handlers.GetEvent(db))
+		v1.PATCH("/events/:id", handlers.UpdateEvent(db))
+		v1.DELETE("/events/:id", handlers.DeleteEvent(db))
+		v1.POST("/events/:id/publish", handlers.PublishEvent(db))
 
 		// Credits (El Fiar)
 		v1.GET("/credits", handlers.ListCredits(db))
