@@ -107,3 +107,38 @@ func applyLedgerIndexes(db *gorm.DB) error {
 	}
 	return nil
 }
+
+// ensureBusinessTypesWhitelist keeps the Postgres validate_business_types()
+// function in sync with models.ValidBusinessTypes. The CHECK constraint
+// tenants_business_types_valid (migration 020) calls this function, so adding
+// a new business type (e.g. academias_instituciones for F042) requires the
+// function to accept it. Render runs AutoMigrate only — never the .sql
+// migrations — so we CREATE OR REPLACE the function here (idempotent; the
+// constraint keeps pointing at the same function, no DROP needed).
+func ensureBusinessTypesWhitelist(db *gorm.DB) error {
+	return db.Exec(`
+CREATE OR REPLACE FUNCTION validate_business_types(val TEXT) RETURNS BOOLEAN AS $$
+BEGIN
+    IF val IS NULL OR val = '' OR val = '[]' THEN
+        RETURN TRUE;
+    END IF;
+    RETURN (
+        SELECT bool_and(
+            v IN (
+                'tienda_barrio',
+                'minimercado',
+                'deposito_construccion',
+                'restaurante',
+                'comidas_rapidas',
+                'bar',
+                'manufactura',
+                'reparacion_muebles',
+                'emprendimiento_general',
+                'academias_instituciones'
+            )
+        )
+        FROM jsonb_array_elements_text(val::jsonb) AS v
+    );
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;`).Error
+}

@@ -235,11 +235,11 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 
 			flags := models.DefaultFeatureFlags(businessTypes, opts)
 
-			// Spec F042: EnableEvents is self-activated, never type-derived,
-			// so DefaultFeatureFlags leaves it false. Preserve the current
-			// value across recomputes and only change it when the request
-			// explicitly sends enable_events (decision #2).
-			flags.EnableEvents = tenant.FeatureFlags.EnableEvents
+			// Spec F042: EnableEvents is type-implied for academias
+			// (DefaultFeatureFlags ya lo computó) OR self-activated. Se
+			// preserva si ya estaba ON, y un request explícito puede
+			// togglearlo (decisión #2 + tipo academias).
+			flags.EnableEvents = flags.EnableEvents || tenant.FeatureFlags.EnableEvents
 			if req.Config.EnableEvents != nil {
 				flags.EnableEvents = *req.Config.EnableEvents
 			}
