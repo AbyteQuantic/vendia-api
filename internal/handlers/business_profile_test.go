@@ -92,6 +92,37 @@ func TestUpdateBusinessProfile_ToggleServices_RecomputesFlags(t *testing.T) {
 		"tienda_barrio no debe tener tips tras el toggle de services")
 }
 
+// TestUpdateBusinessProfile_ToggleEvents verifies the self-service activation
+// of the Events module (Spec F042, decision #2): config.enable_events=true sets
+// feature_flags.enable_events, and a later unrelated config PATCH preserves it
+// (it is not type-derived, so the recompute must not reset it).
+func TestUpdateBusinessProfile_ToggleEvents(t *testing.T) {
+	tenantID, router := setupProfileSuite(t)
+	db := setupTestDB(t)
+
+	var before models.Tenant
+	require.NoError(t, db.Where("id = ?", tenantID).First(&before).Error)
+	assert.False(t, before.FeatureFlags.EnableEvents, "precondición: eventos OFF")
+
+	w := patchProfile(router, map[string]any{
+		"config": map[string]any{"enable_events": true},
+	})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var after models.Tenant
+	require.NoError(t, db.Where("id = ?", tenantID).First(&after).Error)
+	assert.True(t, after.FeatureFlags.EnableEvents, "enable_events debe activarse")
+
+	// A subsequent unrelated config PATCH must NOT reset enable_events.
+	w2 := patchProfile(router, map[string]any{
+		"config": map[string]any{"offers_services": true},
+	})
+	require.Equal(t, http.StatusOK, w2.Code, w2.Body.String())
+	var after2 models.Tenant
+	require.NoError(t, db.Where("id = ?", tenantID).First(&after2).Error)
+	assert.True(t, after2.FeatureFlags.EnableEvents, "eventos debe preservarse tras recompute")
+}
+
 // TestUpdateBusinessProfile_ToggleSellsByWeight_RecomputesFlags verifies
 // config.sells_by_weight=true enables fractional units (FR-04).
 func TestUpdateBusinessProfile_ToggleSellsByWeight_RecomputesFlags(t *testing.T) {

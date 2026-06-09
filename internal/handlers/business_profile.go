@@ -121,6 +121,12 @@ type ProfileConfigInput struct {
 	// explícito".
 	EnablePromotions *bool `json:"enable_promotions"`
 
+	// Spec F042 — módulo de eventos. Self-activado por el tendero desde el
+	// reel "Descubre más opciones" (decisión #2). Vive dentro de
+	// feature_flags (no es columna top-level), así que se preserva
+	// explícitamente en el recompute. Default OFF.
+	EnableEvents *bool `json:"enable_events"`
+
 	// Spec F037 — capacidades reclasificadas de byType→opcional. Cada
 	// flag es un toggle simple que el reel del Dashboard puede activar
 	// vía PATCH. Default OFF. Pointer para distinguir "no enviado" de
@@ -228,6 +234,16 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 			opts := resolveToggles(tenant, req.Config, businessTypes)
 
 			flags := models.DefaultFeatureFlags(businessTypes, opts)
+
+			// Spec F042: EnableEvents is self-activated, never type-derived,
+			// so DefaultFeatureFlags leaves it false. Preserve the current
+			// value across recomputes and only change it when the request
+			// explicitly sends enable_events (decision #2).
+			flags.EnableEvents = tenant.FeatureFlags.EnableEvents
+			if req.Config.EnableEvents != nil {
+				flags.EnableEvents = *req.Config.EnableEvents
+			}
+
 			flagsJSON, err := json.Marshal(flags)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "error al calcular capacidades"})
