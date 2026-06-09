@@ -20,6 +20,7 @@ func setupInstallmentsDB(t *testing.T) *gorm.DB {
 	require.NoError(t, db.AutoMigrate(
 		&models.Event{}, &models.EventRegistration{}, &models.EventScan{},
 		&models.Customer{}, &models.CreditAccount{}, &models.CreditPayment{},
+		&models.EventInstallment{},
 	))
 	return db
 }
@@ -86,4 +87,46 @@ func TestSetupInstallments_CreatesSeparateLinkedAccount(t *testing.T) {
 	require.NoError(t, db.First(&stored, "id = ?", reg.ID).Error)
 	require.NotNil(t, stored.CreditAccountID)
 	assert.Equal(t, account.ID, *stored.CreditAccountID)
+}
+
+func TestSetupInstallments_PersistsDatedSchedule(t *testing.T) {
+	db := setupInstallmentsDB(t)
+	tenantID := "tenant-a"
+
+	evSvc := services.NewEventService(db)
+	ev, err := evSvc.Create(tenantID, &models.Event{
+		Type: models.EventTypeCurso, Title: "Diplomado", Modality: models.EventModalityVirtual,
+		Capacity: 50, Price: 150000, InstallmentsEnabled: true, InstallmentsCount: 3,
+	})
+	require.NoError(t, err)
+	_, err = evSvc.Publish(tenantID, ev.ID)
+	require.NoError(t, err)
+
+	regSvc := services.NewEventRegistrationService(db)
+	reg, err := regSvc.Register(tenantID, services.RegisterInput{
+		EventID: ev.ID, Name: "Ana", Phone: "3001234567", ConsentComms: true,
+	})
+	require.NoError(t, err)
+
+	_, _, err = regSvc.SetupInstallments(tenantID, reg.ID)
+	require.NoError(t, err)
+
+	// D3: the dated schedule is persisted — one row per cuota, with due dates,
+	// summing exactly to the price, all pending.
+	var rows []models.EventInstallment
+	require.NoError(t, db.Where("registration_id = ?", reg.ID).Order("number ASC").Find(&rows).Error)
+	require.Len(t, rows, 3)
+
+	var sum int64
+	for i, r := range rows {
+		assert.Equal(t, i+1, r.Number)
+		assert.Equal(t, models.InstallmentStatusPending, r.Status)
+		assert.Zero(t, r.Amount%50)
+		assert.False(t, r.DueDate.IsZero(), "cada cuota debe tener fecha de vencimiento")
+		if i > 0 {
+			assert.True(t, r.DueDate.After(rows[i-1].DueDate), "las fechas deben ser crecientes")
+		}
+		sum += r.Amount
+	}
+	assert.Equal(t, int64(150000), sum)
 }

@@ -103,6 +103,9 @@ func (s *SyncService) processOperation(tx *gorm.DB, tenantID string, op SyncOper
 		return s.syncJSONEntity(tx, tenantID, op, &reg)
 	case "event_scan":
 		return s.syncEventScan(tx, tenantID, op)
+	case "event_installment":
+		var inst models.EventInstallment
+		return s.syncJSONEntity(tx, tenantID, op, &inst)
 	default:
 		return true, nil
 	}

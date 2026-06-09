@@ -17,6 +17,10 @@ import (
 // reminder run (the cron runs daily).
 const EventReminderWindow = 24 * time.Hour
 
+// QuotaReminderWindow is how soon a pending cuota's due date must be (or how
+// overdue) to trigger a reminder (D3 — uses the persisted schedule).
+const QuotaReminderWindow = 3 * 24 * time.Hour
+
 // EventReminderResult summarizes a reminder run for the cron response.
 type EventReminderResult struct {
 	EventRemindersSent int `json:"event_reminders_sent"`
@@ -70,7 +74,7 @@ func RunEventReminders(db *gorm.DB, now time.Time, dispatcher *push.Dispatcher, 
 	}
 
 	// ── Pending-installment reminders ─────────────────────────────────
-	res.QuotaRemindersSent = sendQuotaReminders(ctx, db, emailSvc)
+	res.QuotaRemindersSent = sendQuotaReminders(ctx, db, emailSvc, now)
 	return res, nil
 }
 
@@ -92,27 +96,28 @@ func confirmedRegistrationsWithCustomer(db *gorm.DB, tenantID, eventID string) (
 	return out, err
 }
 
-// sendQuotaReminders emails attendees whose event-scoped credit account still
-// has an outstanding balance. Without a dated installment schedule we send a
-// generic "cuota pendiente" reminder (best-effort MVP).
-func sendQuotaReminders(ctx context.Context, db *gorm.DB, emailSvc *email.Service) int {
+// sendQuotaReminders emails attendees about pending cuotas whose due date is
+// near or past (D3 — uses the persisted EventInstallment schedule for precise
+// "próxima/vencida" reminders).
+func sendQuotaReminders(ctx context.Context, db *gorm.DB, emailSvc *email.Service, now time.Time) int {
 	if emailSvc == nil {
 		return 0
 	}
 	type row struct {
-		Name        string
-		Email       string
-		Title       string
-		TotalAmount int64
-		PaidAmount  int64
+		Name    string
+		Email   string
+		Title   string
+		Amount  int64
+		DueDate time.Time
 	}
 	var rows []row
-	err := db.Table("event_registrations AS r").
-		Select("c.name AS name, c.email AS email, e.title AS title, a.total_amount, a.paid_amount").
-		Joins("JOIN credit_accounts a ON a.id = r.credit_account_id AND a.status = 'open'").
+	err := db.Table("event_installments AS i").
+		Select("c.name AS name, c.email AS email, e.title AS title, i.amount AS amount, i.due_date AS due_date").
+		Joins("JOIN event_registrations r ON r.id = i.registration_id").
 		Joins("JOIN customers c ON c.id = r.customer_id").
 		Joins("JOIN events e ON e.id = r.event_id").
-		Where("r.credit_account_id IS NOT NULL AND r.deleted_at IS NULL AND a.total_amount > a.paid_amount").
+		Where("i.status = ? AND i.deleted_at IS NULL AND i.due_date <= ?",
+			models.InstallmentStatusPending, now.Add(QuotaReminderWindow)).
 		Scan(&rows).Error
 	if err != nil {
 		return 0
@@ -122,10 +127,9 @@ func sendQuotaReminders(ctx context.Context, db *gorm.DB, emailSvc *email.Servic
 		if r.Email == "" {
 			continue
 		}
-		balance := r.TotalAmount - r.PaidAmount
 		if err := emailSvc.SendQuotaReminder(ctx, email.QuotaReminder{
 			To: r.Email, Name: r.Name, EventTitle: r.Title,
-			AmountStr: fmt.Sprintf("$%d", balance), DueDateStr: "pronto",
+			AmountStr: fmt.Sprintf("$%d", r.Amount), DueDateStr: r.DueDate.Format("02/01/2006"),
 		}); err == nil {
 			sent++
 		}

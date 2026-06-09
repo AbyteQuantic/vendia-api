@@ -197,6 +197,8 @@ func Migrate(db *gorm.DB) error {
 		&models.Event{},
 		&models.EventRegistration{},
 		&models.EventScan{},
+		// F042 §12 D3 — cronograma de cuotas persistido con fechas.
+		&models.EventInstallment{},
 	)
 	if err != nil {
 		return err

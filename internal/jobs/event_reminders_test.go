@@ -20,7 +20,8 @@ func setupReminderDB(t *testing.T) *gorm.DB {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(
-		&models.Event{}, &models.EventRegistration{}, &models.Customer{}, &models.CreditAccount{},
+		&models.Event{}, &models.EventRegistration{}, &models.Customer{},
+		&models.CreditAccount{}, &models.EventInstallment{},
 	))
 	return db
 }
@@ -50,6 +51,40 @@ func TestRunEventReminders_EmailsUpcomingAttendees(t *testing.T) {
 	assert.Equal(t, 1, res.EventRemindersSent)
 	require.Len(t, fake.Sent, 1)
 	assert.Equal(t, "ana@example.com", fake.Sent[0].To)
+}
+
+func TestRunEventReminders_QuotaDueSoon(t *testing.T) {
+	db := setupReminderDB(t)
+	now := time.Date(2026, 6, 9, 8, 0, 0, 0, time.UTC)
+	dueSoon := now.Add(2 * 24 * time.Hour) // within QuotaReminderWindow
+	dueFar := now.Add(20 * 24 * time.Hour) // outside window
+
+	require.NoError(t, db.Create(&models.Event{
+		BaseModel: models.BaseModel{ID: "ev3"}, TenantID: "t1", Title: "Diplomado",
+		Modality: models.EventModalityVirtual, Status: models.EventStatusPublicado,
+	}).Error)
+	require.NoError(t, db.Create(&models.Customer{
+		BaseModel: models.BaseModel{ID: "c3"}, TenantID: "t1", Name: "Cata", Email: "cata@example.com",
+	}).Error)
+	require.NoError(t, db.Create(&models.EventRegistration{
+		BaseModel: models.BaseModel{ID: "r3"}, TenantID: "t1", EventID: "ev3", CustomerID: "c3",
+		QRToken: "q3", PublicToken: "p3", PaymentStatus: models.RegistrationPaymentConfirmed,
+	}).Error)
+	require.NoError(t, db.Create(&models.EventInstallment{
+		BaseModel: models.BaseModel{ID: "i1"}, TenantID: "t1", RegistrationID: "r3",
+		Number: 1, Amount: 50000, DueDate: dueSoon, Status: models.InstallmentStatusPending,
+	}).Error)
+	require.NoError(t, db.Create(&models.EventInstallment{
+		BaseModel: models.BaseModel{ID: "i2"}, TenantID: "t1", RegistrationID: "r3",
+		Number: 2, Amount: 50000, DueDate: dueFar, Status: models.InstallmentStatusPending,
+	}).Error)
+
+	fake := &email.FakeSender{}
+	svc := email.NewServiceWithSender(fake, "eventos@vendia.store")
+
+	res, err := jobs.RunEventReminders(db, now, nil, svc)
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.QuotaRemindersSent, "solo la cuota dentro de ventana dispara recordatorio")
 }
 
 func TestRunEventReminders_SkipsFarAndUnconfirmed(t *testing.T) {

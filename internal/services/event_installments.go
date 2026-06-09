@@ -4,9 +4,13 @@ package services
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"vendia-backend/internal/models"
 )
+
+// installmentSpacing is the gap between consecutive cuotas in the manual plan.
+const installmentSpacing = 30 * 24 * time.Hour
 
 // ErrTooManyInstallments is returned when the number of installments would
 // force a cuota below the $50 minimum unit.
@@ -78,6 +82,26 @@ func (s *EventRegistrationService) SetupInstallments(tenantID, registrationID st
 
 	if err := s.db.Model(&reg).Update("credit_account_id", account.ID).Error; err != nil {
 		return nil, nil, fmt.Errorf("vincular cuenta de cuotas: %w", err)
+	}
+
+	// D3: persist the dated schedule (one row per cuota) so reminders can be
+	// precise about "cuota próxima/vencida". First cuota due ~30 days out,
+	// then every 30 days.
+	base := time.Now().UTC()
+	for i, amount := range schedule {
+		due := base.Add(time.Duration(i+1) * installmentSpacing)
+		row := &models.EventInstallment{
+			TenantID:        tenantID,
+			RegistrationID:  reg.ID,
+			CreditAccountID: &account.ID,
+			Number:          i + 1,
+			Amount:          amount,
+			DueDate:         due,
+			Status:          models.InstallmentStatusPending,
+		}
+		if err := s.db.Create(row).Error; err != nil {
+			return nil, nil, fmt.Errorf("crear cuota %d: %w", i+1, err)
+		}
 	}
 	return account, schedule, nil
 }
