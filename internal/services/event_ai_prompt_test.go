@@ -54,6 +54,14 @@ func TestBuildEventPosterPrompt_SellsAndHasNoQR(t *testing.T) {
 			t.Fatalf("el afiche debe exigir calidad profesional con escena (%q):\n%s", anchor, p)
 		}
 	}
+	// La pieza NO debe recargarse de texto: el detalle (temario/horarios) va
+	// en el catálogo, no en el afiche.
+	if !strings.Contains(low, "mantén el texto al mínimo") {
+		t.Fatalf("el afiche debe pedir texto mínimo:\n%s", p)
+	}
+	if !strings.Contains(low, "no escribas la descripción") {
+		t.Fatalf("el afiche no debe volcar la descripción/temario:\n%s", p)
+	}
 	// Es pieza publicitaria: debe PROHIBIR el QR explícitamente y NUNCA pedir
 	// que se reserve un recuadro para él (a diferencia de la escarapela).
 	if !strings.Contains(low, "no incluyas ningún código qr") {

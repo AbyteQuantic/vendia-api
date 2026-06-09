@@ -144,6 +144,7 @@ EL TEXTO (integrado con elegancia sobre la imagen, muy legible y bien jerarquiza
 REGLAS ESTRICTAS:
 - NO incluyas ningún código QR ni recuadros para QR (es una pieza publicitaria, no una escarapela).
 - NO entregues una imagen que sea solamente texto sobre fondo plano o degradado: SIEMPRE debe haber una escena/ilustración protagonista de alta calidad.
+- MANTÉN EL TEXTO AL MÍNIMO: solo el título, la fecha, el precio y el llamado a la acción. NO escribas la descripción del evento, ni temarios, horarios, listas, párrafos o requisitos dentro de la pieza — eso va en el detalle del catálogo, NO en el afiche. La imagen vende; el texto es solo un titular.
 - Todo el texto en español, perfectamente escrito.`
 
 	// Description still feeds context (colors/motifs) on top of the scene.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
@@ -79,7 +80,24 @@ func (in eventInput) toModel() *models.Event {
 	if in.Type == "" {
 		e.Type = models.EventTypeOtro
 	}
+	// Parse the ISO dates the client sends (previously dropped — the event
+	// date never persisted, so the catalog/afiche showed no date).
+	e.StartAt = parseEventTime(in.StartAt)
+	e.EndAt = parseEventTime(in.EndAt)
 	return e
+}
+
+// parseEventTime turns an optional ISO-8601 string into a *time.Time. A nil,
+// blank or unparseable value yields nil (the field is optional).
+func parseEventTime(s *string) *time.Time {
+	if s == nil || strings.TrimSpace(*s) == "" {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339, strings.TrimSpace(*s))
+	if err != nil {
+		return nil
+	}
+	return &t
 }
 
 // CreateEvent — POST /api/v1/events (admin).

@@ -99,6 +99,25 @@ func TestCreateEvent_NoRoleForbidden(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
+func TestCreateEvent_PersistsStartAt(t *testing.T) {
+	db := setupEventsDB(t)
+	r := eventsRouter(db, "tenant-a", "admin")
+
+	body := validEventBody()
+	body["start_at"] = "2026-07-20T15:00:00Z"
+	w := reqJSON(r, http.MethodPost, "/api/v1/events", body)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var resp struct {
+		Data models.Event `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Data.StartAt, "la fecha del evento debe persistirse")
+	assert.Equal(t, 2026, resp.Data.StartAt.Year())
+	assert.Equal(t, 7, int(resp.Data.StartAt.Month()))
+	assert.Equal(t, 20, resp.Data.StartAt.Day())
+}
+
 func TestCreateEvent_RejectsInvalidPrice(t *testing.T) {
 	db := setupEventsDB(t)
 	r := eventsRouter(db, "tenant-a", "admin")
