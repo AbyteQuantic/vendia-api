@@ -75,13 +75,16 @@ func TestCreateEvent_AdminSucceeds(t *testing.T) {
 	assert.Equal(t, models.EventStatusBorrador, resp.Data.Status)
 }
 
-func TestCreateEvent_CashierAllowed(t *testing.T) {
-	// El dueño del negocio suele tener rol cashier; debe poder crear eventos.
-	db := setupEventsDB(t)
-	r := eventsRouter(db, "tenant-a", "cashier")
-
-	w := reqJSON(r, http.MethodPost, "/api/v1/events", validEventBody())
-	assert.Equal(t, http.StatusCreated, w.Code)
+func TestCreateEvent_StaffAllowed(t *testing.T) {
+	// El JWT lleva el WorkspaceRole: el dueño es "owner", también admin/cashier.
+	for _, role := range []string{"owner", "admin", "cashier"} {
+		t.Run(role, func(t *testing.T) {
+			db := setupEventsDB(t)
+			r := eventsRouter(db, "tenant-a", role)
+			w := reqJSON(r, http.MethodPost, "/api/v1/events", validEventBody())
+			assert.Equal(t, http.StatusCreated, w.Code, "rol %s debe poder crear", role)
+		})
+	}
 }
 
 func TestCreateEvent_NoRoleForbidden(t *testing.T) {

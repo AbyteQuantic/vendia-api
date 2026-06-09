@@ -15,18 +15,19 @@ import (
 	"gorm.io/gorm"
 )
 
-// requireEventAdmin gates event management to the tenant's STAFF (admin o
-// cashier). En la práctica muchos tenderos dueños quedan con rol `cashier`
-// (su negocio lo manejan ellos mismos), igual que el perfil del negocio o las
-// capacidades no exigen `admin`. super_admin es plataforma, no gestiona
-// eventos de un tenant. Escribe 403 si el actor no es staff del negocio.
+// requireEventAdmin gates event management to the tenant's STAFF. El JWT lleva
+// el WorkspaceRole (login.go workspaceRoleFromEmployee): el DUEÑO es "owner",
+// un empleado admin "admin", el resto "cashier". El perfil del negocio y las
+// capacidades tampoco exigen un rol específico — el tendero maneja su negocio.
+// Escribe 403 solo si el actor no es staff del tenant (p. ej. sin rol).
 func requireEventAdmin(c *gin.Context) bool {
-	role := middleware.GetRole(c)
-	if role != "admin" && role != "cashier" {
+	switch middleware.GetRole(c) {
+	case "owner", "admin", "cashier":
+		return true
+	default:
 		c.JSON(http.StatusForbidden, gin.H{"error": "no tiene permiso para gestionar eventos"})
 		return false
 	}
-	return true
 }
 
 // eventInput is the request body shared by create and update. Money and
