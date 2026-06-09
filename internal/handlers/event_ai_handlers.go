@@ -74,9 +74,9 @@ func eventAssetHandler(db *gorm.DB, geminiSvc *services.GeminiService, storageSv
 
 		var img []byte
 		if kind == assetBadge {
-			img, err = geminiSvc.GenerateEventBadge(ctx, ev.Title, tenant.BusinessName, badgeSampleName)
+			img, err = geminiSvc.GenerateEventBadge(ctx, ev.Title, tenant.BusinessName, badgeSampleName, ev.Description)
 		} else {
-			img, err = geminiSvc.GenerateEventCertificate(ctx, ev.Title, tenant.BusinessName, badgeSampleName)
+			img, err = geminiSvc.GenerateEventCertificate(ctx, ev.Title, tenant.BusinessName, badgeSampleName, ev.Description)
 		}
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al generar el diseño: %v", err)})
