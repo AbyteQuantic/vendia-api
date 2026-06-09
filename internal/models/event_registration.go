@@ -49,6 +49,13 @@ type EventRegistration struct {
 	CertificateIssuedAt *time.Time `json:"certificate_issued_at,omitempty"`
 }
 
+// SetIdentity stamps the authoritative id and tenant_id during offline sync,
+// overriding whatever the client payload carried (Art. III).
+func (r *EventRegistration) SetIdentity(id, tenantID string) {
+	r.ID = id
+	r.TenantID = tenantID
+}
+
 // IsConfirmed reports whether this registration consumes a cupo.
 func (r *EventRegistration) IsConfirmed() bool {
 	return r.PaymentStatus == RegistrationPaymentConfirmed

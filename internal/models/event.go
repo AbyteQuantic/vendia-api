@@ -103,6 +103,13 @@ type EventTemplate struct {
 	Fields     map[string]any `json:"fields,omitempty"`
 }
 
+// SetIdentity stamps the authoritative id and tenant_id during offline sync,
+// overriding whatever the client payload carried (Art. III).
+func (e *Event) SetIdentity(id, tenantID string) {
+	e.ID = id
+	e.TenantID = tenantID
+}
+
 // StatusOrDefault returns the persisted status or the borrador default for a
 // zero-value Event (e.g. one being built before insert).
 func (e *Event) StatusOrDefault() string {

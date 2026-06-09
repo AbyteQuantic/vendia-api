@@ -65,6 +65,16 @@ func (s *EventCheckinService) RecordScan(tenantID, qrToken, scanType string, ses
 	return scan, created, nil
 }
 
+// RecomputeEligibility reloads a registration and refreshes its certificate
+// eligibility flag. Used by offline sync after an event_scan is applied.
+func (s *EventCheckinService) RecomputeEligibility(tenantID, registrationID string) error {
+	var reg models.EventRegistration
+	if err := s.db.Where("id = ? AND tenant_id = ?", registrationID, tenantID).First(&reg).Error; err != nil {
+		return err
+	}
+	return s.refreshEligibility(tenantID, &reg)
+}
+
 // refreshEligibility recomputes whether a registration meets its event's
 // attendance rule and persists the flag.
 func (s *EventCheckinService) refreshEligibility(tenantID string, reg *models.EventRegistration) error {

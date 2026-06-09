@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/json"
 	"time"
 	"vendia-backend/internal/models"
 
@@ -94,9 +95,81 @@ func (s *SyncService) processOperation(tx *gorm.DB, tenantID string, op SyncOper
 		return s.syncEntity(tx, &models.CreditAccount{}, tenantID, op)
 	case "credit_payment":
 		return s.syncCreditPayment(tx, op)
+	case "event":
+		var ev models.Event
+		return s.syncJSONEntity(tx, tenantID, op, &ev)
+	case "event_registration":
+		var reg models.EventRegistration
+		return s.syncJSONEntity(tx, tenantID, op, &reg)
+	case "event_scan":
+		return s.syncEventScan(tx, tenantID, op)
 	default:
 		return true, nil
 	}
+}
+
+// tenantScoped is implemented by event models so syncJSONEntity can stamp the
+// authoritative tenant_id from the JWT regardless of the client payload.
+type tenantScoped interface {
+	SetIdentity(id, tenantID string)
+}
+
+// syncJSONEntity upserts an event-domain model that carries serializer:json
+// columns. The generic syncEntity path uses map-based Create/Update, which
+// bypasses GORM's JSON serializer (it falls back to a raw Scan and fails on
+// slice/struct columns). Round-tripping op.Data through the struct makes the
+// serializer apply on both write and read. Offline clients send full entity
+// snapshots, so a timestamp-gated Save is the correct LWW semantic (Art. II).
+func (s *SyncService) syncJSONEntity(tx *gorm.DB, tenantID string, op SyncOperation, dst tenantScoped) (bool, error) {
+	if op.Action == "delete" {
+		if err := tx.Where("id = ? AND tenant_id = ?", op.ID, tenantID).First(dst).Error; err != nil {
+			return false, nil
+		}
+		return true, tx.Where("id = ?", op.ID).Delete(dst).Error
+	}
+
+	// Last-Write-Wins: discard a write older than the server's row.
+	var serverUpdatedAt time.Time
+	if err := tx.Model(dst).Where("id = ?", op.ID).Select("updated_at").Row().Scan(&serverUpdatedAt); err == nil {
+		if op.ClientUpdatedAt.Before(serverUpdatedAt) {
+			return false, nil
+		}
+	}
+
+	raw, err := json.Marshal(op.Data)
+	if err != nil {
+		return false, err
+	}
+	if err := json.Unmarshal(raw, dst); err != nil {
+		return false, err
+	}
+	dst.SetIdentity(op.ID, tenantID)
+	return true, tx.Save(dst).Error
+}
+
+// syncEventScan persists an offline check-in/out scan idempotently. The
+// composite unique index (registration_id, session_index, scan_type) plus
+// ON CONFLICT DO NOTHING means the same scan synced from two devices never
+// double counts (Spec F042 AC-11, decision R-03). When a new scan lands, the
+// owning registration's certificate eligibility is recomputed inside the same
+// transaction.
+func (s *SyncService) syncEventScan(tx *gorm.DB, tenantID string, op SyncOperation) (bool, error) {
+	if op.Data == nil {
+		return false, nil
+	}
+	op.Data["id"] = op.ID
+	op.Data["tenant_id"] = tenantID
+	res := tx.Model(&models.EventScan{}).Clauses(clause.OnConflict{DoNothing: true}).Create(op.Data)
+	if res.Error != nil {
+		return false, res.Error
+	}
+	if res.RowsAffected > 0 {
+		if regID, ok := op.Data["registration_id"].(string); ok && regID != "" {
+			// Best-effort: a failed recompute must not abort the batch.
+			_ = NewEventCheckinService(tx).RecomputeEligibility(tenantID, regID)
+		}
+	}
+	return res.RowsAffected > 0, nil
 }
 
 func (s *SyncService) syncEntity(tx *gorm.DB, model any, tenantID string, op SyncOperation) (bool, error) {
