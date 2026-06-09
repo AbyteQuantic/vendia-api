@@ -4,6 +4,8 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -22,7 +24,7 @@ func setupPublicEventsDB(t *testing.T) (*gorm.DB, *models.Tenant) {
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(
 		&models.Tenant{}, &models.Event{}, &models.EventRegistration{},
-		&models.EventScan{}, &models.Customer{},
+		&models.EventScan{}, &models.EventPayment{}, &models.Customer{},
 	))
 	slug := "mi-tienda"
 	tenant := models.Tenant{OwnerName: "Org", Phone: "3000000000", StoreSlug: &slug}
@@ -226,4 +228,60 @@ func TestPublicGetCarnet_RevealsQROnlyWhenPaid(t *testing.T) {
 	assert.True(t, c2.Data.Confirmed)
 	assert.Equal(t, int64(0), c2.Data.Balance)
 	assert.NotEmpty(t, c2.Data.QRToken)
+}
+
+// A guest submits a manual-payment proof; the organizer approves it and the
+// carné activates once the balance clears (decision: manual con comprobante).
+func TestSubmitProof_ThenApprove_ActivatesCarnet(t *testing.T) {
+	db, tenant := setupPublicEventsDB(t)
+	pub := publicEventsRouter(db)
+	pub.POST("/api/v1/store/:slug/carnet/:token/proof", PublicSubmitPaymentProof(db, nil))
+	ev := seedPublished(t, db, tenant.ID, 60000, 10)
+
+	reg := reqJSON(pub, http.MethodPost, "/api/v1/store/mi-tienda/events/"+ev.ID+"/register", map[string]any{
+		"name": "Ana", "phone": "3001234567", "consent_comms": true,
+	})
+	var regResp struct {
+		Data struct {
+			PublicToken string `json:"public_token"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(reg.Body.Bytes(), &regResp))
+	token := regResp.Data.PublicToken
+
+	// El invitado reporta el pago (sin imagen, solo monto) → queda pendiente.
+	form := "amount=60000&note=Transferencia+Nequi"
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/v1/store/mi-tienda/carnet/"+token+"/proof", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	pub.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+
+	// El organizador ve el comprobante pendiente y lo aprueba.
+	org := eventsRouter(db, tenant.ID, "admin")
+	org.GET("/api/v1/events/:id/payments", ListEventPayments(db))
+	org.POST("/api/v1/events/:id/payments/:pid/approve", ApproveEventPayment(db))
+
+	list := reqJSON(org, http.MethodGet, "/api/v1/events/"+ev.ID+"/payments?status=pending", nil)
+	require.Equal(t, http.StatusOK, list.Code)
+	var listResp struct {
+		Data []struct {
+			ID     string `json:"id"`
+			Amount int64  `json:"amount"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(list.Body.Bytes(), &listResp))
+	require.Len(t, listResp.Data, 1)
+	assert.Equal(t, int64(60000), listResp.Data[0].Amount)
+
+	approve := reqJSON(org, http.MethodPost,
+		"/api/v1/events/"+ev.ID+"/payments/"+listResp.Data[0].ID+"/approve", nil)
+	require.Equal(t, http.StatusOK, approve.Code)
+	var appResp struct {
+		Data models.EventRegistration `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(approve.Body.Bytes(), &appResp))
+	assert.Equal(t, models.RegistrationPaymentConfirmed, appResp.Data.PaymentStatus)
+	assert.Equal(t, int64(60000), appResp.Data.AmountPaid)
 }

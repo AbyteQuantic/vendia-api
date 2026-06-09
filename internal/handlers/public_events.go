@@ -2,15 +2,24 @@
 package handlers
 
 import (
+	"encoding/base64"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"vendia-backend/internal/models"
 	"vendia-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+// maxProofBytes caps an uploaded payment proof image.
+const maxProofBytes = 8 << 20
 
 // resolveStoreTenant looks up the tenant that owns a public store slug. It
 // mirrors PublicCatalog so the events storefront resolves identically. Returns
@@ -151,6 +160,60 @@ func PublicGetCarnet(db *gorm.DB) gin.HandlerFunc {
 			out["qr_token"] = reg.QRToken
 		}
 		c.JSON(http.StatusOK, gin.H{"data": out})
+	}
+}
+
+// PublicSubmitPaymentProof — POST /api/v1/store/:slug/carnet/:token/proof.
+// The attendee reports a manual payment (transfer/cash) and optionally attaches
+// a receipt image. It lands as a PENDING payment for the organizer to review
+// and approve, which activates the carné — no payment gateway involved.
+func PublicSubmitPaymentProof(db *gorm.DB, storageSvc services.FileStorage) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenant, ok := resolveStoreTenant(c, db)
+		if !ok {
+			return
+		}
+
+		amount, err := strconv.ParseInt(strings.TrimSpace(c.PostForm("amount")), 10, 64)
+		if err != nil || amount <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "indique el monto pagado"})
+			return
+		}
+		note := strings.TrimSpace(c.PostForm("note"))
+
+		// Optional receipt image. Stored to R2 (fallback to data URL).
+		proofURL := ""
+		if file, header, ferr := c.Request.FormFile("image"); ferr == nil {
+			defer file.Close()
+			if header.Size > maxProofBytes {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "la imagen excede 8MB"})
+				return
+			}
+			mime := header.Header.Get("Content-Type")
+			if !strings.HasPrefix(mime, "image/") {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "el comprobante debe ser una imagen"})
+				return
+			}
+			data, rerr := io.ReadAll(file)
+			if rerr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "error al leer el comprobante"})
+				return
+			}
+			proofURL = "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)
+			if storageSvc != nil {
+				key := fmt.Sprintf("event-proofs/%s/%s-%s", tenant.ID, c.Param("token"), uuid.NewString()[:8])
+				if up, uerr := storageSvc.Upload(c.Request.Context(), "event-assets", key, data, mime); uerr == nil {
+					proofURL = up
+				}
+			}
+		}
+
+		if _, err := services.NewEventRegistrationService(db).SubmitProof(
+			tenant.ID, c.Param("token"), amount, proofURL, note); err != nil {
+			writePublicEventError(c, err)
+			return
+		}
+		c.JSON(http.StatusCreated, gin.H{"data": gin.H{"status": "pending"}})
 	}
 }
 

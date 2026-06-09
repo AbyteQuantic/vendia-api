@@ -199,6 +199,9 @@ func Migrate(db *gorm.DB) error {
 		&models.EventScan{},
 		// F042 §12 D3 — cronograma de cuotas persistido con fechas.
 		&models.EventInstallment{},
+		// F042 — pagos/comprobantes manuales (sin pasarela): el invitado sube
+		// el comprobante y el organizador lo aprueba para activar el carné.
+		&models.EventPayment{},
 	)
 	if err != nil {
 		return err

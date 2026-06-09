@@ -332,6 +332,8 @@ func main() {
 	r.GET("/api/v1/store/:slug/events/:id", handlers.PublicGetEvent(db))
 	// Carné del asistente (por public_token): el QR solo viaja si ya pagó.
 	r.GET("/api/v1/store/:slug/carnet/:token", handlers.PublicGetCarnet(db))
+	// Comprobante de pago manual del asistente (queda pendiente de aprobación).
+	r.POST("/api/v1/store/:slug/carnet/:token/proof", handlers.PublicSubmitPaymentProof(db, storageSvc))
 	r.POST("/api/v1/store/:slug/events/:id/register",
 		buildHandlers(orderRateLimiter, captchaMiddleware, handlers.PublicRegisterEvent(db))...)
 
@@ -550,6 +552,9 @@ func main() {
 		// Pagos de la inscripción (abonos/cuotas + marcar pagado) — F042.
 		v1.POST("/events/:id/registrations/:rid/payments", handlers.RecordRegistrationPayment(db))
 		v1.POST("/events/:id/registrations/:rid/confirm-payment", handlers.ConfirmRegistrationPayment(db))
+		// Comprobantes manuales: bandeja de revisión + aprobar (activa carné).
+		v1.GET("/events/:id/payments", handlers.ListEventPayments(db))
+		v1.POST("/events/:id/payments/:pid/approve", handlers.ApproveEventPayment(db))
 		v1.POST("/events/:id/badge/ai-generate", handlers.GenerateEventBadgeImage(db, geminiSvc, storageSvc))
 		v1.POST("/events/:id/certificate/ai-generate", handlers.GenerateEventCertificateImage(db, geminiSvc, storageSvc))
 		v1.POST("/events/:id/poster/ai-generate", handlers.GenerateEventPosterImage(db, geminiSvc, storageSvc))

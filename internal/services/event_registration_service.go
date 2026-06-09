@@ -211,6 +211,105 @@ func (s *EventRegistrationService) GetByPublicToken(tenantID, token string) (*mo
 	return &reg, nil
 }
 
+// SubmitProof attaches an attendee's manual-payment proof (transfer/cash
+// receipt) to their inscription as a PENDING payment for the organizer to
+// review. Resolved by public token (no auth) — the attendee owns the token.
+func (s *EventRegistrationService) SubmitProof(tenantID, token string, amount int64, proofURL, note string) (*models.EventPayment, error) {
+	if amount <= 0 {
+		return nil, ErrPaymentAmountInvalid
+	}
+	reg, err := s.GetByPublicToken(tenantID, token)
+	if err != nil {
+		return nil, err
+	}
+	pay := &models.EventPayment{
+		TenantID:       tenantID,
+		EventID:        reg.EventID,
+		RegistrationID: reg.ID,
+		Amount:         amount,
+		ProofURL:       proofURL,
+		Note:           note,
+		Status:         models.EventPaymentPending,
+	}
+	if err := s.db.Create(pay).Error; err != nil {
+		return nil, fmt.Errorf("guardar comprobante: %w", err)
+	}
+	return pay, nil
+}
+
+// ApprovePayment marks a pending payment as approved and feeds its amount into
+// the registration's running total (activating the carné when the price is
+// reached). Idempotent: an already-approved payment is a no-op.
+func (s *EventRegistrationService) ApprovePayment(tenantID, paymentID string) (*models.EventRegistration, error) {
+	var pay models.EventPayment
+	if err := s.db.Where("id = ? AND tenant_id = ?", paymentID, tenantID).First(&pay).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrRegistrationNotFound
+		}
+		return nil, err
+	}
+
+	if pay.Status == models.EventPaymentApproved {
+		// Ya aprobado: devuelve la inscripción tal cual (idempotente).
+		var reg models.EventRegistration
+		if err := s.db.Where("id = ? AND tenant_id = ?", pay.RegistrationID, tenantID).First(&reg).Error; err != nil {
+			return nil, ErrRegistrationNotFound
+		}
+		return &reg, nil
+	}
+
+	now := time.Now().UTC()
+	if err := s.db.Model(&pay).Updates(map[string]any{
+		"status":      models.EventPaymentApproved,
+		"reviewed_at": &now,
+	}).Error; err != nil {
+		return nil, fmt.Errorf("aprobar comprobante: %w", err)
+	}
+	return s.RecordPayment(tenantID, pay.RegistrationID, pay.Amount)
+}
+
+// EventPaymentView is a payment row joined with the attendee's name for the
+// organizer's "pagos por revisar" panel.
+type EventPaymentView struct {
+	ID             string `json:"id"`
+	RegistrationID string `json:"registration_id"`
+	CustomerName   string `json:"customer_name"`
+	Amount         int64  `json:"amount"`
+	ProofURL       string `json:"proof_url"`
+	Note           string `json:"note"`
+	Status         string `json:"status"`
+}
+
+// ListPayments returns an event's payments (optionally filtered by status),
+// newest first, joined with the attendee name (tenant-scoped, Art. III).
+func (s *EventRegistrationService) ListPayments(tenantID, eventID, status string) ([]EventPaymentView, error) {
+	q := s.db.Where("tenant_id = ? AND event_id = ?", tenantID, eventID)
+	if status != "" {
+		q = q.Where("status = ?", status)
+	}
+	var pays []models.EventPayment
+	if err := q.Order("created_at DESC").Find(&pays).Error; err != nil {
+		return nil, err
+	}
+	out := make([]EventPaymentView, 0, len(pays))
+	for _, p := range pays {
+		var reg models.EventRegistration
+		_ = s.db.Where("id = ?", p.RegistrationID).First(&reg).Error
+		var c models.Customer
+		_ = s.db.Where("id = ?", reg.CustomerID).First(&c).Error
+		out = append(out, EventPaymentView{
+			ID:             p.ID,
+			RegistrationID: p.RegistrationID,
+			CustomerName:   c.Name,
+			Amount:         p.Amount,
+			ProofURL:       p.ProofURL,
+			Note:           p.Note,
+			Status:         p.Status,
+		})
+	}
+	return out, nil
+}
+
 // EventRegistrationView is one row of the organizer's attendee panel: the
 // registration joined with the attendee's contact info and check-in state.
 type EventRegistrationView struct {

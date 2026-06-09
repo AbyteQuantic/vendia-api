@@ -312,6 +312,41 @@ func writeRegistrationPaymentError(c *gin.Context, err error) {
 	}
 }
 
+// ListEventPayments — GET /api/v1/events/:id/payments (admin). Returns the
+// event's payment proofs (filter with ?status=pending) for review.
+func ListEventPayments(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !requireEventAdmin(c) {
+			return
+		}
+		views, err := services.NewEventRegistrationService(db).ListPayments(
+			middleware.GetTenantID(c), c.Param("id"), c.Query("status"))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al listar pagos"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": views})
+	}
+}
+
+// ApproveEventPayment — POST /api/v1/events/:id/payments/:pid/approve (admin).
+// Approves a payment proof; its amount is counted and the carné activates when
+// the price is reached.
+func ApproveEventPayment(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !requireEventAdmin(c) {
+			return
+		}
+		reg, err := services.NewEventRegistrationService(db).ApprovePayment(
+			middleware.GetTenantID(c), c.Param("pid"))
+		if err != nil {
+			writeRegistrationPaymentError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": reg})
+	}
+}
+
 // ListEventRegistrations — GET /api/v1/events/:id/registrations (admin).
 // Returns the attendee panel for an event (FR-16, AC-15).
 func ListEventRegistrations(db *gorm.DB) gin.HandlerFunc {
