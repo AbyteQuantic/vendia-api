@@ -538,6 +538,8 @@ func main() {
 		v1.DELETE("/events/:id", handlers.DeleteEvent(db))
 		v1.POST("/events/:id/publish", handlers.PublishEvent(db))
 		v1.POST("/events/:id/checkin", handlers.CheckinEvent(db))
+		v1.GET("/events/:id/registrations", handlers.ListEventRegistrations(db))
+		v1.GET("/events/:id/registrations/export", handlers.ExportEventRegistrations(db))
 		v1.POST("/events/:id/registrations/:rid/certificate", handlers.IssueCertificate(db))
 		v1.POST("/events/:id/badge/ai-generate", handlers.GenerateEventBadgeImage(db, geminiSvc, storageSvc))
 		v1.POST("/events/:id/certificate/ai-generate", handlers.GenerateEventCertificateImage(db, geminiSvc, storageSvc))

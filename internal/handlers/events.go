@@ -3,7 +3,9 @@ package handlers
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
@@ -231,6 +233,56 @@ func IssueCertificate(db *gorm.DB) gin.HandlerFunc {
 		}
 		c.JSON(http.StatusOK, gin.H{"data": reg})
 	}
+}
+
+// ListEventRegistrations — GET /api/v1/events/:id/registrations (admin).
+// Returns the attendee panel for an event (FR-16, AC-15).
+func ListEventRegistrations(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !requireEventAdmin(c) {
+			return
+		}
+		views, err := services.NewEventRegistrationService(db).ListByEvent(
+			middleware.GetTenantID(c), c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al listar inscritos"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": views})
+	}
+}
+
+// ExportEventRegistrations — GET /api/v1/events/:id/registrations/export (admin).
+// Returns the attendee list as CSV (FR-17, AC-15).
+func ExportEventRegistrations(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !requireEventAdmin(c) {
+			return
+		}
+		views, err := services.NewEventRegistrationService(db).ListByEvent(
+			middleware.GetTenantID(c), c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al exportar inscritos"})
+			return
+		}
+		var b strings.Builder
+		b.WriteString("nombre,celular,metodo_pago,estado_pago,asistio_entrada,asistio_salida,certificado\n")
+		for _, v := range views {
+			b.WriteString(fmt.Sprintf("%s,%s,%s,%s,%t,%t,%t\n",
+				csvEsc(v.CustomerName), csvEsc(v.CustomerPhone), csvEsc(v.PaymentMethod),
+				v.PaymentStatus, v.CheckedIn, v.CheckedOut, v.CertIssued))
+		}
+		c.Header("Content-Disposition", "attachment; filename=inscritos.csv")
+		c.Data(http.StatusOK, "text/csv; charset=utf-8", []byte(b.String()))
+	}
+}
+
+// csvEsc quotes a field that contains a comma, quote or newline (RFC 4180).
+func csvEsc(s string) string {
+	if strings.ContainsAny(s, ",\"\n") {
+		return "\"" + strings.ReplaceAll(s, "\"", "\"\"") + "\""
+	}
+	return s
 }
 
 // writeEventError maps service errors to HTTP status codes with a Spanish

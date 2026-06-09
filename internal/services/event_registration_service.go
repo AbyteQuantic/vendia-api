@@ -146,6 +146,61 @@ func (s *EventRegistrationService) ConfirmPayment(tenantID, registrationID strin
 	return &reg, nil
 }
 
+// EventRegistrationView is one row of the organizer's attendee panel: the
+// registration joined with the attendee's contact info and check-in state.
+type EventRegistrationView struct {
+	ID            string `json:"id"`
+	CustomerName  string `json:"customer_name"`
+	CustomerPhone string `json:"customer_phone"`
+	PaymentMethod string `json:"payment_method"`
+	PaymentStatus string `json:"payment_status"`
+	CheckedIn     bool   `json:"checked_in"`
+	CheckedOut    bool   `json:"checked_out"`
+	CertEligible  bool   `json:"certificate_eligible"`
+	CertIssued    bool   `json:"certificate_issued"`
+	QRToken       string `json:"qr_token"`
+	PublicToken   string `json:"public_token"`
+}
+
+// ListByEvent returns the attendee panel for an event (tenant-scoped, Art. III):
+// registrations joined with customer name/phone and derived check-in/out flags.
+func (s *EventRegistrationService) ListByEvent(tenantID, eventID string) ([]EventRegistrationView, error) {
+	var regs []models.EventRegistration
+	if err := s.db.Where("tenant_id = ? AND event_id = ?", tenantID, eventID).
+		Order("created_at ASC").Find(&regs).Error; err != nil {
+		return nil, err
+	}
+
+	out := make([]EventRegistrationView, 0, len(regs))
+	for _, r := range regs {
+		var c models.Customer
+		_ = s.db.Where("id = ? AND tenant_id = ?", r.CustomerID, tenantID).First(&c).Error
+
+		var inN, outN int64
+		s.db.Model(&models.EventScan{}).
+			Where("registration_id = ? AND tenant_id = ? AND scan_type = ?", r.ID, tenantID, models.ScanTypeIn).
+			Count(&inN)
+		s.db.Model(&models.EventScan{}).
+			Where("registration_id = ? AND tenant_id = ? AND scan_type = ?", r.ID, tenantID, models.ScanTypeOut).
+			Count(&outN)
+
+		out = append(out, EventRegistrationView{
+			ID:            r.ID,
+			CustomerName:  c.Name,
+			CustomerPhone: c.Phone,
+			PaymentMethod: r.PaymentMethod,
+			PaymentStatus: r.PaymentStatus,
+			CheckedIn:     inN > 0,
+			CheckedOut:    outN > 0,
+			CertEligible:  r.CertificateEligible,
+			CertIssued:    r.CertificateIssuedAt != nil,
+			QRToken:       r.QRToken,
+			PublicToken:   r.PublicToken,
+		})
+	}
+	return out, nil
+}
+
 // CountConfirmed returns how many confirmed registrations an event has.
 func (s *EventRegistrationService) CountConfirmed(tenantID, eventID string) (int64, error) {
 	var n int64
