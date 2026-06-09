@@ -113,6 +113,10 @@ func main() {
 	} else if created > 0 {
 		log.Printf("[BOOTSTRAP] catalog seed inserted %d modules", created)
 	}
+	// F042 — top-up idempotente del módulo Eventos para deploys ya sembrados.
+	if err := database.BackfillEventsCatalogModule(db); err != nil {
+		log.Printf("[BOOTSTRAP] eventos catalog backfill failed: %v", err)
+	}
 
 	// ── Initialize external services (optional, nil-safe) ───────────────────
 	var geminiSvc *services.GeminiService
