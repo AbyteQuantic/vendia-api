@@ -14,6 +14,7 @@ import (
 	"vendia-backend/internal/handlers"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/services"
+	"vendia-backend/internal/services/email"
 	"vendia-backend/internal/services/push"
 
 	"github.com/gin-contrib/cors"
@@ -162,6 +163,19 @@ func main() {
 		log.Printf("[PUSH] UnifiedSender ready (FCM=%v, WebPush=%v)", fcmReady, vapidReady)
 	}
 	pushDispatcher := push.NewDispatcher(pushSender)
+
+	// Email sender for event reminders (Spec F042). Degrades to a
+	// FakeSender (logs only) when SMTP_* env vars are absent.
+	emailSvc := email.NewService(email.Config{
+		Host:     os.Getenv("SMTP_HOST"),
+		Port:     os.Getenv("SMTP_PORT"),
+		Username: os.Getenv("SMTP_USERNAME"),
+		Password: os.Getenv("SMTP_PASSWORD"),
+		From:     os.Getenv("SMTP_FROM"),
+	})
+	if emailSvc.IsConfigured() {
+		log.Println("[SVC] Email service initialized (SMTP)")
+	}
 
 	offSvc := services.NewOpenFoodFactsService()
 	catalogCacheSvc := services.NewCatalogCacheService(db, offSvc)
@@ -356,6 +370,9 @@ func main() {
 	// gated by the shared CRON_TOKEN Bearer secret.
 	r.POST("/api/v1/internal/jobs/promotions-push", handlers.PromotionsPushJob(db, pushDispatcher))
 
+	// F042: recordatorios de eventos (cuotas + evento próximo). Diario.
+	r.POST("/api/v1/internal/jobs/event-reminders", handlers.EventRemindersJob(db, pushDispatcher, emailSvc))
+
 	// Public online orders (customer places order from catalog).
 	// Two paths hit the same handler: the legacy shape and the
 	// brief's KDS-Phase-1 naming. Keeping both means older admin-web
@@ -522,6 +539,8 @@ func main() {
 		v1.POST("/events/:id/publish", handlers.PublishEvent(db))
 		v1.POST("/events/:id/checkin", handlers.CheckinEvent(db))
 		v1.POST("/events/:id/registrations/:rid/certificate", handlers.IssueCertificate(db))
+		v1.POST("/events/:id/badge/ai-generate", handlers.GenerateEventBadgeImage(db, geminiSvc, storageSvc))
+		v1.POST("/events/:id/certificate/ai-generate", handlers.GenerateEventCertificateImage(db, geminiSvc, storageSvc))
 
 		// Credits (El Fiar)
 		v1.GET("/credits", handlers.ListCredits(db))
