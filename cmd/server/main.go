@@ -520,6 +520,8 @@ func main() {
 		v1.PATCH("/events/:id", handlers.UpdateEvent(db))
 		v1.DELETE("/events/:id", handlers.DeleteEvent(db))
 		v1.POST("/events/:id/publish", handlers.PublishEvent(db))
+		v1.POST("/events/:id/checkin", handlers.CheckinEvent(db))
+		v1.POST("/events/:id/registrations/:rid/certificate", handlers.IssueCertificate(db))
 
 		// Credits (El Fiar)
 		v1.GET("/credits", handlers.ListCredits(db))

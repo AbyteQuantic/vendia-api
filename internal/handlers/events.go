@@ -178,6 +178,61 @@ func PublishEvent(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// CheckinEvent — POST /api/v1/events/:id/checkin (admin). Records an entrada
+// or salida scan of an attendee's badge QR. Idempotent: a repeated scan
+// returns 200 with already_registered=true (spec FR-15, AC-08, AC-11).
+func CheckinEvent(db *gorm.DB) gin.HandlerFunc {
+	type request struct {
+		QRToken      string `json:"qr_token" binding:"required"`
+		ScanType     string `json:"scan_type" binding:"required"`
+		SessionIndex int    `json:"session_index"`
+	}
+	return func(c *gin.Context) {
+		if !requireEventAdmin(c) {
+			return
+		}
+		var req request
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		scan, created, err := services.NewEventCheckinService(db).RecordScan(
+			middleware.GetTenantID(c), req.QRToken, req.ScanType, req.SessionIndex, middleware.GetUserID(c))
+		if err != nil {
+			if errors.Is(err, services.ErrRegistrationNotFound) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "inscripción no encontrada para ese código"})
+				return
+			}
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": scan, "already_registered": !created})
+	}
+}
+
+// IssueCertificate — POST /api/v1/events/:id/registrations/:rid/certificate
+// (admin). Manually issues the certificate for an eligible attendee (FR-17).
+func IssueCertificate(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !requireEventAdmin(c) {
+			return
+		}
+		reg, err := services.NewEventCertificateService(db).Issue(middleware.GetTenantID(c), c.Param("rid"))
+		if err != nil {
+			switch {
+			case errors.Is(err, services.ErrRegistrationNotFound):
+				c.JSON(http.StatusNotFound, gin.H{"error": "inscripción no encontrada"})
+			case errors.Is(err, services.ErrCertificateNotEligible):
+				c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			default:
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "error al emitir certificado"})
+			}
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": reg})
+	}
+}
+
 // writeEventError maps service errors to HTTP status codes with a Spanish
 // message (Art. V) — not-found vs. validation vs. server error.
 func writeEventError(c *gin.Context, err error) {

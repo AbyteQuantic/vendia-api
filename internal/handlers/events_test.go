@@ -43,6 +43,7 @@ func eventsRouter(db *gorm.DB, tenantID, role string) *gin.Engine {
 	g.PATCH("/events/:id", UpdateEvent(db))
 	g.DELETE("/events/:id", DeleteEvent(db))
 	g.POST("/events/:id/publish", PublishEvent(db))
+	g.POST("/events/:id/checkin", CheckinEvent(db))
 	return r
 }
 
@@ -133,6 +134,41 @@ func TestPublishEvent(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(pub.Body.Bytes(), &pubResp))
 	assert.Equal(t, models.EventStatusPublicado, pubResp.Data.Status)
+}
+
+func TestCheckinEvent_Idempotent(t *testing.T) {
+	db := setupEventsDB(t)
+	r := eventsRouter(db, "tenant-a", "admin")
+
+	create := reqJSON(r, http.MethodPost, "/api/v1/events", validEventBody())
+	var created struct {
+		Data models.Event `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(create.Body.Bytes(), &created))
+
+	qr := "44444444-4444-4444-8444-444444444444"
+	require.NoError(t, db.Create(&models.EventRegistration{
+		TenantID: "tenant-a", EventID: created.Data.ID, CustomerID: "c1",
+		QRToken: qr, PublicToken: "55555555-5555-4555-8555-555555555555",
+		PaymentStatus: models.RegistrationPaymentConfirmed,
+	}).Error)
+
+	body := map[string]any{"qr_token": qr, "scan_type": models.ScanTypeIn}
+	w1 := reqJSON(r, http.MethodPost, "/api/v1/events/"+created.Data.ID+"/checkin", body)
+	require.Equal(t, http.StatusOK, w1.Code)
+	var resp1 struct {
+		AlreadyRegistered bool `json:"already_registered"`
+	}
+	require.NoError(t, json.Unmarshal(w1.Body.Bytes(), &resp1))
+	assert.False(t, resp1.AlreadyRegistered)
+
+	w2 := reqJSON(r, http.MethodPost, "/api/v1/events/"+created.Data.ID+"/checkin", body)
+	require.Equal(t, http.StatusOK, w2.Code)
+	var resp2 struct {
+		AlreadyRegistered bool `json:"already_registered"`
+	}
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp2))
+	assert.True(t, resp2.AlreadyRegistered)
 }
 
 func TestDeleteEvent_Archives(t *testing.T) {
