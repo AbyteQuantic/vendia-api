@@ -257,6 +257,61 @@ func IssueCertificate(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// RecordRegistrationPayment — POST /api/v1/events/:id/registrations/:rid/payments
+// (admin). Registers an abono (cuota or full payment) the organizer received
+// off-platform; once the running total reaches the price the carné activates.
+func RecordRegistrationPayment(db *gorm.DB) gin.HandlerFunc {
+	type request struct {
+		Amount int64 `json:"amount" binding:"required"`
+	}
+	return func(c *gin.Context) {
+		if !requireEventAdmin(c) {
+			return
+		}
+		var req request
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		reg, err := services.NewEventRegistrationService(db).RecordPayment(
+			middleware.GetTenantID(c), c.Param("rid"), req.Amount)
+		if err != nil {
+			writeRegistrationPaymentError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": reg})
+	}
+}
+
+// ConfirmRegistrationPayment — POST /api/v1/events/:id/registrations/:rid/confirm-payment
+// (admin). Marks the inscription as fully paid in one step (carné activado).
+func ConfirmRegistrationPayment(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !requireEventAdmin(c) {
+			return
+		}
+		reg, err := services.NewEventRegistrationService(db).ConfirmPayment(
+			middleware.GetTenantID(c), c.Param("rid"))
+		if err != nil {
+			writeRegistrationPaymentError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": reg})
+	}
+}
+
+func writeRegistrationPaymentError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, services.ErrRegistrationNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "inscripción no encontrada"})
+	case errors.Is(err, services.ErrEventCapacityFull),
+		errors.Is(err, services.ErrPaymentAmountInvalid):
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "error al registrar el pago"})
+	}
+}
+
 // ListEventRegistrations — GET /api/v1/events/:id/registrations (admin).
 // Returns the attendee panel for an event (FR-16, AC-15).
 func ListEventRegistrations(db *gorm.DB) gin.HandlerFunc {

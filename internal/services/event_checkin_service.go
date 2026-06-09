@@ -41,6 +41,12 @@ func (s *EventCheckinService) RecordScan(tenantID, qrToken, scanType string, ses
 		return nil, false, err
 	}
 
+	// El carné solo es válido cuando el pago está completo (spec FR-09): un
+	// asistente con saldo pendiente no puede registrar entrada/salida.
+	if !reg.IsConfirmed() {
+		return nil, false, ErrRegistrationNotPaid
+	}
+
 	scan := &models.EventScan{
 		TenantID:       tenantID,
 		RegistrationID: reg.ID,

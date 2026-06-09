@@ -23,6 +23,11 @@ var (
 	ErrEventNotPublished = errors.New("el evento no está disponible para inscripción")
 	// ErrRegistrationNotFound is returned for an unknown registration.
 	ErrRegistrationNotFound = errors.New("inscripción no encontrada")
+	// ErrRegistrationNotPaid is returned when the carnet is scanned (or used)
+	// before the attendee completed the payment in full (spec FR-09).
+	ErrRegistrationNotPaid = errors.New("el asistente aún no ha completado el pago; el carné no es válido")
+	// ErrPaymentAmountInvalid is returned for a non-positive payment amount.
+	ErrPaymentAmountInvalid = errors.New("el monto del abono debe ser mayor a cero")
 )
 
 // RegisterInput carries the public inscription payload.
@@ -140,8 +145,68 @@ func (s *EventRegistrationService) ConfirmPayment(tenantID, registrationID strin
 	}
 
 	reg.PaymentStatus = models.RegistrationPaymentConfirmed
-	if err := s.db.Model(&reg).Update("payment_status", models.RegistrationPaymentConfirmed).Error; err != nil {
+	reg.AmountPaid = ev.Price
+	if err := s.db.Model(&reg).Updates(map[string]any{
+		"payment_status": models.RegistrationPaymentConfirmed,
+		"amount_paid":    ev.Price,
+	}).Error; err != nil {
 		return nil, fmt.Errorf("confirmar pago: %w", err)
+	}
+	return &reg, nil
+}
+
+// RecordPayment registers an abono (full or one cuota) of `amount` COP against
+// a registration. The running total grows; once it reaches the event price the
+// registration is confirmed (consuming a cupo, enforcing capacity). Returns the
+// updated registration so the caller can show the new balance / status.
+func (s *EventRegistrationService) RecordPayment(tenantID, registrationID string, amount int64) (*models.EventRegistration, error) {
+	if amount <= 0 {
+		return nil, ErrPaymentAmountInvalid
+	}
+	var reg models.EventRegistration
+	if err := s.db.Where("id = ? AND tenant_id = ?", registrationID, tenantID).First(&reg).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrRegistrationNotFound
+		}
+		return nil, err
+	}
+	if reg.IsConfirmed() {
+		return &reg, nil // ya pagó en su totalidad; abono extra es no-op
+	}
+
+	var ev models.Event
+	if err := s.db.Where("id = ? AND tenant_id = ?", reg.EventID, tenantID).First(&ev).Error; err != nil {
+		return nil, err
+	}
+
+	reg.AmountPaid += amount
+	updates := map[string]any{"amount_paid": reg.AmountPaid}
+
+	// Reaching (or exceeding) the price confirms the inscription and consumes
+	// a cupo. assertCapacity guards the cupo invariant before flipping.
+	if ev.Price > 0 && reg.AmountPaid >= ev.Price {
+		if err := s.assertCapacity(tenantID, &ev); err != nil {
+			return nil, err
+		}
+		reg.PaymentStatus = models.RegistrationPaymentConfirmed
+		updates["payment_status"] = models.RegistrationPaymentConfirmed
+	}
+
+	if err := s.db.Model(&reg).Updates(updates).Error; err != nil {
+		return nil, fmt.Errorf("registrar abono: %w", err)
+	}
+	return &reg, nil
+}
+
+// GetByPublicToken resolves a registration by its public token (the unguessable
+// id the attendee carries) within a tenant — backs the public carné portal.
+func (s *EventRegistrationService) GetByPublicToken(tenantID, token string) (*models.EventRegistration, error) {
+	var reg models.EventRegistration
+	if err := s.db.Where("public_token = ? AND tenant_id = ?", token, tenantID).First(&reg).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrRegistrationNotFound
+		}
+		return nil, err
 	}
 	return &reg, nil
 }
@@ -154,6 +219,9 @@ type EventRegistrationView struct {
 	CustomerPhone string `json:"customer_phone"`
 	PaymentMethod string `json:"payment_method"`
 	PaymentStatus string `json:"payment_status"`
+	AmountPaid    int64  `json:"amount_paid"`
+	Price         int64  `json:"price"`
+	Balance       int64  `json:"balance"` // price - amount_paid, never negative
 	CheckedIn     bool   `json:"checked_in"`
 	CheckedOut    bool   `json:"checked_out"`
 	CertEligible  bool   `json:"certificate_eligible"`
@@ -171,10 +239,19 @@ func (s *EventRegistrationService) ListByEvent(tenantID, eventID string) ([]Even
 		return nil, err
 	}
 
+	// Event price once, to derive each attendee's outstanding balance.
+	var ev models.Event
+	_ = s.db.Where("id = ? AND tenant_id = ?", eventID, tenantID).First(&ev).Error
+
 	out := make([]EventRegistrationView, 0, len(regs))
 	for _, r := range regs {
 		var c models.Customer
 		_ = s.db.Where("id = ? AND tenant_id = ?", r.CustomerID, tenantID).First(&c).Error
+
+		balance := ev.Price - r.AmountPaid
+		if balance < 0 {
+			balance = 0
+		}
 
 		var inN, outN int64
 		s.db.Model(&models.EventScan{}).
@@ -190,6 +267,9 @@ func (s *EventRegistrationService) ListByEvent(tenantID, eventID string) ([]Even
 			CustomerPhone: c.Phone,
 			PaymentMethod: r.PaymentMethod,
 			PaymentStatus: r.PaymentStatus,
+			AmountPaid:    r.AmountPaid,
+			Price:         ev.Price,
+			Balance:       balance,
 			CheckedIn:     inN > 0,
 			CheckedOut:    outN > 0,
 			CertEligible:  r.CertificateEligible,

@@ -94,7 +94,63 @@ func PublicRegisterEvent(db *gorm.DB) gin.HandlerFunc {
 			writePublicEventError(c, err)
 			return
 		}
-		c.JSON(http.StatusCreated, gin.H{"data": reg})
+		// El carné (qr_token) solo se entrega cuando el pago está completo
+		// (eventos gratuitos quedan confirmados al instante). Para los de pago
+		// pendiente devolvemos el public_token para consultar el carné luego.
+		out := gin.H{
+			"public_token":   reg.PublicToken,
+			"payment_status": reg.PaymentStatus,
+			"confirmed":      reg.IsConfirmed(),
+		}
+		if reg.IsConfirmed() {
+			out["qr_token"] = reg.QRToken
+		}
+		c.JSON(http.StatusCreated, gin.H{"data": out})
+	}
+}
+
+// PublicGetCarnet — GET /api/v1/store/:slug/events/registration/:token.
+// The attendee's carné portal: returns the inscription status and balance, and
+// the QR token ONLY when the payment is complete (spec FR-09). Lets a guest who
+// paid in cuotas come back later and find the carné already active.
+func PublicGetCarnet(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenant, ok := resolveStoreTenant(c, db)
+		if !ok {
+			return
+		}
+		reg, err := services.NewEventRegistrationService(db).GetByPublicToken(tenant.ID, c.Param("token"))
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "carné no encontrado"})
+			return
+		}
+		ev, err := services.NewEventService(db).Get(tenant.ID, reg.EventID)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "evento no encontrado"})
+			return
+		}
+
+		confirmed := reg.IsConfirmed()
+		balance := ev.Price - reg.AmountPaid
+		if balance < 0 {
+			balance = 0
+		}
+		out := gin.H{
+			"event_title":    ev.Title,
+			"modality":       ev.Modality,
+			"start_at":       ev.StartAt,
+			"location":       ev.LocationOrLink,
+			"payment_status": reg.PaymentStatus,
+			"amount_paid":    reg.AmountPaid,
+			"price":          ev.Price,
+			"balance":        balance,
+			"confirmed":      confirmed,
+		}
+		// El QR (carné válido) solo viaja cuando el pago está completo.
+		if confirmed {
+			out["qr_token"] = reg.QRToken
+		}
+		c.JSON(http.StatusOK, gin.H{"data": out})
 	}
 }
 

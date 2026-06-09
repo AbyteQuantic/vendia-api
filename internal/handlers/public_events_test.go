@@ -36,6 +36,7 @@ func publicEventsRouter(db *gorm.DB) *gin.Engine {
 	r.GET("/api/v1/store/:slug/events", PublicListEvents(db))
 	r.GET("/api/v1/store/:slug/events/:id", PublicGetEvent(db))
 	r.POST("/api/v1/store/:slug/events/:id/register", PublicRegisterEvent(db))
+	r.GET("/api/v1/store/:slug/carnet/:token", PublicGetCarnet(db))
 	return r
 }
 
@@ -135,4 +136,94 @@ func TestPublicRegisterEvent_Idempotent(t *testing.T) {
 	var n int64
 	require.NoError(t, db.Model(&models.EventRegistration{}).Where("event_id = ?", ev.ID).Count(&n).Error)
 	assert.Equal(t, int64(1), n)
+}
+
+// A paid event registers as pending and MUST NOT leak the carné QR; a free
+// event confirms at once and returns the QR (spec FR-09 carné gating).
+func TestPublicRegister_GatesCarnetByPayment(t *testing.T) {
+	db, tenant := setupPublicEventsDB(t)
+	r := publicEventsRouter(db)
+
+	paid := seedPublished(t, db, tenant.ID, 80000, 10)
+	wp := reqJSON(r, http.MethodPost, "/api/v1/store/mi-tienda/events/"+paid.ID+"/register", map[string]any{
+		"name": "Ana", "phone": "3001234567", "consent_comms": true,
+	})
+	require.Equal(t, http.StatusCreated, wp.Code)
+	var paidResp struct {
+		Data struct {
+			QRToken   string `json:"qr_token"`
+			Confirmed bool   `json:"confirmed"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(wp.Body.Bytes(), &paidResp))
+	assert.False(t, paidResp.Data.Confirmed)
+	assert.Empty(t, paidResp.Data.QRToken, "evento de pago pendiente NO debe entregar el carné")
+
+	free := seedPublished(t, db, tenant.ID, 0, 10)
+	wf := reqJSON(r, http.MethodPost, "/api/v1/store/mi-tienda/events/"+free.ID+"/register", map[string]any{
+		"name": "Beto", "phone": "3009999999", "consent_comms": true,
+	})
+	require.Equal(t, http.StatusCreated, wf.Code)
+	var freeResp struct {
+		Data struct {
+			QRToken   string `json:"qr_token"`
+			Confirmed bool   `json:"confirmed"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(wf.Body.Bytes(), &freeResp))
+	assert.True(t, freeResp.Data.Confirmed)
+	assert.NotEmpty(t, freeResp.Data.QRToken, "evento gratis confirmado SÍ entrega el carné")
+}
+
+// The public carné portal reveals the QR only once the balance is cleared.
+func TestPublicGetCarnet_RevealsQROnlyWhenPaid(t *testing.T) {
+	db, tenant := setupPublicEventsDB(t)
+	r := publicEventsRouter(db)
+	ev := seedPublished(t, db, tenant.ID, 50000, 10)
+
+	reg := reqJSON(r, http.MethodPost, "/api/v1/store/mi-tienda/events/"+ev.ID+"/register", map[string]any{
+		"name": "Ana", "phone": "3001234567", "consent_comms": true,
+	})
+	var regResp struct {
+		Data struct {
+			PublicToken string `json:"public_token"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(reg.Body.Bytes(), &regResp))
+	token := regResp.Data.PublicToken
+	require.NotEmpty(t, token)
+
+	// Pendiente → sin QR, con saldo.
+	w1 := reqJSON(r, http.MethodGet, "/api/v1/store/mi-tienda/carnet/"+token, nil)
+	require.Equal(t, http.StatusOK, w1.Code)
+	var c1 struct {
+		Data struct {
+			Confirmed bool   `json:"confirmed"`
+			Balance   int64  `json:"balance"`
+			QRToken   string `json:"qr_token"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w1.Body.Bytes(), &c1))
+	assert.False(t, c1.Data.Confirmed)
+	assert.Equal(t, int64(50000), c1.Data.Balance)
+	assert.Empty(t, c1.Data.QRToken)
+
+	// Pago completo → carné con QR.
+	var dbReg models.EventRegistration
+	require.NoError(t, db.Where("public_token = ?", token).First(&dbReg).Error)
+	_, err := services.NewEventRegistrationService(db).ConfirmPayment(tenant.ID, dbReg.ID)
+	require.NoError(t, err)
+
+	w2 := reqJSON(r, http.MethodGet, "/api/v1/store/mi-tienda/carnet/"+token, nil)
+	var c2 struct {
+		Data struct {
+			Confirmed bool   `json:"confirmed"`
+			Balance   int64  `json:"balance"`
+			QRToken   string `json:"qr_token"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &c2))
+	assert.True(t, c2.Data.Confirmed)
+	assert.Equal(t, int64(0), c2.Data.Balance)
+	assert.NotEmpty(t, c2.Data.QRToken)
 }

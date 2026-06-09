@@ -34,6 +34,11 @@ type EventRegistration struct {
 	PaymentMethod string `json:"payment_method,omitempty"`
 	PaymentStatus string `gorm:"not null;default:'pending';index" json:"payment_status"`
 
+	// AmountPaid is the running total the organizer has registered for this
+	// inscription (COP). For installment (cuotas) plans it grows abono by
+	// abono; the registration is confirmed once AmountPaid >= event price.
+	AmountPaid int64 `gorm:"not null;default:0" json:"amount_paid"`
+
 	// CreditAccountID links to the event-scoped fiado account when the
 	// attendee pays in manual installments (nullable — Art. X *string rule).
 	CreditAccountID *string `gorm:"type:uuid;index" json:"credit_account_id,omitempty"`

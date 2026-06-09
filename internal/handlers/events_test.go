@@ -45,6 +45,8 @@ func eventsRouter(db *gorm.DB, tenantID, role string) *gin.Engine {
 	g.DELETE("/events/:id", DeleteEvent(db))
 	g.POST("/events/:id/publish", PublishEvent(db))
 	g.POST("/events/:id/checkin", CheckinEvent(db))
+	g.POST("/events/:id/registrations/:rid/payments", RecordRegistrationPayment(db))
+	g.POST("/events/:id/registrations/:rid/confirm-payment", ConfirmRegistrationPayment(db))
 	// AI generators with a nil Gemini service to assert the guard path.
 	g.POST("/events/:id/badge/ai-generate", GenerateEventBadgeImage(db, nil, nil))
 	g.POST("/events/:id/poster/ai-generate", GenerateEventPosterImage(db, nil, nil))
@@ -206,6 +208,98 @@ func TestCheckinEvent_Idempotent(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp2))
 	assert.True(t, resp2.AlreadyRegistered)
+}
+
+// seedRegistration inserts a pending paid-event registration for payment tests.
+func seedRegistration(t *testing.T, db *gorm.DB, tenantID, eventID, qr string) string {
+	t.Helper()
+	reg := models.EventRegistration{
+		TenantID: tenantID, EventID: eventID, CustomerID: "cust-1",
+		QRToken:       qr,
+		PublicToken:   "66666666-6666-4666-8666-666666666666",
+		PaymentStatus: models.RegistrationPaymentPending,
+	}
+	require.NoError(t, db.Create(&reg).Error)
+	return reg.ID
+}
+
+func TestRecordPayment_PartialThenFullConfirms(t *testing.T) {
+	db := setupEventsDB(t)
+	r := eventsRouter(db, "tenant-a", "admin")
+
+	create := reqJSON(r, http.MethodPost, "/api/v1/events", validEventBody()) // price 80000
+	var created struct {
+		Data models.Event `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(create.Body.Bytes(), &created))
+	rid := seedRegistration(t, db, "tenant-a", created.Data.ID, "77777777-7777-4777-8777-777777777777")
+
+	base := "/api/v1/events/" + created.Data.ID + "/registrations/" + rid
+	// Primer abono: queda pendiente con saldo.
+	w1 := reqJSON(r, http.MethodPost, base+"/payments", map[string]any{"amount": 40000})
+	require.Equal(t, http.StatusOK, w1.Code)
+	var resp1 struct {
+		Data models.EventRegistration `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w1.Body.Bytes(), &resp1))
+	assert.Equal(t, models.RegistrationPaymentPending, resp1.Data.PaymentStatus)
+	assert.Equal(t, int64(40000), resp1.Data.AmountPaid)
+
+	// Segundo abono completa el precio → confirmado.
+	w2 := reqJSON(r, http.MethodPost, base+"/payments", map[string]any{"amount": 40000})
+	require.Equal(t, http.StatusOK, w2.Code)
+	var resp2 struct {
+		Data models.EventRegistration `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp2))
+	assert.Equal(t, models.RegistrationPaymentConfirmed, resp2.Data.PaymentStatus)
+	assert.Equal(t, int64(80000), resp2.Data.AmountPaid)
+}
+
+func TestCheckin_RejectsUnpaidCarnet(t *testing.T) {
+	db := setupEventsDB(t)
+	r := eventsRouter(db, "tenant-a", "admin")
+
+	create := reqJSON(r, http.MethodPost, "/api/v1/events", validEventBody())
+	var created struct {
+		Data models.Event `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(create.Body.Bytes(), &created))
+	qr := "88888888-8888-4888-8888-888888888888"
+	seedRegistration(t, db, "tenant-a", created.Data.ID, qr)
+
+	// Carné sin pagar → el escaneo se rechaza (400, no válido).
+	body := map[string]any{"qr_token": qr, "scan_type": models.ScanTypeIn}
+	w := reqJSON(r, http.MethodPost, "/api/v1/events/"+created.Data.ID+"/checkin", body)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	// Tras confirmar el pago, el mismo carné ya entra.
+	rid := ""
+	var reg models.EventRegistration
+	require.NoError(t, db.Where("qr_token = ?", qr).First(&reg).Error)
+	rid = reg.ID
+	confirm := reqJSON(r, http.MethodPost,
+		"/api/v1/events/"+created.Data.ID+"/registrations/"+rid+"/confirm-payment", nil)
+	require.Equal(t, http.StatusOK, confirm.Code)
+
+	w2 := reqJSON(r, http.MethodPost, "/api/v1/events/"+created.Data.ID+"/checkin", body)
+	assert.Equal(t, http.StatusOK, w2.Code)
+}
+
+func TestRecordPayment_RejectsNonPositive(t *testing.T) {
+	db := setupEventsDB(t)
+	r := eventsRouter(db, "tenant-a", "admin")
+	create := reqJSON(r, http.MethodPost, "/api/v1/events", validEventBody())
+	var created struct {
+		Data models.Event `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(create.Body.Bytes(), &created))
+	rid := seedRegistration(t, db, "tenant-a", created.Data.ID, "99999999-9999-4999-8999-999999999999")
+
+	w := reqJSON(r, http.MethodPost,
+		"/api/v1/events/"+created.Data.ID+"/registrations/"+rid+"/payments",
+		map[string]any{"amount": -10})
+	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
 func TestGenerateEventBadge_RequiresAIService(t *testing.T) {
