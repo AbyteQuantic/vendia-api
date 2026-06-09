@@ -44,6 +44,8 @@ func eventsRouter(db *gorm.DB, tenantID, role string) *gin.Engine {
 	g.DELETE("/events/:id", DeleteEvent(db))
 	g.POST("/events/:id/publish", PublishEvent(db))
 	g.POST("/events/:id/checkin", CheckinEvent(db))
+	// AI generators with a nil Gemini service to assert the guard path.
+	g.POST("/events/:id/badge/ai-generate", GenerateEventBadgeImage(db, nil, nil))
 	return r
 }
 
@@ -169,6 +171,28 @@ func TestCheckinEvent_Idempotent(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp2))
 	assert.True(t, resp2.AlreadyRegistered)
+}
+
+func TestGenerateEventBadge_RequiresAIService(t *testing.T) {
+	db := setupEventsDB(t)
+	r := eventsRouter(db, "tenant-a", "admin")
+
+	create := reqJSON(r, http.MethodPost, "/api/v1/events", validEventBody())
+	var created struct {
+		Data models.Event `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(create.Body.Bytes(), &created))
+
+	// With a nil Gemini service the endpoint must degrade to 503, not panic.
+	w := reqJSON(r, http.MethodPost, "/api/v1/events/"+created.Data.ID+"/badge/ai-generate", nil)
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+}
+
+func TestGenerateEventBadge_CashierForbidden(t *testing.T) {
+	db := setupEventsDB(t)
+	r := eventsRouter(db, "tenant-a", "cashier")
+	w := reqJSON(r, http.MethodPost, "/api/v1/events/whatever/badge/ai-generate", nil)
+	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
 func TestDeleteEvent_Archives(t *testing.T) {
