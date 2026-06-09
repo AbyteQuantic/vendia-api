@@ -181,6 +181,26 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 		if req.BusinessTypes != nil {
 			typesJSON, _ := json.Marshal(req.BusinessTypes)
 			updates["business_types"] = string(typesJSON)
+
+			// F042: el perfil cambia los tipos pero NO manda bloque `config`
+			// (F036 separó perfil de capacidades). Aun así, las capacidades
+			// IMPLÍCITAS por tipo deben aplicarse — academias → eventos —, o
+			// nunca se encenderían al elegir el tipo. Solo AÑADE (nunca apaga).
+			if req.Config == nil {
+				for _, t := range req.BusinessTypes {
+					if t == models.BusinessTypeAcademias {
+						var current models.Tenant
+						if err := db.Where("id = ?", tenantID).First(&current).Error; err == nil {
+							flags := current.FeatureFlags
+							flags.EnableEvents = true
+							if fj, err := json.Marshal(flags); err == nil {
+								updates["feature_flags"] = string(fj)
+							}
+						}
+						break
+					}
+				}
+			}
 		}
 		if req.NIT != nil {
 			updates["nit"] = *req.NIT
