@@ -29,11 +29,11 @@ func TestSeedBusinessCatalog_SeedsParity(t *testing.T) {
 
 	n, err := SeedBusinessCatalog(db)
 	require.NoError(t, err)
-	assert.Equal(t, 15, n, "siembra los 15 módulos del dashboard")
+	assert.Equal(t, 16, n, "siembra los 16 módulos del dashboard (incl. eventos F042)")
 
 	var types int64
 	db.Model(&models.BusinessTypeCatalog{}).Count(&types)
-	assert.Equal(t, int64(9), types, "siembra los 9 tipos de negocio")
+	assert.Equal(t, int64(10), types, "siembra los 10 tipos (incl. academias F042)")
 
 	// El módulo core 'registrar_venta' existe y NO tiene capacidad.
 	var venta models.BusinessModule
@@ -58,7 +58,7 @@ func TestSeedBusinessCatalog_Idempotent(t *testing.T) {
 
 	n1, err := SeedBusinessCatalog(db)
 	require.NoError(t, err)
-	assert.Equal(t, 15, n1)
+	assert.Equal(t, 16, n1)
 
 	// Segunda corrida: no-op (no duplica).
 	n2, err := SeedBusinessCatalog(db)
@@ -67,5 +67,26 @@ func TestSeedBusinessCatalog_Idempotent(t *testing.T) {
 
 	var modules int64
 	db.Model(&models.BusinessModule{}).Count(&modules)
-	assert.Equal(t, int64(15), modules, "no duplica en la segunda corrida")
+	assert.Equal(t, int64(16), modules, "no duplica en la segunda corrida")
+}
+
+// Spec: specs/042-modulo-eventos/spec.md
+func TestBackfillEventsCatalogModule_InsertsWhenMissing(t *testing.T) {
+	db := setupCatalogDB(t)
+
+	// DB sin sembrar: no hay eventos.
+	require.NoError(t, BackfillEventsCatalogModule(db))
+
+	var m models.BusinessModule
+	require.NoError(t, db.Where("key = ?", "eventos").First(&m).Error)
+	require.NotNil(t, m.CapabilityKey)
+	assert.Equal(t, "enable_events", *m.CapabilityKey)
+	require.NotNil(t, m.NativeScreenKey)
+	assert.Equal(t, "eventos", *m.NativeScreenKey)
+
+	// Idempotente: segunda corrida no duplica.
+	require.NoError(t, BackfillEventsCatalogModule(db))
+	var n int64
+	db.Model(&models.BusinessModule{}).Where("key = ?", "eventos").Count(&n)
+	assert.Equal(t, int64(1), n)
 }

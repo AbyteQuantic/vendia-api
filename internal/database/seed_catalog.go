@@ -52,6 +52,7 @@ func SeedBusinessCatalog(db *gorm.DB) (int, error) {
 		{Value: models.BusinessTypeManufactura, Label: "Manufactura", IconKey: "precision_manufacturing_rounded", Active: true, SortOrder: 6},
 		{Value: models.BusinessTypeReparacionMuebles, Label: "Reparación / Servicios", IconKey: "build_rounded", Active: true, SortOrder: 7},
 		{Value: models.BusinessTypeEmprendimientoGen, Label: "Emprendimiento", IconKey: "rocket_launch_rounded", Active: true, SortOrder: 8},
+		{Value: models.BusinessTypeAcademias, Label: "Academias e Instituciones", IconKey: "school_rounded", Active: true, SortOrder: 9},
 	}
 
 	// ── Módulos (espejo de dashboard_modules.dart) ─────────────────────
@@ -69,6 +70,7 @@ func SeedBusinessCatalog(db *gorm.DB) (int, error) {
 		{"trabajos_muebles", "Trabajos de Muebles", "Cotice, fabrique y repare por encargo", "handyman_rounded", "#1A2FA0", models.CategoryInventario, "work_orders", "enable_furniture_jobs"},
 		{"mis_clientes", "Mis Clientes", "Quién le compra: historial y total gastado", "people_outline", "#1A2FA0", models.CategoryClientes, "customers", "enable_customer_management"},
 		{"promociones", "Promociones", "Avísele a sus clientes cuando tenga ofertas", "campaign_rounded", "#D97706", models.CategoryClientes, "promotions", "enable_promotions"},
+		{"eventos", "Eventos", "Cobre cursos, conferencias y hackatones; escarapelas y certificados", "event_rounded", "#0EA5E9", models.CategoryClientes, "eventos", "enable_events"},
 		{"marketing_hub", "Marketing y Combos", "Combos, banners con IA y catálogo en línea", "auto_awesome_rounded", "#7C3AED", models.CategoryMiNegocio, "promo_management", "enable_marketing_hub"},
 		{"configuracion", "Ajustes de mi Negocio", "Perfil, capacidades, empleados y dispositivos", "settings_rounded", "#1E3A8A", models.CategoryMiNegocio, "admin_hub", ""},
 	}
@@ -79,6 +81,7 @@ func SeedBusinessCatalog(db *gorm.DB) (int, error) {
 	suggested := map[string][]string{
 		"cotizaciones": {models.BusinessTypeDepositoConstruccion, models.BusinessTypeManufactura, models.BusinessTypeReparacionMuebles},
 		"mis_clientes": {models.BusinessTypeDepositoConstruccion, models.BusinessTypeManufactura, models.BusinessTypeReparacionMuebles, models.BusinessTypeEmprendimientoGen},
+		"eventos":      {models.BusinessTypeAcademias},
 	}
 
 	created := 0
@@ -131,4 +134,49 @@ func SeedBusinessCatalog(db *gorm.DB) (int, error) {
 		return 0, err
 	}
 	return created, nil
+}
+
+// BackfillEventsCatalogModule inserts the F042 "eventos" module into the
+// dynamic catalog if it is missing. SeedBusinessCatalog is a one-shot
+// (guarded on count>0), so deployments seeded before F042 need this
+// idempotent top-up to expose Eventos in the dashboard/reel. It also adds
+// the eventos→academias "suggested" relation. Safe to run on every boot.
+func BackfillEventsCatalogModule(db *gorm.DB) error {
+	var n int64
+	if err := db.Model(&models.BusinessModule{}).
+		Where("key = ?", "eventos").Count(&n).Error; err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil // ya existe
+	}
+
+	var maxSort int
+	db.Model(&models.BusinessModule{}).
+		Select("COALESCE(MAX(sort_order),0)").Scan(&maxSort)
+
+	m := models.BusinessModule{
+		Key:             "eventos",
+		Name:            "Eventos",
+		Description:     "Cobre cursos, conferencias y hackatones; escarapelas y certificados",
+		IconKey:         "event_rounded",
+		Color:           "#0EA5E9",
+		Category:        models.CategoryClientes,
+		RenderType:      models.RenderNative,
+		NativeScreenKey: strp("eventos"),
+		CapabilityKey:   strp("enable_events"),
+		Active:          true,
+		SortOrder:       maxSort + 1,
+		CreatedBy:       "backfill_f042",
+	}
+	if err := db.Create(&m).Error; err != nil {
+		return err
+	}
+	// Relación sugerida: academias.
+	rel := models.ModuleTypeRelation{
+		ModuleID:          m.ID,
+		BusinessTypeValue: models.BusinessTypeAcademias,
+		RelationLevel:     models.RelationSuggested,
+	}
+	return db.Create(&rel).Error
 }
