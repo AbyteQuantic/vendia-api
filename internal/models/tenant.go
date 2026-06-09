@@ -16,6 +16,9 @@ const (
 	BusinessTypeManufactura          = "manufactura"
 	BusinessTypeReparacionMuebles    = "reparacion_muebles"
 	BusinessTypeEmprendimientoGen    = "emprendimiento_general"
+	// F042 — academias / institutos: organizan cursos, conferencias y
+	// hackatones, así que su tipo implica la capacidad de Eventos.
+	BusinessTypeAcademias = "academias_instituciones"
 )
 
 // ValidBusinessTypes is the canonical whitelist. The register handler
@@ -32,6 +35,7 @@ var ValidBusinessTypes = map[string]struct{}{
 	BusinessTypeManufactura:          {},
 	BusinessTypeReparacionMuebles:    {},
 	BusinessTypeEmprendimientoGen:    {},
+	BusinessTypeAcademias:            {},
 }
 
 // FeatureFlags are per-tenant module toggles derived from business_types.
@@ -92,6 +96,9 @@ func DefaultFeatureFlags(types []string, opts CapabilityToggles) FeatureFlags {
 		EnableServices:        services || opts.Services,
 		EnableCustomBilling:   services || opts.Services,
 		EnableFractionalUnits: has(BusinessTypeDepositoConstruccion) || opts.FractionalUnits,
+		// F042 — academias/institutos implican Eventos. Otros tipos lo
+		// activan self-service desde el reel (queda false aquí).
+		EnableEvents: has(BusinessTypeAcademias),
 	}
 }
 

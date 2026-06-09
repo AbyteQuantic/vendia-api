@@ -166,6 +166,20 @@ func TestDefaultFeatureFlags(t *testing.T) {
 				EnableFractionalUnits: true,
 			},
 		},
+		{
+			name:  "academias implica eventos (F042)",
+			types: []string{BusinessTypeAcademias},
+			opts:  CapabilityToggles{},
+			want: FeatureFlags{
+				EnableEvents: true,
+			},
+		},
+		{
+			name:  "tienda no implica eventos",
+			types: []string{BusinessTypeTiendaBarrio},
+			opts:  CapabilityToggles{},
+			want:  FeatureFlags{},
+		},
 	}
 
 	for _, tc := range cases {
@@ -187,6 +201,7 @@ func TestValidBusinessTypes_ContainsAllConstants(t *testing.T) {
 		BusinessTypeManufactura,
 		BusinessTypeReparacionMuebles,
 		BusinessTypeEmprendimientoGen,
+		BusinessTypeAcademias,
 	} {
 		_, ok := ValidBusinessTypes[bt]
 		assert.True(t, ok, "whitelist missing %q", bt)

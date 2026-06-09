@@ -215,6 +215,13 @@ func Migrate(db *gorm.DB) error {
 		if err := applyLedgerIndexes(db); err != nil {
 			log.Printf("[bootstrap] ledger indexes: %v", err)
 		}
+		// F042 — el tipo academias_instituciones debe pasar el CHECK
+		// tenants_business_types_valid. Render solo corre AutoMigrate, no
+		// los .sql, así que actualizamos la función de validación en el
+		// bootstrap (idempotente; CREATE OR REPLACE no toca el constraint).
+		if err := ensureBusinessTypesWhitelist(db); err != nil {
+			log.Printf("[bootstrap] business_types whitelist: %v", err)
+		}
 	}
 
 	log.Println("[DB] auto-migrations completed")
