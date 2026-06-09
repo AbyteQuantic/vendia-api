@@ -67,6 +67,14 @@ func eventAssetHandler(db *gorm.DB, geminiSvc *services.GeminiService, storageSv
 		}
 		tenantID := middleware.GetTenantID(c)
 
+		// Optional creative direction the organizer typed in the editor. The
+		// body may be empty (no Content) — ignore the bind error in that case.
+		var body struct {
+			Brief string `json:"brief"`
+		}
+		_ = c.ShouldBindJSON(&body)
+		brief := strings.TrimSpace(body.Brief)
+
 		ev, err := services.NewEventService(db).Get(tenantID, c.Param("id"))
 		if err != nil {
 			writeEventError(c, err)
@@ -85,11 +93,11 @@ func eventAssetHandler(db *gorm.DB, geminiSvc *services.GeminiService, storageSv
 		var img []byte
 		switch kind {
 		case assetBadge:
-			img, err = geminiSvc.GenerateEventBadge(ctx, ev.Title, tenant.BusinessName, badgeSampleName, ev.Description)
+			img, err = geminiSvc.GenerateEventBadge(ctx, ev.Title, tenant.BusinessName, badgeSampleName, combineDescBrief(ev.Description, brief))
 		case assetCertificate:
-			img, err = geminiSvc.GenerateEventCertificate(ctx, ev.Title, tenant.BusinessName, badgeSampleName, ev.Description)
+			img, err = geminiSvc.GenerateEventCertificate(ctx, ev.Title, tenant.BusinessName, badgeSampleName, combineDescBrief(ev.Description, brief))
 		case assetPoster:
-			img, err = geminiSvc.GenerateEventPoster(ctx, posterInputFor(ev, tenant.BusinessName))
+			img, err = geminiSvc.GenerateEventPoster(ctx, posterInputFor(ev, tenant.BusinessName, brief))
 		}
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al generar el diseño: %v", err)})
@@ -137,20 +145,38 @@ func assetKindSlug(kind eventAssetKind) string {
 
 // posterInputFor maps an event + business name into the marketing poster facts,
 // formatting the date (es-CO) and price ("Gratis" / "$50.000") the way the
-// catalog shows them. Mirrors the Flutter labels so the piece reads natively.
-func posterInputFor(ev *models.Event, businessName string) services.PosterInput {
+// catalog shows them. brief is the organizer's optional creative direction.
+// Mirrors the Flutter labels so the piece reads natively.
+func posterInputFor(ev *models.Event, businessName, brief string) services.PosterInput {
 	in := services.PosterInput{
 		Title:        ev.Title,
 		BusinessName: businessName,
+		Type:         ev.Type,
 		TypeLabel:    eventTypeLabel(ev.Type),
 		ModalityText: eventModalityLabel(ev.Modality),
 		PriceText:    formatPosterPrice(ev.Price),
 		Description:  ev.Description,
+		Brief:        brief,
 	}
 	if ev.StartAt != nil {
 		in.DateText = formatPosterDate(*ev.StartAt)
 	}
 	return in
+}
+
+// combineDescBrief merges the event's public description with the organizer's
+// editor brief so the badge/certificate also reflect any creative direction.
+func combineDescBrief(description, brief string) string {
+	description = strings.TrimSpace(description)
+	brief = strings.TrimSpace(brief)
+	switch {
+	case brief == "":
+		return description
+	case description == "":
+		return brief
+	default:
+		return description + ". " + brief
+	}
 }
 
 func eventTypeLabel(t string) string {

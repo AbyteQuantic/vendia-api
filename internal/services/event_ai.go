@@ -69,44 +69,85 @@ Requisitos de diseño:
 type PosterInput struct {
 	Title        string
 	BusinessName string
+	Type         string // raw type slug (curso/conferencia/hackaton/otro)
 	TypeLabel    string // "Curso", "Conferencia", "Hackatón", "Evento"
 	ModalityText string // "Presencial", "Virtual", "Híbrido"
 	DateText     string // already formatted in es-CO, may be empty
 	PriceText    string // "Gratis" or "$50.000", caller formats
 	Description  string
+	// Brief is the organizer's free-text creative direction ("muestra manos
+	// decorando un pastel, colores pastel"). When present it drives the scene.
+	Brief string
+}
+
+// posterScene picks the default photographic scene for the poster from the
+// event type — people DOING the activity, so the model renders a real ad
+// instead of text on a flat background. The organizer's brief overrides it.
+func posterScene(eventType string) string {
+	switch eventType {
+	case "curso":
+		return "un taller/clase real: un instructor enseñando y estudiantes participando con entusiasmo, manos en la actividad práctica del curso"
+	case "conferencia":
+		return "una conferencia profesional: un ponente carismático en un escenario moderno frente a una audiencia atenta, ambiente inspirador"
+	case "hackaton":
+		return "un hackatón lleno de energía: jóvenes desarrolladores colaborando con laptops y pantallas de código, ambiente de innovación y creatividad"
+	default:
+		return "personas reales disfrutando y participando activamente en el evento, ambiente cálido y atractivo"
+	}
 }
 
 // buildEventPosterPrompt composes the prompt for an AFICHE PUBLICITARIO — the
 // marketing piece shown in the public catalog (the WhatsApp link surfaces it).
 // Unlike the badge/certificate it carries NO QR and no attendee name: it sells
-// the event. Vertical (story/poster ratio), bold, with a clear call to action.
+// the event. The prompt pushes for AGENCY-QUALITY work: a real photographic/
+// illustrated scene with people doing the activity, not text on a flat color —
+// that was the failure mode the organizers reported.
 func buildEventPosterPrompt(in PosterInput) string {
-	lines := fmt.Sprintf(`Diseña un AFICHE PUBLICITARIO vertical, moderno y muy llamativo para promocionar un evento (estilo cartel/historia de redes sociales).
-
-Datos a mostrar de forma jerárquica y legible:
-- Título del evento: "%s" (enorme, protagonista)
-- Tipo: %s · Modalidad: %s
-- Organizador: "%s"`, in.Title, in.TypeLabel, in.ModalityText, in.BusinessName)
-
-	if in.DateText != "" {
-		lines += fmt.Sprintf("\n- Fecha: %s (visible y destacada)", in.DateText)
+	// The scene: the organizer's brief wins; otherwise a sensible default per
+	// type. Either way we DEMAND a rich illustrated/photographic composition.
+	scene := strings.TrimSpace(in.Brief)
+	sceneSource := "Sigue al pie de la letra estas indicaciones del organizador para la escena, el estilo y los elementos de la pieza"
+	if scene == "" {
+		scene = posterScene(in.Type)
+		sceneSource = "Representa esta escena protagonista"
 	}
+	if len(scene) > 600 {
+		scene = scene[:600]
+	}
+
 	price := in.PriceText
 	if price == "" {
 		price = "Gratis"
 	}
-	lines += fmt.Sprintf("\n- Precio: %s", price)
 
-	lines += `
+	prompt := fmt.Sprintf(`Actúa como un DISEÑADOR PUBLICITARIO EXPERTO. Crea un AFICHE PUBLICITARIO PROFESIONAL, vertical (relación 4:5 o 9:16), con calidad de agencia de publicidad, para promocionar este evento. Debe verse espectacular en la pantalla de un celular y dar ganas de inscribirse.
 
-Requisitos de diseño:
-- Composición tipo afiche, vibrante y con gancho visual; colores con energía y buen contraste.
-- Incluye un llamado a la acción claro tipo "¡Inscríbete ya!" o "Cupos limitados".
+LO MÁS IMPORTANTE — LA IMAGEN (no hagas SOLO texto sobre un fondo plano o un degradado):
+- Crea una composición visual RICA con una FOTOGRAFÍA o ILUSTRACIÓN PROFESIONAL como protagonista.
+- %s: %s.
+- Incluye PERSONAS reales realizando la actividad, con expresiones y acciones creíbles; iluminación cinematográfica, profundidad, color graduado y composición dinámica.
+- Calidad de portada de revista / campaña publicitaria real. NADA de plantillas genéricas ni bloques de color con texto encima.
+
+EL TEXTO (integrado con elegancia sobre la imagen, muy legible y bien jerarquizado, sin faltas de ortografía):
+- Título protagonista: "%s"
+- %s · %s`, sceneSource, scene, in.Title, in.TypeLabel, in.ModalityText)
+
+	if in.DateText != "" {
+		prompt += fmt.Sprintf("\n- Fecha: %s", in.DateText)
+	}
+	prompt += fmt.Sprintf("\n- Precio: %s", price)
+	prompt += fmt.Sprintf("\n- Organizado por: %s", in.BusinessName)
+
+	prompt += `
+- Un llamado a la acción claro: "¡Inscríbete ya!" o "Cupos limitados".
+
+REGLAS ESTRICTAS:
 - NO incluyas ningún código QR ni recuadros para QR (es una pieza publicitaria, no una escarapela).
-- Tipografía grande y clara, jerarquía evidente; nada de texto decorativo ilegible.
-- Todo el texto en español; pensado para verse bien en la pantalla de un celular.`
+- NO entregues una imagen que sea solamente texto sobre fondo plano o degradado: SIEMPRE debe haber una escena/ilustración protagonista de alta calidad.
+- Todo el texto en español, perfectamente escrito.`
 
-	return lines + themeHint(in.Description)
+	// Description still feeds context (colors/motifs) on top of the scene.
+	return prompt + themeHint(in.Description)
 }
 
 // GenerateEventPoster renders a marketing poster (afiche) for the public

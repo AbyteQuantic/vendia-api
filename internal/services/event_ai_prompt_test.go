@@ -34,6 +34,7 @@ func TestBuildEventPosterPrompt_SellsAndHasNoQR(t *testing.T) {
 	p := buildEventPosterPrompt(PosterInput{
 		Title:        "Hackatón VendIA",
 		BusinessName: "Tienda Doña Ana",
+		Type:         "hackaton",
 		TypeLabel:    "Hackatón",
 		ModalityText: "Presencial",
 		DateText:     "20 de junio de 2026",
@@ -47,13 +48,52 @@ func TestBuildEventPosterPrompt_SellsAndHasNoQR(t *testing.T) {
 			t.Fatalf("el afiche no contiene %q:\n%s", anchor, p)
 		}
 	}
+	// Debe exigir una pieza profesional con escena/personas, no solo texto.
+	for _, anchor := range []string{"profesional", "personas", "fotografía o ilustración"} {
+		if !strings.Contains(low, anchor) {
+			t.Fatalf("el afiche debe exigir calidad profesional con escena (%q):\n%s", anchor, p)
+		}
+	}
 	// Es pieza publicitaria: debe PROHIBIR el QR explícitamente y NUNCA pedir
 	// que se reserve un recuadro para él (a diferencia de la escarapela).
 	if !strings.Contains(low, "no incluyas ningún código qr") {
 		t.Fatalf("el afiche debe prohibir explícitamente el QR:\n%s", p)
 	}
-	if strings.Contains(low, "reserva") {
+	if strings.Contains(low, "reserva un recuadro") {
 		t.Fatalf("el afiche NO debe reservar área de QR como la escarapela:\n%s", p)
+	}
+}
+
+func TestBuildEventPosterPrompt_BriefDrivesScene(t *testing.T) {
+	p := buildEventPosterPrompt(PosterInput{
+		Title:        "Curso de repostería",
+		BusinessName: "Dulce Ana",
+		Type:         "curso",
+		TypeLabel:    "Curso",
+		ModalityText: "Presencial",
+		Brief:        "manos decorando un pastel con crema, colores pastel",
+	})
+	low := strings.ToLower(p)
+	// El brief del organizador manda sobre la escena por defecto.
+	if !strings.Contains(low, "manos decorando un pastel") {
+		t.Fatalf("el brief del organizador debe guiar la escena:\n%s", p)
+	}
+	if !strings.Contains(low, "indicaciones del organizador") {
+		t.Fatalf("debe señalar que sigue las indicaciones del organizador:\n%s", p)
+	}
+}
+
+func TestBuildEventPosterPrompt_DefaultSceneByType(t *testing.T) {
+	// Sin brief, la escena por defecto depende del tipo (taller para curso).
+	p := buildEventPosterPrompt(PosterInput{
+		Title:        "Curso de repostería",
+		BusinessName: "Dulce Ana",
+		Type:         "curso",
+		TypeLabel:    "Curso",
+		ModalityText: "Presencial",
+	})
+	if !strings.Contains(strings.ToLower(p), "instructor") {
+		t.Fatalf("curso sin brief debe usar la escena de taller/instructor:\n%s", p)
 	}
 }
 
@@ -61,6 +101,7 @@ func TestBuildEventPosterPrompt_FreeAndNoDate(t *testing.T) {
 	p := buildEventPosterPrompt(PosterInput{
 		Title:        "Charla abierta",
 		BusinessName: "Academia X",
+		Type:         "conferencia",
 		TypeLabel:    "Conferencia",
 		ModalityText: "Virtual",
 		// Sin fecha ni precio → "Gratis", sin línea de fecha.
@@ -69,7 +110,7 @@ func TestBuildEventPosterPrompt_FreeAndNoDate(t *testing.T) {
 	if !strings.Contains(low, "gratis") {
 		t.Fatalf("precio vacío debe leerse Gratis:\n%s", p)
 	}
-	if strings.Contains(low, "fecha:") {
+	if strings.Contains(low, "\n- fecha:") {
 		t.Fatalf("sin fecha no debe inyectar rótulo de fecha:\n%s", p)
 	}
 }
