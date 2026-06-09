@@ -30,6 +30,50 @@ func TestBuildEventCertificatePrompt_IncludesAnchors(t *testing.T) {
 	}
 }
 
+func TestBuildEventPosterPrompt_SellsAndHasNoQR(t *testing.T) {
+	p := buildEventPosterPrompt(PosterInput{
+		Title:        "Hackatón VendIA",
+		BusinessName: "Tienda Doña Ana",
+		TypeLabel:    "Hackatón",
+		ModalityText: "Presencial",
+		DateText:     "20 de junio de 2026",
+		PriceText:    "$50.000",
+		Description:  "Maratón de programación con robótica",
+	})
+	low := strings.ToLower(p)
+	// Vende el evento con sus datos clave.
+	for _, anchor := range []string{"afiche", "hackatón vendia", "tienda doña ana", "20 de junio de 2026", "$50.000", "robótica"} {
+		if !strings.Contains(low, anchor) {
+			t.Fatalf("el afiche no contiene %q:\n%s", anchor, p)
+		}
+	}
+	// Es pieza publicitaria: debe PROHIBIR el QR explícitamente y NUNCA pedir
+	// que se reserve un recuadro para él (a diferencia de la escarapela).
+	if !strings.Contains(low, "no incluyas ningún código qr") {
+		t.Fatalf("el afiche debe prohibir explícitamente el QR:\n%s", p)
+	}
+	if strings.Contains(low, "reserva") {
+		t.Fatalf("el afiche NO debe reservar área de QR como la escarapela:\n%s", p)
+	}
+}
+
+func TestBuildEventPosterPrompt_FreeAndNoDate(t *testing.T) {
+	p := buildEventPosterPrompt(PosterInput{
+		Title:        "Charla abierta",
+		BusinessName: "Academia X",
+		TypeLabel:    "Conferencia",
+		ModalityText: "Virtual",
+		// Sin fecha ni precio → "Gratis", sin línea de fecha.
+	})
+	low := strings.ToLower(p)
+	if !strings.Contains(low, "gratis") {
+		t.Fatalf("precio vacío debe leerse Gratis:\n%s", p)
+	}
+	if strings.Contains(low, "fecha:") {
+		t.Fatalf("sin fecha no debe inyectar rótulo de fecha:\n%s", p)
+	}
+}
+
 // The organizer's description should theme the piece, woven in as context
 // (not blank) — and an empty description must not inject a dangling label.
 func TestBuildEventBadgePrompt_WeavesDescription(t *testing.T) {

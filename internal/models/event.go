@@ -77,6 +77,12 @@ type Event struct {
 	// produced by the organizer with optional Gemini assistance.
 	BadgeTemplate       EventTemplate `gorm:"serializer:json;type:jsonb;default:'{}'" json:"badge_template"`
 	CertificateTemplate EventTemplate `gorm:"serializer:json;type:jsonb;default:'{}'" json:"certificate_template"`
+
+	// PosterTemplate is the marketing piece (afiche publicitario) shown in
+	// the public catalog alongside products — the image the WhatsApp link
+	// surfaces. Unlike the badge/certificate it carries NO QR; it sells the
+	// event. Produced by the organizer with optional Gemini assistance.
+	PosterTemplate EventTemplate `gorm:"serializer:json;type:jsonb;default:'{}'" json:"poster_template"`
 }
 
 // EventCustomField is one organizer-defined inscription field.

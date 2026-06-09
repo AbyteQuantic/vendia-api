@@ -547,6 +547,7 @@ func main() {
 		v1.POST("/events/:id/registrations/:rid/certificate", handlers.IssueCertificate(db))
 		v1.POST("/events/:id/badge/ai-generate", handlers.GenerateEventBadgeImage(db, geminiSvc, storageSvc))
 		v1.POST("/events/:id/certificate/ai-generate", handlers.GenerateEventCertificateImage(db, geminiSvc, storageSvc))
+		v1.POST("/events/:id/poster/ai-generate", handlers.GenerateEventPosterImage(db, geminiSvc, storageSvc))
 
 		// Credits (El Fiar)
 		v1.GET("/credits", handlers.ListCredits(db))

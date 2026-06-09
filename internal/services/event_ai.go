@@ -63,6 +63,59 @@ Requisitos de diseño:
 - Todo el texto en español; aspecto digno de imprimir.%s`, attendeeName, eventTitle, businessName, themeHint(description))
 }
 
+// PosterInput carries the event facts the marketing poster shows. Optional
+// fields (DateText, empty PriceText→"Gratis") degrade gracefully so events
+// created before a field existed still render.
+type PosterInput struct {
+	Title        string
+	BusinessName string
+	TypeLabel    string // "Curso", "Conferencia", "Hackatón", "Evento"
+	ModalityText string // "Presencial", "Virtual", "Híbrido"
+	DateText     string // already formatted in es-CO, may be empty
+	PriceText    string // "Gratis" or "$50.000", caller formats
+	Description  string
+}
+
+// buildEventPosterPrompt composes the prompt for an AFICHE PUBLICITARIO — the
+// marketing piece shown in the public catalog (the WhatsApp link surfaces it).
+// Unlike the badge/certificate it carries NO QR and no attendee name: it sells
+// the event. Vertical (story/poster ratio), bold, with a clear call to action.
+func buildEventPosterPrompt(in PosterInput) string {
+	lines := fmt.Sprintf(`Diseña un AFICHE PUBLICITARIO vertical, moderno y muy llamativo para promocionar un evento (estilo cartel/historia de redes sociales).
+
+Datos a mostrar de forma jerárquica y legible:
+- Título del evento: "%s" (enorme, protagonista)
+- Tipo: %s · Modalidad: %s
+- Organizador: "%s"`, in.Title, in.TypeLabel, in.ModalityText, in.BusinessName)
+
+	if in.DateText != "" {
+		lines += fmt.Sprintf("\n- Fecha: %s (visible y destacada)", in.DateText)
+	}
+	price := in.PriceText
+	if price == "" {
+		price = "Gratis"
+	}
+	lines += fmt.Sprintf("\n- Precio: %s", price)
+
+	lines += `
+
+Requisitos de diseño:
+- Composición tipo afiche, vibrante y con gancho visual; colores con energía y buen contraste.
+- Incluye un llamado a la acción claro tipo "¡Inscríbete ya!" o "Cupos limitados".
+- NO incluyas ningún código QR ni recuadros para QR (es una pieza publicitaria, no una escarapela).
+- Tipografía grande y clara, jerarquía evidente; nada de texto decorativo ilegible.
+- Todo el texto en español; pensado para verse bien en la pantalla de un celular.`
+
+	return lines + themeHint(in.Description)
+}
+
+// GenerateEventPoster renders a marketing poster (afiche) for the public
+// catalog. Same Gemini image path as the badge/certificate, themed by the
+// event facts. Same FinOps-label caveat as GenerateEventBadge.
+func (s *GeminiService) GenerateEventPoster(ctx context.Context, in PosterInput) ([]byte, error) {
+	return s.GeneratePromoBanner(ctx, buildEventPosterPrompt(in), nil)
+}
+
 // GenerateEventBadge renders an escarapela design for an event via Gemini and
 // returns raw image bytes the caller uploads to storage. It reuses the
 // prompt→image path of GeneratePromoBanner (same generationConfig, temperature

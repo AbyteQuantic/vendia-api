@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"vendia-backend/internal/aiusage"
@@ -37,11 +39,19 @@ func GenerateEventCertificateImage(db *gorm.DB, geminiSvc *services.GeminiServic
 	return eventAssetHandler(db, geminiSvc, storageSvc, assetCertificate)
 }
 
+// GenerateEventPosterImage — POST /api/v1/events/:id/poster/ai-generate (admin).
+// Produces the marketing AFICHE shown in the public catalog (the WhatsApp link
+// surfaces it). No QR — it sells the event. Persists on the poster template.
+func GenerateEventPosterImage(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage) gin.HandlerFunc {
+	return eventAssetHandler(db, geminiSvc, storageSvc, assetPoster)
+}
+
 type eventAssetKind int
 
 const (
 	assetBadge eventAssetKind = iota
 	assetCertificate
+	assetPoster
 )
 
 // eventAssetHandler is shared by the badge and certificate generators — they
@@ -73,10 +83,13 @@ func eventAssetHandler(db *gorm.DB, geminiSvc *services.GeminiService, storageSv
 		defer cancel()
 
 		var img []byte
-		if kind == assetBadge {
+		switch kind {
+		case assetBadge:
 			img, err = geminiSvc.GenerateEventBadge(ctx, ev.Title, tenant.BusinessName, badgeSampleName, ev.Description)
-		} else {
+		case assetCertificate:
 			img, err = geminiSvc.GenerateEventCertificate(ctx, ev.Title, tenant.BusinessName, badgeSampleName, ev.Description)
+		case assetPoster:
+			img, err = geminiSvc.GenerateEventPoster(ctx, posterInputFor(ev, tenant.BusinessName))
 		}
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al generar el diseño: %v", err)})
@@ -94,10 +107,13 @@ func eventAssetHandler(db *gorm.DB, geminiSvc *services.GeminiService, storageSv
 		}
 
 		// Persist on the event template (struct Save applies the serializer).
-		if kind == assetBadge {
+		switch kind {
+		case assetBadge:
 			ev.BadgeTemplate.ImageURL = url
-		} else {
+		case assetCertificate:
 			ev.CertificateTemplate.ImageURL = url
+		case assetPoster:
+			ev.PosterTemplate.ImageURL = url
 		}
 		if err := db.Save(ev).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al guardar el diseño"})
@@ -109,8 +125,80 @@ func eventAssetHandler(db *gorm.DB, geminiSvc *services.GeminiService, storageSv
 }
 
 func assetKindSlug(kind eventAssetKind) string {
-	if kind == assetBadge {
+	switch kind {
+	case assetBadge:
 		return "badge"
+	case assetPoster:
+		return "poster"
+	default:
+		return "certificate"
 	}
-	return "certificate"
+}
+
+// posterInputFor maps an event + business name into the marketing poster facts,
+// formatting the date (es-CO) and price ("Gratis" / "$50.000") the way the
+// catalog shows them. Mirrors the Flutter labels so the piece reads natively.
+func posterInputFor(ev *models.Event, businessName string) services.PosterInput {
+	in := services.PosterInput{
+		Title:        ev.Title,
+		BusinessName: businessName,
+		TypeLabel:    eventTypeLabel(ev.Type),
+		ModalityText: eventModalityLabel(ev.Modality),
+		PriceText:    formatPosterPrice(ev.Price),
+		Description:  ev.Description,
+	}
+	if ev.StartAt != nil {
+		in.DateText = formatPosterDate(*ev.StartAt)
+	}
+	return in
+}
+
+func eventTypeLabel(t string) string {
+	switch t {
+	case models.EventTypeCurso:
+		return "Curso"
+	case models.EventTypeConferencia:
+		return "Conferencia"
+	case models.EventTypeHackaton:
+		return "Hackatón"
+	default:
+		return "Evento"
+	}
+}
+
+func eventModalityLabel(m string) string {
+	switch m {
+	case models.EventModalityPresencial:
+		return "Presencial"
+	case models.EventModalityVirtual:
+		return "Virtual"
+	case models.EventModalityHibrido:
+		return "Híbrido"
+	default:
+		return m
+	}
+}
+
+func formatPosterPrice(price int64) string {
+	if price <= 0 {
+		return "Gratis"
+	}
+	// Thousands separator with dots (es-CO): 50000 → "$50.000".
+	s := strconv.FormatInt(price, 10)
+	var b strings.Builder
+	for i, r := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			b.WriteByte('.')
+		}
+		b.WriteRune(r)
+	}
+	return "$" + b.String()
+}
+
+func formatPosterDate(t time.Time) string {
+	months := []string{
+		"enero", "febrero", "marzo", "abril", "mayo", "junio",
+		"julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+	}
+	return fmt.Sprintf("%d de %s de %d", t.Day(), months[int(t.Month())-1], t.Year())
 }

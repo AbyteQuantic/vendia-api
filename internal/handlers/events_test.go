@@ -46,6 +46,7 @@ func eventsRouter(db *gorm.DB, tenantID, role string) *gin.Engine {
 	g.POST("/events/:id/checkin", CheckinEvent(db))
 	// AI generators with a nil Gemini service to assert the guard path.
 	g.POST("/events/:id/badge/ai-generate", GenerateEventBadgeImage(db, nil, nil))
+	g.POST("/events/:id/poster/ai-generate", GenerateEventPosterImage(db, nil, nil))
 	return r
 }
 
@@ -204,6 +205,28 @@ func TestGenerateEventBadge_NoRoleForbidden(t *testing.T) {
 	db := setupEventsDB(t)
 	r := eventsRouter(db, "tenant-a", "")
 	w := reqJSON(r, http.MethodPost, "/api/v1/events/whatever/badge/ai-generate", nil)
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestGenerateEventPoster_RequiresAIService(t *testing.T) {
+	db := setupEventsDB(t)
+	r := eventsRouter(db, "tenant-a", "admin")
+
+	create := reqJSON(r, http.MethodPost, "/api/v1/events", validEventBody())
+	var created struct {
+		Data models.Event `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(create.Body.Bytes(), &created))
+
+	// Nil Gemini service → 503, never a panic (mirrors the badge guard).
+	w := reqJSON(r, http.MethodPost, "/api/v1/events/"+created.Data.ID+"/poster/ai-generate", nil)
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+}
+
+func TestGenerateEventPoster_NoRoleForbidden(t *testing.T) {
+	db := setupEventsDB(t)
+	r := eventsRouter(db, "tenant-a", "")
+	w := reqJSON(r, http.MethodPost, "/api/v1/events/whatever/poster/ai-generate", nil)
 	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
