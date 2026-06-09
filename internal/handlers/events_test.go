@@ -75,9 +75,18 @@ func TestCreateEvent_AdminSucceeds(t *testing.T) {
 	assert.Equal(t, models.EventStatusBorrador, resp.Data.Status)
 }
 
-func TestCreateEvent_CashierForbidden(t *testing.T) {
+func TestCreateEvent_CashierAllowed(t *testing.T) {
+	// El dueño del negocio suele tener rol cashier; debe poder crear eventos.
 	db := setupEventsDB(t)
 	r := eventsRouter(db, "tenant-a", "cashier")
+
+	w := reqJSON(r, http.MethodPost, "/api/v1/events", validEventBody())
+	assert.Equal(t, http.StatusCreated, w.Code)
+}
+
+func TestCreateEvent_NoRoleForbidden(t *testing.T) {
+	db := setupEventsDB(t)
+	r := eventsRouter(db, "tenant-a", "")
 
 	w := reqJSON(r, http.MethodPost, "/api/v1/events", validEventBody())
 	assert.Equal(t, http.StatusForbidden, w.Code)
@@ -188,9 +197,9 @@ func TestGenerateEventBadge_RequiresAIService(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 }
 
-func TestGenerateEventBadge_CashierForbidden(t *testing.T) {
+func TestGenerateEventBadge_NoRoleForbidden(t *testing.T) {
 	db := setupEventsDB(t)
-	r := eventsRouter(db, "tenant-a", "cashier")
+	r := eventsRouter(db, "tenant-a", "")
 	w := reqJSON(r, http.MethodPost, "/api/v1/events/whatever/badge/ai-generate", nil)
 	assert.Equal(t, http.StatusForbidden, w.Code)
 }
