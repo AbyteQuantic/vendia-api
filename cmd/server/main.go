@@ -548,6 +548,10 @@ func main() {
 		v1.POST("/events/:id/badge/ai-generate", handlers.GenerateEventBadgeImage(db, geminiSvc, storageSvc))
 		v1.POST("/events/:id/certificate/ai-generate", handlers.GenerateEventCertificateImage(db, geminiSvc, storageSvc))
 		v1.POST("/events/:id/poster/ai-generate", handlers.GenerateEventPosterImage(db, geminiSvc, storageSvc))
+		// "Sube tu propia imagen" — alternativa a la IA para cada pieza (FR-11/13).
+		v1.POST("/events/:id/badge/upload", handlers.UploadEventBadgeImage(db, storageSvc))
+		v1.POST("/events/:id/certificate/upload", handlers.UploadEventCertificateImage(db, storageSvc))
+		v1.POST("/events/:id/poster/upload", handlers.UploadEventPosterImage(db, storageSvc))
 
 		// Credits (El Fiar)
 		v1.GET("/credits", handlers.ListCredits(db))

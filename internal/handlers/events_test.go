@@ -4,6 +4,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -47,6 +48,8 @@ func eventsRouter(db *gorm.DB, tenantID, role string) *gin.Engine {
 	// AI generators with a nil Gemini service to assert the guard path.
 	g.POST("/events/:id/badge/ai-generate", GenerateEventBadgeImage(db, nil, nil))
 	g.POST("/events/:id/poster/ai-generate", GenerateEventPosterImage(db, nil, nil))
+	// "Sube tu propia imagen" — con almacenamiento falso para el camino feliz.
+	g.POST("/events/:id/poster/upload", UploadEventPosterImage(db, newFakeStorage()))
 	return r
 }
 
@@ -227,6 +230,70 @@ func TestGenerateEventPoster_NoRoleForbidden(t *testing.T) {
 	db := setupEventsDB(t)
 	r := eventsRouter(db, "tenant-a", "")
 	w := reqJSON(r, http.MethodPost, "/api/v1/events/whatever/poster/ai-generate", nil)
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestUploadEventPoster_HappyPath(t *testing.T) {
+	db := setupEventsDB(t)
+	r := eventsRouter(db, "tenant-a", "admin")
+
+	create := reqJSON(r, http.MethodPost, "/api/v1/events", validEventBody())
+	var created struct {
+		Data models.Event `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(create.Body.Bytes(), &created))
+
+	body, ctype := buildMultipartQR(t, "image", "afiche.png", "image/png", pngBytes)
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/v1/events/"+created.Data.ID+"/poster/upload", body)
+	req.Header.Set("Content-Type", ctype)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	var resp struct {
+		Data struct {
+			ImageURL string `json:"image_url"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.NotEmpty(t, resp.Data.ImageURL)
+
+	// La URL del afiche quedó persistida en la plantilla del evento.
+	var ev models.Event
+	require.NoError(t, db.Where("id = ?", created.Data.ID).First(&ev).Error)
+	assert.Equal(t, resp.Data.ImageURL, ev.PosterTemplate.ImageURL)
+}
+
+func TestUploadEventPoster_RejectsNonImage(t *testing.T) {
+	db := setupEventsDB(t)
+	r := eventsRouter(db, "tenant-a", "admin")
+
+	create := reqJSON(r, http.MethodPost, "/api/v1/events", validEventBody())
+	var created struct {
+		Data models.Event `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(create.Body.Bytes(), &created))
+
+	body, ctype := buildMultipartQR(t, "image", "nota.txt", "text/plain", []byte("hola"))
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/v1/events/"+created.Data.ID+"/poster/upload", body)
+	req.Header.Set("Content-Type", ctype)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestUploadEventPoster_NoRoleForbidden(t *testing.T) {
+	db := setupEventsDB(t)
+	r := eventsRouter(db, "tenant-a", "")
+	body, ctype := buildMultipartQR(t, "image", "afiche.png", "image/png", pngBytes)
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/v1/events/whatever/poster/upload", body)
+	req.Header.Set("Content-Type", ctype)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
