@@ -10,4 +10,7 @@ const (
 	AIFeatureEnhancePhoto = "ENHANCE_PHOTO"
 	AIFeatureProductImage = "PRODUCT_IMAGE"
 	AIFeatureLogoGen      = "LOGO_GEN"
+	// Spec F042 — diseño de escarapela y certificado de eventos con IA.
+	AIFeatureEventBadge = "EVENT_BADGE"
+	AIFeatureEventCert  = "EVENT_CERT"
 )

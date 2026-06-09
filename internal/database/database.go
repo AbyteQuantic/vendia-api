@@ -188,6 +188,17 @@ func Migrate(db *gorm.DB) error {
 		&models.ModuleTypeRelation{},
 		&models.TenantModuleOverride{},
 		&models.CatalogAuditLog{},
+		// Spec F042 — módulo de eventos. Tres tablas nuevas (Event,
+		// EventRegistration, EventScan) más el flag EnableEvents en el
+		// FeatureFlags ya registrado sobre el Tenant. VendIA es solo el
+		// puente: el dinero del asistente va directo al organizador, nunca
+		// a VendIA. Aditivo y retrocompatible — cero filas legadas, sin
+		// backfill (Art. X).
+		&models.Event{},
+		&models.EventRegistration{},
+		&models.EventScan{},
+		// F042 §12 D3 — cronograma de cuotas persistido con fechas.
+		&models.EventInstallment{},
 	)
 	if err != nil {
 		return err

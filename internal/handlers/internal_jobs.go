@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"vendia-backend/internal/jobs"
+	"vendia-backend/internal/services/email"
 	"vendia-backend/internal/services/push"
 
 	"github.com/gin-gonic/gin"
@@ -91,6 +92,27 @@ func PromotionsPushJob(db *gorm.DB, dispatcher *push.Dispatcher) gin.HandlerFunc
 		}
 
 		c.JSON(http.StatusOK, gin.H{"notified": result.Notified})
+	}
+}
+
+// EventRemindersJob is the internal cron endpoint that emails attendees about
+// upcoming events and pending installments, and pushes each organizer a
+// summary (Spec F042 FR-20). Same auth model as the other internal jobs:
+// no JWT, gated by the shared CRON_TOKEN secret, fail-closed when unset.
+// POST /api/v1/internal/jobs/event-reminders
+func EventRemindersJob(db *gorm.DB, dispatcher *push.Dispatcher, emailSvc *email.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !cronAuthOK(c) {
+			return
+		}
+		result, err := jobs.RunEventReminders(db, time.Now().UTC(), dispatcher, emailSvc)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "no se pudo ejecutar el job de recordatorios de eventos",
+			})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": result})
 	}
 }
 
