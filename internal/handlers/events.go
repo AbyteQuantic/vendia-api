@@ -15,12 +15,15 @@ import (
 	"gorm.io/gorm"
 )
 
-// requireEventAdmin enforces that only the admin role can create/edit events
-// (spec §5 Seguridad). Cashiers may sell, but event configuration is owner-only.
-// Returns false and writes a 403 when the actor is not an admin.
+// requireEventAdmin gates event management to the tenant's STAFF (admin o
+// cashier). En la práctica muchos tenderos dueños quedan con rol `cashier`
+// (su negocio lo manejan ellos mismos), igual que el perfil del negocio o las
+// capacidades no exigen `admin`. super_admin es plataforma, no gestiona
+// eventos de un tenant. Escribe 403 si el actor no es staff del negocio.
 func requireEventAdmin(c *gin.Context) bool {
-	if middleware.GetRole(c) != "admin" {
-		c.JSON(http.StatusForbidden, gin.H{"error": "solo el administrador puede gestionar eventos"})
+	role := middleware.GetRole(c)
+	if role != "admin" && role != "cashier" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "no tiene permiso para gestionar eventos"})
 		return false
 	}
 	return true
