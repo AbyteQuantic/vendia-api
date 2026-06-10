@@ -120,6 +120,49 @@ func PublicRegisterEvent(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// PublicFindRegistration — POST /api/v1/store/:slug/my-event-registration.
+// Recovers an attendee's event registration token by phone, so the catalog can
+// show their event component (cuenta regresiva, pago) WITHOUT the email deep
+// link — for someone who registered on another device or was added by the
+// organizer. Phone-based (mismo modelo de confianza que "Mis pedidos"). Prefers
+// a still-pending registration; falls back to the most recent.
+func PublicFindRegistration(db *gorm.DB) gin.HandlerFunc {
+	type request struct {
+		Phone string `json:"phone"`
+	}
+	return func(c *gin.Context) {
+		tenant, ok := resolveStoreTenant(c, db)
+		if !ok {
+			return
+		}
+		var req request
+		_ = c.ShouldBindJSON(&req)
+		phone := services.NormalizePhone(req.Phone)
+		if phone == "" {
+			c.JSON(http.StatusNotFound, gin.H{"error": "sin inscripción"})
+			return
+		}
+
+		var customer models.Customer
+		if err := db.Where("tenant_id = ? AND phone = ?", tenant.ID, phone).First(&customer).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "sin inscripción"})
+			return
+		}
+
+		// Prefer a pending registration (la que debe pagar); si no, la última.
+		var reg models.EventRegistration
+		q := db.Where("tenant_id = ? AND customer_id = ?", tenant.ID, customer.ID)
+		err := q.Session(&gorm.Session{}).
+			Order("CASE WHEN payment_status = 'pending' THEN 0 ELSE 1 END, created_at DESC").
+			First(&reg).Error
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "sin inscripción"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{"public_token": reg.PublicToken}})
+	}
+}
+
 // PublicGetCarnet — GET /api/v1/store/:slug/events/registration/:token.
 // The attendee's carné portal: returns the inscription status and balance, and
 // the QR token ONLY when the payment is complete (spec FR-09). Lets a guest who

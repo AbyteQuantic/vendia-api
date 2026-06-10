@@ -39,6 +39,7 @@ func publicEventsRouter(db *gorm.DB) *gin.Engine {
 	r.GET("/api/v1/store/:slug/events/:id", PublicGetEvent(db))
 	r.POST("/api/v1/store/:slug/events/:id/register", PublicRegisterEvent(db))
 	r.GET("/api/v1/store/:slug/carnet/:token", PublicGetCarnet(db))
+	r.POST("/api/v1/store/:slug/my-event-registration", PublicFindRegistration(db))
 	return r
 }
 
@@ -333,4 +334,39 @@ func TestPublicRegister_CapturesEmailAndCarnetLocation(t *testing.T) {
 	assert.Equal(t, "Calle 8 #28-14", carnet.Data.Location)
 	assert.Equal(t, "Edificio Norte, piso 3", carnet.Data.LocationNotes)
 	assert.Equal(t, "Ana", carnet.Data.AttendeeName)
+}
+
+// El lookup por teléfono recupera la inscripción (prefiere la pendiente).
+func TestPublicFindRegistration_ByPhone(t *testing.T) {
+	db, tenant := setupPublicEventsDB(t)
+	r := publicEventsRouter(db)
+	ev := seedPublished(t, db, tenant.ID, 50000, 10)
+
+	reg := reqJSON(r, http.MethodPost, "/api/v1/store/mi-tienda/events/"+ev.ID+"/register", map[string]any{
+		"name": "Ana", "phone": "3001234567", "consent_comms": true,
+	})
+	require.Equal(t, http.StatusCreated, reg.Code)
+	var regResp struct {
+		Data struct {
+			PublicToken string `json:"public_token"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(reg.Body.Bytes(), &regResp))
+
+	// Encuentra por teléfono.
+	w := reqJSON(r, http.MethodPost, "/api/v1/store/mi-tienda/my-event-registration",
+		map[string]any{"phone": "300 123 4567"})
+	require.Equal(t, http.StatusOK, w.Code)
+	var found struct {
+		Data struct {
+			PublicToken string `json:"public_token"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &found))
+	assert.Equal(t, regResp.Data.PublicToken, found.Data.PublicToken)
+
+	// Teléfono desconocido → 404.
+	w2 := reqJSON(r, http.MethodPost, "/api/v1/store/mi-tienda/my-event-registration",
+		map[string]any{"phone": "3009999999"})
+	assert.Equal(t, http.StatusNotFound, w2.Code)
 }
