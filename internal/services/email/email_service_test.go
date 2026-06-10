@@ -23,7 +23,8 @@ func TestService_SendQuotaReminder_BuildsSpanishBody(t *testing.T) {
 
 	err := svc.SendQuotaReminder(context.Background(), email.QuotaReminder{
 		To: "ana@example.com", Name: "Ana", EventTitle: "Curso de Repostería",
-		AmountStr: "$50.000", DueDateStr: "15 de junio",
+		AmountStr: "$50.000",
+		Link:      "https://tienda.vendia.store/dulce-ana/menu?reg=tok-123",
 	})
 	require.NoError(t, err)
 	require.Len(t, fake.Sent, 1)
@@ -31,7 +32,7 @@ func TestService_SendQuotaReminder_BuildsSpanishBody(t *testing.T) {
 	msg := fake.Sent[0]
 	assert.Equal(t, "ana@example.com", msg.To)
 	body := strings.ToLower(msg.Subject + " " + msg.Body)
-	for _, anchor := range []string{"ana", "curso de repostería", "$50.000", "15 de junio"} {
+	for _, anchor := range []string{"ana", "curso de repostería", "$50.000", "saldo pendiente", "menu?reg=tok-123"} {
 		assert.Contains(t, body, strings.ToLower(anchor))
 	}
 }

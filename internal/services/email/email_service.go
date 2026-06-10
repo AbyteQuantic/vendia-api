@@ -102,22 +102,34 @@ func (s *Service) IsConfigured() bool { return s.configured }
 // QuotaReminder is the data for a pending-installment reminder.
 type QuotaReminder struct {
 	To, Name, EventTitle, AmountStr, DueDateStr string
+	// Link al catálogo con el token del inscrito (?reg=) para pagar y ver su
+	// carné quedando "logueado". Opcional.
+	Link string
 }
 
 // EventReminder is the data for an upcoming-event reminder.
 type EventReminder struct {
 	To, Name, EventTitle, WhenStr string
+	// Link al catálogo con el token del inscrito (?reg=). Opcional.
+	Link string
 }
 
-// SendQuotaReminder emails an attendee about a pending installment.
+func reminderLinkLine(link string) string {
+	if link == "" {
+		return ""
+	}
+	return fmt.Sprintf("\n\nVer los detalles y tu carné aquí:\n%s", link)
+}
+
+// SendQuotaReminder emails an attendee about a pending balance.
 func (s *Service) SendQuotaReminder(ctx context.Context, r QuotaReminder) error {
 	if r.To == "" {
 		return nil
 	}
-	subject := fmt.Sprintf("Recordatorio de cuota — %s", r.EventTitle)
+	subject := fmt.Sprintf("Recordatorio de pago — %s", r.EventTitle)
 	body := fmt.Sprintf(
-		"Hola %s,\n\nTe recordamos que tienes una cuota pendiente de %s para el evento \"%s\", con fecha %s.\n\nGracias.",
-		r.Name, r.AmountStr, r.EventTitle, r.DueDateStr)
+		"Hola %s,\n\nTe recordamos que tienes un saldo pendiente de %s para el evento \"%s\". Completa tu pago para activar tu carné.%s\n\nGracias.",
+		r.Name, r.AmountStr, r.EventTitle, reminderLinkLine(r.Link))
 	return s.sender.Send(ctx, Message{To: r.To, Subject: subject, Body: body})
 }
 
@@ -128,7 +140,7 @@ func (s *Service) SendEventReminder(ctx context.Context, r EventReminder) error 
 	}
 	subject := fmt.Sprintf("Tu evento se acerca — %s", r.EventTitle)
 	body := fmt.Sprintf(
-		"Hola %s,\n\nTe recordamos que el evento \"%s\" será %s. ¡Te esperamos!\n\nGracias.",
-		r.Name, r.EventTitle, r.WhenStr)
+		"Hola %s,\n\nTe recordamos que el evento \"%s\" será %s. ¡Te esperamos!%s\n\nGracias.",
+		r.Name, r.EventTitle, r.WhenStr, reminderLinkLine(r.Link))
 	return s.sender.Send(ctx, Message{To: r.To, Subject: subject, Body: body})
 }

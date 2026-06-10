@@ -21,6 +21,36 @@ const EventReminderWindow = 24 * time.Hour
 // overdue) to trigger a reminder (D3 — uses the persisted schedule).
 const QuotaReminderWindow = 3 * 24 * time.Hour
 
+// publicSiteURL is the public catalog host. The reminder deep link carries the
+// attendee's token (?reg=) so opening it leaves them "logged in" to see their
+// event component (countdown, ubicación, estado de pago) and carné.
+const publicSiteURL = "https://tienda.vendia.store"
+
+// attendeeLink builds the catalog deep link for an attendee. Empty if the
+// tenant has no public slug yet.
+func attendeeLink(slug, token string) string {
+	if slug == "" || token == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s/%s/menu?reg=%s", publicSiteURL, slug, token)
+}
+
+// formatMoneyDots renders an int amount as "$1.550.000" (es-CO thousands).
+func formatMoneyDots(amount int64) string {
+	if amount < 0 {
+		amount = 0
+	}
+	s := fmt.Sprintf("%d", amount)
+	var b []byte
+	for i, r := range []byte(s) {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			b = append(b, '.')
+		}
+		b = append(b, r)
+	}
+	return "$" + string(b)
+}
+
 // EventReminderResult summarizes a reminder run for the cron response.
 type EventReminderResult struct {
 	EventRemindersSent int `json:"event_reminders_sent"`
@@ -46,6 +76,7 @@ func RunEventReminders(db *gorm.DB, now time.Time, dispatcher *push.Dispatcher, 
 	}
 
 	for _, ev := range events {
+		slug := tenantSlug(db, ev.TenantID)
 		regs, err := confirmedRegistrationsWithCustomer(db, ev.TenantID, ev.ID)
 		if err != nil {
 			return res, err
@@ -55,6 +86,7 @@ func RunEventReminders(db *gorm.DB, now time.Time, dispatcher *push.Dispatcher, 
 			if emailSvc != nil && rc.Email != "" {
 				if err := emailSvc.SendEventReminder(ctx, email.EventReminder{
 					To: rc.Email, Name: rc.Name, EventTitle: ev.Title, WhenStr: whenStr,
+					Link: attendeeLink(slug, rc.PublicToken),
 				}); err == nil {
 					res.EventRemindersSent++
 				}
@@ -80,15 +112,16 @@ func RunEventReminders(db *gorm.DB, now time.Time, dispatcher *push.Dispatcher, 
 
 // regCustomer is a registration joined with its attendee contact info.
 type regCustomer struct {
-	Name  string
-	Email string
-	Phone string
+	Name        string
+	Email       string
+	Phone       string
+	PublicToken string
 }
 
 func confirmedRegistrationsWithCustomer(db *gorm.DB, tenantID, eventID string) ([]regCustomer, error) {
 	var out []regCustomer
 	err := db.Table("event_registrations AS r").
-		Select("c.name AS name, c.email AS email, c.phone AS phone").
+		Select("c.name AS name, c.email AS email, c.phone AS phone, r.public_token AS public_token").
 		Joins("JOIN customers c ON c.id = r.customer_id").
 		Where("r.tenant_id = ? AND r.event_id = ? AND r.payment_status = ? AND r.deleted_at IS NULL",
 			tenantID, eventID, models.RegistrationPaymentConfirmed).
@@ -96,28 +129,41 @@ func confirmedRegistrationsWithCustomer(db *gorm.DB, tenantID, eventID string) (
 	return out, err
 }
 
-// sendQuotaReminders emails attendees about pending cuotas whose due date is
-// near or past (D3 — uses the persisted EventInstallment schedule for precise
-// "próxima/vencida" reminders).
+// tenantSlug returns a tenant's public store slug (empty if none).
+func tenantSlug(db *gorm.DB, tenantID string) string {
+	var t models.Tenant
+	if err := db.Select("store_slug").Where("id = ?", tenantID).First(&t).Error; err != nil {
+		return ""
+	}
+	if t.StoreSlug == nil {
+		return ""
+	}
+	return *t.StoreSlug
+}
+
+// sendQuotaReminders emails attendees who still owe a balance on a published,
+// upcoming (or undated) paid event, with a deep link to pay. Uses the running
+// AmountPaid balance (the abonos/cuotas flow), not the legacy installment rows.
 func sendQuotaReminders(ctx context.Context, db *gorm.DB, emailSvc *email.Service, now time.Time) int {
 	if emailSvc == nil {
 		return 0
 	}
 	type row struct {
-		Name    string
-		Email   string
-		Title   string
-		Amount  int64
-		DueDate time.Time
+		Name        string
+		Email       string
+		Title       string
+		Slug        *string
+		PublicToken string
+		Balance     int64
 	}
 	var rows []row
-	err := db.Table("event_installments AS i").
-		Select("c.name AS name, c.email AS email, e.title AS title, i.amount AS amount, i.due_date AS due_date").
-		Joins("JOIN event_registrations r ON r.id = i.registration_id").
+	err := db.Table("event_registrations AS r").
+		Select("c.name AS name, c.email AS email, e.title AS title, t.store_slug AS slug, r.public_token AS public_token, (e.price - r.amount_paid) AS balance").
 		Joins("JOIN customers c ON c.id = r.customer_id").
 		Joins("JOIN events e ON e.id = r.event_id").
-		Where("i.status = ? AND i.deleted_at IS NULL AND i.due_date <= ?",
-			models.InstallmentStatusPending, now.Add(QuotaReminderWindow)).
+		Joins("JOIN tenants t ON t.id = r.tenant_id").
+		Where("r.payment_status = ? AND r.deleted_at IS NULL AND e.status = ? AND e.price > 0 AND (e.price - r.amount_paid) > 0 AND (e.start_at IS NULL OR e.start_at > ?)",
+			models.RegistrationPaymentPending, models.EventStatusPublicado, now).
 		Scan(&rows).Error
 	if err != nil {
 		return 0
@@ -127,9 +173,14 @@ func sendQuotaReminders(ctx context.Context, db *gorm.DB, emailSvc *email.Servic
 		if r.Email == "" {
 			continue
 		}
+		slug := ""
+		if r.Slug != nil {
+			slug = *r.Slug
+		}
 		if err := emailSvc.SendQuotaReminder(ctx, email.QuotaReminder{
 			To: r.Email, Name: r.Name, EventTitle: r.Title,
-			AmountStr: fmt.Sprintf("$%d", r.Amount), DueDateStr: r.DueDate.Format("02/01/2006"),
+			AmountStr: formatMoneyDots(r.Balance),
+			Link:      attendeeLink(slug, r.PublicToken),
 		}); err == nil {
 			sent++
 		}
