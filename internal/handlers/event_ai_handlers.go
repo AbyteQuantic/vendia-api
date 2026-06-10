@@ -143,6 +143,135 @@ func assetKindSlug(kind eventAssetKind) string {
 	}
 }
 
+// currentAssetURL returns the event's stored image URL for a piece.
+func currentAssetURL(ev *models.Event, kind eventAssetKind) string {
+	switch kind {
+	case assetBadge:
+		return ev.BadgeTemplate.ImageURL
+	case assetCertificate:
+		return ev.CertificateTemplate.ImageURL
+	default:
+		return ev.PosterTemplate.ImageURL
+	}
+}
+
+// serviceAssetKind maps the handler enum to the Gemini service enum.
+func serviceAssetKind(kind eventAssetKind) services.EventAssetKind {
+	switch kind {
+	case assetBadge:
+		return services.AssetBadge
+	case assetCertificate:
+		return services.AssetCertificate
+	default:
+		return services.AssetPoster
+	}
+}
+
+// fetchEventImageBytes reads an event piece's current image into bytes — both a
+// data URL (base64 inline) and an http(s) URL (stored in R2).
+func fetchEventImageBytes(ctx context.Context, url string) ([]byte, string, error) {
+	if strings.HasPrefix(url, "data:") {
+		comma := strings.IndexByte(url, ',')
+		if comma < 0 {
+			return nil, "", fmt.Errorf("data URL inválida")
+		}
+		meta := url[5:comma] // e.g. image/png;base64
+		mime := "image/png"
+		if semi := strings.IndexByte(meta, ';'); semi > 0 {
+			mime = meta[:semi]
+		} else if meta != "" {
+			mime = meta
+		}
+		data, err := base64.StdEncoding.DecodeString(url[comma+1:])
+		if err != nil {
+			return nil, "", err
+		}
+		return data, mime, nil
+	}
+	return downloadSourceImage(ctx, url)
+}
+
+// GenerateEventBadgeEnhance — POST /api/v1/events/:id/badge/ai-enhance (admin).
+// Mejora con IA la imagen actual de la escarapela (subida o generada).
+func GenerateEventBadgeEnhance(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage) gin.HandlerFunc {
+	return eventAssetEnhanceHandler(db, geminiSvc, storageSvc, assetBadge)
+}
+
+// GenerateEventCertificateEnhance — POST /api/v1/events/:id/certificate/ai-enhance (admin).
+func GenerateEventCertificateEnhance(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage) gin.HandlerFunc {
+	return eventAssetEnhanceHandler(db, geminiSvc, storageSvc, assetCertificate)
+}
+
+// GenerateEventPosterEnhance — POST /api/v1/events/:id/poster/ai-enhance (admin).
+func GenerateEventPosterEnhance(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage) gin.HandlerFunc {
+	return eventAssetEnhanceHandler(db, geminiSvc, storageSvc, assetPoster)
+}
+
+// eventAssetEnhanceHandler improves the piece's CURRENT image with Gemini
+// (image-to-image), like the inventory photo enhancer. Requires an existing
+// image; preserves its content and persists the improved version.
+func eventAssetEnhanceHandler(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage, kind eventAssetKind) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !requireEventAdmin(c) {
+			return
+		}
+		if geminiSvc == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "servicio de IA no configurado"})
+			return
+		}
+		tenantID := middleware.GetTenantID(c)
+
+		ev, err := services.NewEventService(db).Get(tenantID, c.Param("id"))
+		if err != nil {
+			writeEventError(c, err)
+			return
+		}
+		source := currentAssetURL(ev, kind)
+		if source == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "no hay imagen para mejorar; genere o suba una primero"})
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(aiusage.WithTenantID(c.Request.Context(), tenantID), 60*time.Second)
+		defer cancel()
+
+		data, mime, err := fetchEventImageBytes(ctx, source)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "no pudimos leer la imagen actual"})
+			return
+		}
+
+		enhanced, err := geminiSvc.EnhanceEventAsset(ctx, data, mime, serviceAssetKind(kind))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al mejorar la imagen: %v", err)})
+			return
+		}
+
+		url := "data:image/png;base64," + base64.StdEncoding.EncodeToString(enhanced)
+		if storageSvc != nil {
+			key := fmt.Sprintf("events/%s/%s/%s-%s.png", tenantID, ev.ID, assetKindSlug(kind), uuid.NewString()[:8])
+			if uploaded, upErr := storageSvc.Upload(ctx, "event-assets", key, enhanced, "image/png"); upErr == nil {
+				url = uploaded
+			}
+		}
+
+		switch kind {
+		case assetBadge:
+			ev.BadgeTemplate.ImageURL = url
+		case assetCertificate:
+			ev.CertificateTemplate.ImageURL = url
+		case assetPoster:
+			ev.PosterTemplate.ImageURL = url
+		}
+		if err := db.Save(ev).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al guardar la imagen mejorada"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{"image_url": url}})
+	}
+}
+
 // posterInputFor maps an event + business name into the marketing poster facts,
 // formatting the date (es-CO) and price ("Gratis" / "$50.000") the way the
 // catalog shows them. brief is the organizer's optional creative direction.

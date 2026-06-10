@@ -622,8 +622,14 @@ Output: a clean, professional e-commerce catalog photo of the SAME product on a 
 // EnhancePhoto generates a professional e-commerce product photo.
 // productInfo is optional context (e.g., "Coca-Cola Botella 350ml").
 func (s *GeminiService) EnhancePhoto(ctx context.Context, imageData []byte, mimeType string, productInfo string) ([]byte, error) {
-	prompt := buildEnhancePhotoPrompt(productInfo)
+	return s.enhanceImageWithPrompt(ctx, imageData, mimeType,
+		buildEnhancePhotoPrompt(productInfo), models.AIFeatureEnhancePhoto)
+}
 
+// enhanceImageWithPrompt edits an attached image with a free-form instruction
+// (image-to-image). Shared by the product retoucher and the event-asset
+// improver. Low temperature preserves the original content.
+func (s *GeminiService) enhanceImageWithPrompt(ctx context.Context, imageData []byte, mimeType, prompt, feature string) ([]byte, error) {
 	b64 := base64.StdEncoding.EncodeToString(imageData)
 
 	payload := map[string]any{
@@ -679,7 +685,7 @@ func (s *GeminiService) EnhancePhoto(ctx context.Context, imageData []byte, mime
 		return nil, fmt.Errorf("gemini error %d: %s", geminiResp.Error.Code, geminiResp.Error.Message)
 	}
 
-	s.recordTokenUsage(ctx, models.AIFeatureEnhancePhoto, s.imageModel, &geminiResp)
+	s.recordTokenUsage(ctx, feature, s.imageModel, &geminiResp)
 
 	// Collect any text response for debugging
 	var textParts []string

@@ -158,6 +158,57 @@ func (s *GeminiService) GenerateEventPoster(ctx context.Context, in PosterInput)
 	return s.GeneratePromoBanner(ctx, buildEventPosterPrompt(in), nil)
 }
 
+// EventAssetKind identifies which event piece an enhance targets.
+type EventAssetKind int
+
+const (
+	AssetPoster EventAssetKind = iota
+	AssetBadge
+	AssetCertificate
+)
+
+// buildEventAssetEnhancePrompt instructs Gemini to IMPROVE an existing event
+// piece (the image the organizer uploaded or generated) — like the inventory
+// photo enhancer, but for design pieces: refine typography, color, composition
+// and polish to a professional level WITHOUT changing the textual content,
+// names, dates or layout intent. The badge/certificate must keep their QR area.
+func buildEventAssetEnhancePrompt(kind EventAssetKind) string {
+	base := `Eres un DISEÑADOR GRÁFICO PROFESIONAL retocando una pieza ya existente. La imagen adjunta ES la pieza: respétala como única fuente de verdad de su contenido.
+
+TU TAREA: MEJORAR esta misma pieza a calidad de agencia — refina tipografía, jerarquía, contraste, color, iluminación, composición y nitidez; corrige lo que se vea amateur. El resultado debe verse claramente como la MISMA pieza, solo más profesional.
+
+PROHIBIDO:
+- NO cambies el texto, los nombres, las fechas, los precios ni el idioma (español).
+- NO inventes ni elimines información; conserva todos los datos que ya aparecen.
+- NO agregues marcas de agua ni logos ajenos.`
+
+	switch kind {
+	case AssetBadge:
+		return base + `
+- CONSERVA el recuadro/área reservada para el CÓDIGO QR (no lo borres ni lo tapes).
+
+Es una ESCARAPELA (credencial) vertical: hazla más limpia, legible y elegante, apta para imprimir y para verse en celular.`
+	case AssetCertificate:
+		return base + `
+- CONSERVA el espacio para el código QR de verificación si existe.
+
+Es un CERTIFICADO formal y horizontal: mejora el marco, la tipografía serif y el aspecto digno de imprimir, sin perder solemnidad.`
+	default: // poster
+		return base + `
+- NO agregues ningún código QR (es una pieza publicitaria).
+- Mantén el texto al mínimo (título, fecha, precio, llamado a la acción); si hay una escena/foto, mejórala con iluminación y composición de campaña real.
+
+Es un AFICHE PUBLICITARIO vertical: hazlo más llamativo y profesional, listo para redes y catálogo.`
+	}
+}
+
+// EnhanceEventAsset improves an existing event piece image with Gemini,
+// preserving its content (image-to-image). Returns the enhanced bytes.
+func (s *GeminiService) EnhanceEventAsset(ctx context.Context, imageData []byte, mimeType string, kind EventAssetKind) ([]byte, error) {
+	return s.enhanceImageWithPrompt(ctx, imageData, mimeType,
+		buildEventAssetEnhancePrompt(kind), "EVENT_ASSET_ENHANCE")
+}
+
 // GenerateEventBadge renders an escarapela design for an event via Gemini and
 // returns raw image bytes the caller uploads to storage. It reuses the
 // prompt→image path of GeneratePromoBanner (same generationConfig, temperature

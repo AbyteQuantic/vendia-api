@@ -15,6 +15,7 @@ import (
 
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
+	"vendia-backend/internal/services"
 )
 
 func setupEventsDB(t *testing.T) *gorm.DB {
@@ -52,6 +53,8 @@ func eventsRouter(db *gorm.DB, tenantID, role string) *gin.Engine {
 	g.POST("/events/:id/poster/ai-generate", GenerateEventPosterImage(db, nil, nil))
 	// "Sube tu propia imagen" — con almacenamiento falso para el camino feliz.
 	g.POST("/events/:id/poster/upload", UploadEventPosterImage(db, newFakeStorage()))
+	// Enhance con servicio Gemini nil → asserts the guard path (503).
+	g.POST("/events/:id/poster/ai-enhance", GenerateEventPosterEnhance(db, nil, nil))
 	return r
 }
 
@@ -361,6 +364,46 @@ func TestGenerateEventPoster_NoRoleForbidden(t *testing.T) {
 	r := eventsRouter(db, "tenant-a", "")
 	w := reqJSON(r, http.MethodPost, "/api/v1/events/whatever/poster/ai-generate", nil)
 	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestEnhanceEventPoster_RequiresAIService(t *testing.T) {
+	db := setupEventsDB(t)
+	r := eventsRouter(db, "tenant-a", "admin")
+
+	create := reqJSON(r, http.MethodPost, "/api/v1/events", validEventBody())
+	var created struct {
+		Data models.Event `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(create.Body.Bytes(), &created))
+
+	// Servicio Gemini nil → 503, nunca panic.
+	w := reqJSON(r, http.MethodPost, "/api/v1/events/"+created.Data.ID+"/poster/ai-enhance", nil)
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+}
+
+func TestEnhanceEventPoster_NoImageToImprove(t *testing.T) {
+	db := setupEventsDB(t)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.TenantIDKey, "tenant-a")
+		c.Set(middleware.RoleKey, "admin")
+		c.Next()
+	})
+	// Gemini no-nil (zero value) para pasar el guard y llegar al chequeo de imagen.
+	r.POST("/api/v1/events/:id/poster/ai-enhance",
+		GenerateEventPosterEnhance(db, &services.GeminiService{}, nil))
+
+	rc := eventsRouter(db, "tenant-a", "admin")
+	create := reqJSON(rc, http.MethodPost, "/api/v1/events", validEventBody())
+	var created struct {
+		Data models.Event `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(create.Body.Bytes(), &created))
+
+	// El evento no tiene afiche aún → 400 "no hay imagen para mejorar".
+	w := reqJSON(r, http.MethodPost, "/api/v1/events/"+created.Data.ID+"/poster/ai-enhance", nil)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
 func TestUploadEventPoster_HappyPath(t *testing.T) {

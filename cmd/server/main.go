@@ -562,6 +562,10 @@ func main() {
 		v1.POST("/events/:id/badge/upload", handlers.UploadEventBadgeImage(db, storageSvc))
 		v1.POST("/events/:id/certificate/upload", handlers.UploadEventCertificateImage(db, storageSvc))
 		v1.POST("/events/:id/poster/upload", handlers.UploadEventPosterImage(db, storageSvc))
+		// "Mejorar con IA" — retoca la imagen actual (subida o generada).
+		v1.POST("/events/:id/badge/ai-enhance", handlers.GenerateEventBadgeEnhance(db, geminiSvc, storageSvc))
+		v1.POST("/events/:id/certificate/ai-enhance", handlers.GenerateEventCertificateEnhance(db, geminiSvc, storageSvc))
+		v1.POST("/events/:id/poster/ai-enhance", handlers.GenerateEventPosterEnhance(db, geminiSvc, storageSvc))
 
 		// Credits (El Fiar)
 		v1.GET("/credits", handlers.ListCredits(db))
