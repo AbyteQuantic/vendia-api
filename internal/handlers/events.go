@@ -267,6 +267,35 @@ func IssueCertificate(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// UpdateEventCertificateConfig — PUT /api/v1/events/:id/certificate-config
+// (admin). Guarda SOLO la configuración del certificado (texto, firma, logo y
+// layout de posiciones), sin tocar el resto del evento. Lo usa el diseñador
+// de certificado (WYSIWYG).
+func UpdateEventCertificateConfig(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !requireEventAdmin(c) {
+			return
+		}
+		tenantID := middleware.GetTenantID(c)
+		var cfg models.EventCertificateConfig
+		if err := c.ShouldBindJSON(&cfg); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		ev, err := services.NewEventService(db).Get(tenantID, c.Param("id"))
+		if err != nil {
+			writeEventError(c, err)
+			return
+		}
+		ev.CertificateConfig = cfg
+		if err := db.Save(ev).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al guardar el certificado"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": ev})
+	}
+}
+
 // IssueAllCertificates — POST /api/v1/events/:id/certificates/issue-all
 // (admin). Envío masivo: emite el certificado a todos los asistentes que
 // registraron entrada y salida (elegibles) y aún no lo tenían.

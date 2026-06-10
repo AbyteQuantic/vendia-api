@@ -556,6 +556,8 @@ func main() {
 		v1.POST("/events/:id/registrations/:rid/certificate", handlers.IssueCertificate(db))
 		// Envío masivo de certificados a quienes registraron entrada y salida.
 		v1.POST("/events/:id/certificates/issue-all", handlers.IssueAllCertificates(db))
+		// Diseñador de certificado: guarda solo el config (texto/firma/logo/layout).
+		v1.PUT("/events/:id/certificate-config", handlers.UpdateEventCertificateConfig(db))
 		// Pagos de la inscripción (abonos/cuotas + marcar pagado) — F042.
 		v1.POST("/events/:id/registrations/:rid/payments", handlers.RecordRegistrationPayment(db))
 		v1.POST("/events/:id/registrations/:rid/confirm-payment", handlers.ConfirmRegistrationPayment(db))
