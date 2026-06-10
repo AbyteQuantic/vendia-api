@@ -28,6 +28,9 @@ var (
 	ErrRegistrationNotPaid = errors.New("el asistente aún no ha completado el pago; el carné no es válido")
 	// ErrPaymentAmountInvalid is returned for a non-positive payment amount.
 	ErrPaymentAmountInvalid = errors.New("el monto del abono debe ser mayor a cero")
+
+	ErrSeatInvalid = errors.New("número de silla inválido")
+	ErrSeatTaken   = errors.New("esa silla ya está asignada a otro asistente")
 )
 
 // RegisterInput carries the public inscription payload.
@@ -161,10 +164,18 @@ func (s *EventRegistrationService) ConfirmPayment(tenantID, registrationID strin
 
 	reg.PaymentStatus = models.RegistrationPaymentConfirmed
 	reg.AmountPaid = ev.Price
-	if err := s.db.Model(&reg).Updates(map[string]any{
+	updates := map[string]any{
 		"payment_status": models.RegistrationPaymentConfirmed,
 		"amount_paid":    ev.Price,
-	}).Error; err != nil {
+	}
+	// Confirmar el pago equivale al primer abono → auto-asigna silla.
+	if reg.SeatNumber == nil {
+		if seat := s.nextFreeSeat(tenantID, ev.ID, ev.Capacity); seat != nil {
+			reg.SeatNumber = seat
+			updates["seat_number"] = *seat
+		}
+	}
+	if err := s.db.Model(&reg).Updates(updates).Error; err != nil {
 		return nil, fmt.Errorf("confirmar pago: %w", err)
 	}
 	return &reg, nil
@@ -197,6 +208,15 @@ func (s *EventRegistrationService) RecordPayment(tenantID, registrationID string
 	reg.AmountPaid += amount
 	updates := map[string]any{"amount_paid": reg.AmountPaid}
 
+	// Auto-asignación de silla en el PRIMER abono (pedido del dueño): si ya
+	// pagó algo y aún no tiene silla, le damos la siguiente libre.
+	if reg.SeatNumber == nil && reg.AmountPaid > 0 {
+		if seat := s.nextFreeSeat(tenantID, ev.ID, ev.Capacity); seat != nil {
+			reg.SeatNumber = seat
+			updates["seat_number"] = *seat
+		}
+	}
+
 	// Reaching (or exceeding) the price confirms the inscription and consumes
 	// a cupo. assertCapacity guards the cupo invariant before flipping.
 	if ev.Price > 0 && reg.AmountPaid >= ev.Price {
@@ -210,6 +230,78 @@ func (s *EventRegistrationService) RecordPayment(tenantID, registrationID string
 	if err := s.db.Model(&reg).Updates(updates).Error; err != nil {
 		return nil, fmt.Errorf("registrar abono: %w", err)
 	}
+	return &reg, nil
+}
+
+// nextFreeSeat returns the lowest unused seat number for an event, or nil when
+// a fixed capacity is full. Capacity 0 means "sin límite": seats grow
+// correlatively (the gap-search still fills freed seats first).
+func (s *EventRegistrationService) nextFreeSeat(tenantID, eventID string, capacity int) *int {
+	var taken []int
+	s.db.Model(&models.EventRegistration{}).
+		Where("tenant_id = ? AND event_id = ? AND seat_number IS NOT NULL", tenantID, eventID).
+		Pluck("seat_number", &taken)
+	used := make(map[int]bool, len(taken))
+	for _, t := range taken {
+		used[t] = true
+	}
+	limit := capacity
+	if limit <= 0 {
+		limit = len(taken) + 1 // sin cupo → siempre hay un correlativo libre
+	}
+	for n := 1; n <= limit; n++ {
+		if !used[n] {
+			return &n
+		}
+	}
+	return nil // cupo lleno
+}
+
+// AssignSeat sets (or moves) a registration's seat to `seat`, or frees it when
+// seat is nil. It rejects a seat already taken by another attendee and a seat
+// outside the event capacity — the organizer frees the other one first.
+func (s *EventRegistrationService) AssignSeat(tenantID, registrationID string, seat *int) (*models.EventRegistration, error) {
+	var reg models.EventRegistration
+	if err := s.db.Where("id = ? AND tenant_id = ?", registrationID, tenantID).First(&reg).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrRegistrationNotFound
+		}
+		return nil, err
+	}
+
+	if seat == nil { // liberar
+		if err := s.db.Model(&reg).Update("seat_number", nil).Error; err != nil {
+			return nil, fmt.Errorf("liberar silla: %w", err)
+		}
+		reg.SeatNumber = nil
+		return &reg, nil
+	}
+
+	if *seat < 1 {
+		return nil, ErrSeatInvalid
+	}
+	var ev models.Event
+	if err := s.db.Where("id = ? AND tenant_id = ?", reg.EventID, tenantID).First(&ev).Error; err != nil {
+		return nil, err
+	}
+	if ev.Capacity > 0 && *seat > ev.Capacity {
+		return nil, ErrSeatInvalid
+	}
+
+	// ¿Silla ocupada por OTRO inscrito? → rechazar (el dueño libera primero).
+	var clash int64
+	s.db.Model(&models.EventRegistration{}).
+		Where("tenant_id = ? AND event_id = ? AND seat_number = ? AND id <> ?",
+			tenantID, reg.EventID, *seat, reg.ID).
+		Count(&clash)
+	if clash > 0 {
+		return nil, ErrSeatTaken
+	}
+
+	if err := s.db.Model(&reg).Update("seat_number", *seat).Error; err != nil {
+		return nil, fmt.Errorf("asignar silla: %w", err)
+	}
+	reg.SeatNumber = seat
 	return &reg, nil
 }
 
@@ -338,6 +430,7 @@ type EventRegistrationView struct {
 	Balance       int64  `json:"balance"` // price - amount_paid, never negative
 	CheckedIn     bool   `json:"checked_in"`
 	CheckedOut    bool   `json:"checked_out"`
+	SeatNumber    *int   `json:"seat_number"`
 	CertEligible  bool   `json:"certificate_eligible"`
 	CertIssued    bool   `json:"certificate_issued"`
 	QRToken       string `json:"qr_token"`
@@ -386,6 +479,7 @@ func (s *EventRegistrationService) ListByEvent(tenantID, eventID string) ([]Even
 			Balance:       balance,
 			CheckedIn:     inN > 0,
 			CheckedOut:    outN > 0,
+			SeatNumber:    r.SeatNumber,
 			CertEligible:  r.CertificateEligible,
 			CertIssued:    r.CertificateIssuedAt != nil,
 			QRToken:       r.QRToken,

@@ -557,6 +557,8 @@ func main() {
 		// Pagos de la inscripción (abonos/cuotas + marcar pagado) — F042.
 		v1.POST("/events/:id/registrations/:rid/payments", handlers.RecordRegistrationPayment(db))
 		v1.POST("/events/:id/registrations/:rid/confirm-payment", handlers.ConfirmRegistrationPayment(db))
+		// Mapa de sillas: asignar / mover / liberar la silla de un asistente.
+		v1.PUT("/events/:id/registrations/:rid/seat", handlers.AssignRegistrationSeat(db))
 		// Comprobantes manuales: bandeja de revisión + aprobar (activa carné).
 		v1.GET("/events/:id/payments", handlers.ListEventPayments(db))
 		v1.POST("/events/:id/payments/:pid/approve", handlers.ApproveEventPayment(db))

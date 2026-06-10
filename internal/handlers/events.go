@@ -318,6 +318,41 @@ func writeRegistrationPaymentError(c *gin.Context, err error) {
 	}
 }
 
+// AssignRegistrationSeat — PUT /api/v1/events/:id/registrations/:rid/seat
+// (admin). Asigna, cambia o libera la silla de un asistente desde el mapa de
+// sillas. Body: {"seat_number": <int>} para asignar/mover, o
+// {"seat_number": null} (o ausente) para liberar.
+func AssignRegistrationSeat(db *gorm.DB) gin.HandlerFunc {
+	type request struct {
+		SeatNumber *int `json:"seat_number"`
+	}
+	return func(c *gin.Context) {
+		if !requireEventAdmin(c) {
+			return
+		}
+		var req request
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		reg, err := services.NewEventRegistrationService(db).AssignSeat(
+			middleware.GetTenantID(c), c.Param("rid"), req.SeatNumber)
+		if err != nil {
+			switch {
+			case errors.Is(err, services.ErrRegistrationNotFound):
+				c.JSON(http.StatusNotFound, gin.H{"error": "inscripción no encontrada"})
+			case errors.Is(err, services.ErrSeatInvalid),
+				errors.Is(err, services.ErrSeatTaken):
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			default:
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "error al asignar la silla"})
+			}
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": reg})
+	}
+}
+
 // ListEventPayments — GET /api/v1/events/:id/payments (admin). Returns the
 // event's payment proofs (filter with ?status=pending) for review.
 func ListEventPayments(db *gorm.DB) gin.HandlerFunc {

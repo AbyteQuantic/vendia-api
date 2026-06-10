@@ -43,6 +43,11 @@ type EventRegistration struct {
 	// attendee pays in manual installments (nullable — Art. X *string rule).
 	CreditAccountID *string `gorm:"type:uuid;index" json:"credit_account_id,omitempty"`
 
+	// SeatNumber is the assigned seat (1..capacity). Auto-assigned on the
+	// attendee's FIRST abono; the organizer can reassign or free it from the
+	// seat map. Nullable — null = sin silla asignada (Art. X: *int, no 0).
+	SeatNumber *int `gorm:"index" json:"seat_number,omitempty"`
+
 	// QRToken is the unguessable identifier embedded in the badge QR and
 	// scanned at check-in/out. PublicToken backs the public enrollment portal.
 	QRToken     string `gorm:"type:uuid;uniqueIndex" json:"qr_token"`
