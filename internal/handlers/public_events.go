@@ -198,6 +198,7 @@ func PublicGetCarnet(db *gorm.DB) gin.HandlerFunc {
 			"type":                 ev.Type,
 			"modality":             ev.Modality,
 			"start_at":             ev.StartAt,
+			"end_at":               ev.EndAt,
 			"location":             ev.LocationOrLink,
 			"city":                 ev.City,
 			"location_notes":       ev.LocationNotes,

@@ -118,6 +118,34 @@ func TestRegister_DedupesCustomerByPhone(t *testing.T) {
 	assert.Equal(t, int64(1), customers)
 }
 
+// La misma persona (mismo teléfono) inscribiéndose dos veces al MISMO evento
+// no genera duplicado: la segunda llamada devuelve su inscripción existente
+// (la "logea" en su suscripción). FR-07 / pedido del dueño.
+func TestRegister_SamePersonSameEvent_ReturnsExistingNoDuplicate(t *testing.T) {
+	db := setupRegistrationDB(t)
+	ev := seedPublishedEvent(t, db, "tenant-a", 100000, 10) // pago → queda pending
+	svc := services.NewEventRegistrationService(db)
+
+	r1, err := svc.Register("tenant-a", services.RegisterInput{
+		EventID: ev.ID, Name: "Ana", Phone: "3001234567", ConsentComms: true,
+	})
+	require.NoError(t, err)
+
+	r2, err := svc.Register("tenant-a", services.RegisterInput{
+		EventID: ev.ID, Name: "Ana", Phone: "3001234567", ConsentComms: true,
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, r1.ID, r2.ID,
+		"re-inscribirse al mismo evento devuelve la MISMA inscripción")
+
+	var regs int64
+	require.NoError(t, db.Model(&models.EventRegistration{}).
+		Where("tenant_id = ? AND event_id = ?", "tenant-a", ev.ID).
+		Count(&regs).Error)
+	assert.Equal(t, int64(1), regs, "no debe duplicar la inscripción")
+}
+
 func TestConfirmPayment_ReservesCupoAndEnforcesCapacity(t *testing.T) {
 	db := setupRegistrationDB(t)
 	ev := seedPublishedEvent(t, db, "tenant-a", 100000, 1) // capacity 1

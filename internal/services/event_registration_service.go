@@ -92,6 +92,20 @@ func (s *EventRegistrationService) Register(tenantID string, in RegisterInput) (
 		return nil, err
 	}
 
+	// Sin duplicados (FR-07): si esta persona (mismo cliente, deduplicado por
+	// teléfono) ya está inscrita a este evento, devolvemos SU inscripción
+	// existente en vez de crear otra. Así "volver a inscribirse" la logea en
+	// su suscripción y muestra sus datos/carné, no genera duplicidad.
+	var dup models.EventRegistration
+	dupErr := s.db.Where("tenant_id = ? AND event_id = ? AND customer_id = ?",
+		tenantID, ev.ID, customerID).First(&dup).Error
+	if dupErr == nil {
+		return &dup, nil
+	}
+	if !errors.Is(dupErr, gorm.ErrRecordNotFound) {
+		return nil, dupErr
+	}
+
 	now := time.Now().UTC()
 	reg := &models.EventRegistration{
 		TenantID:       tenantID,
