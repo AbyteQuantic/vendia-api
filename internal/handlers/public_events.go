@@ -212,8 +212,12 @@ func PublicGetCarnet(db *gorm.DB) gin.HandlerFunc {
 			"confirmed":            confirmed,
 		}
 		// El QR (carné válido) solo viaja cuando el pago está completo.
+		// El diseño de escarapela del evento (si el organizador lo configuró)
+		// se entrega para pintar el carné con SU diseño, no un QR pelado. El
+		// recuadro inferior del diseño reserva el espacio para el QR real.
 		if confirmed {
 			out["qr_token"] = reg.QRToken
+			out["badge_image"] = ev.BadgeTemplate.ImageURL
 		}
 		c.JSON(http.StatusOK, gin.H{"data": out})
 	}
