@@ -139,6 +139,10 @@ func applyEventPatch(dst, src *models.Event) {
 	if len(src.EnabledPaymentMethods) > 0 {
 		dst.EnabledPaymentMethods = src.EnabledPaymentMethods
 	}
+	// PaymentDetails sí se actualiza al editar (el form manda el set completo).
+	// CertificateConfig se OMITE a propósito: lo administra el diseñador por su
+	// endpoint dedicado, así que un edit del evento no debe pisarlo.
+	dst.PaymentDetails = src.PaymentDetails
 	dst.InstallmentsEnabled = src.InstallmentsEnabled
 	dst.InstallmentsCount = src.InstallmentsCount
 	if len(src.CustomFields) > 0 {
