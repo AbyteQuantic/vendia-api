@@ -16,6 +16,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Opta por Node.js 24 en las acciones JS de GitHub (checkout/cache/setup-*
+# lo soportan); silencia el aviso de deprecación de Node 20.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   go:
     name: vet + build + test -race

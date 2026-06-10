@@ -187,11 +187,16 @@ func assetKindNoun(kind EventAssetKind) string {
 //     alumnos"). This is what fixes "subí una foto y la IA hizo algo distinto".
 //   - WITHOUT brief → a faithful RETOUCH: only improve quality, never change
 //     the content.
-func buildEventAssetEnhancePrompt(kind EventAssetKind, brief string) string {
+func buildEventAssetEnhancePrompt(kind EventAssetKind, brief string, hasFaceRef bool) string {
 	noun := assetKindNoun(kind)
 	brief = strings.TrimSpace(brief)
 	if len(brief) > 600 {
 		brief = brief[:600]
+	}
+
+	faceRef := ""
+	if hasFaceRef {
+		faceRef = "\n\nFOTO DE ROSTRO (referencia de identidad): la ÚLTIMA imagen adjunta es una foto clara del ROSTRO de la persona. Úsala como referencia PRINCIPAL para la cara: el rostro del resultado debe ser idéntico al de esa foto (mismos rasgos, ojos, nariz, boca, forma de cara). La primera imagen aporta el cuerpo/escena; el rostro mándalo por la foto de rostro."
 	}
 
 	if brief != "" {
@@ -212,9 +217,9 @@ CÓMO USAR LA FOTO:
 COMPOSICIÓN Y CALIDAD:
 - Fotografía/ilustración profesional, iluminación cinematográfica, profundidad y composición de campaña publicitaria real.
 - Deja un espacio claro y equilibrado para el título; jerarquía visual limpia; coherencia de estilo y color.
-- Todo el texto en español, perfectamente escrito.
+- Todo el texto en español, perfectamente escrito.%s
 
-Resultado: %s.`, noun, brief, noun)
+Resultado: %s.`, noun, brief, faceRef, noun)
 	}
 
 	base := `Eres un DISEÑADOR GRÁFICO PROFESIONAL retocando una pieza ya existente. La imagen adjunta ES la pieza: respétala como única fuente de verdad de su contenido.
@@ -236,17 +241,19 @@ PROHIBIDO:
 }
 
 // EnhanceEventAsset improves/transforms an existing event piece image with
-// Gemini. With a brief it RE-CREATES the scene per the organizer's
-// instructions (higher temperature); without one it faithfully retouches.
-func (s *GeminiService) EnhanceEventAsset(ctx context.Context, imageData []byte, mimeType string, kind EventAssetKind, brief string) ([]byte, error) {
+// Gemini. images[0] is the base piece; an optional images[1] is a clear face
+// photo used to anchor the person's identity. With a brief it RE-CREATES the
+// scene per the organizer's instructions; without one it faithfully retouches.
+func (s *GeminiService) EnhanceEventAsset(ctx context.Context, kind EventAssetKind, brief string, images []ReferenceImage) ([]byte, error) {
 	temp := 0.25
 	if strings.TrimSpace(brief) != "" {
 		// Permite recrear la escena pero mantiene baja la deriva del rostro;
 		// la fidelidad de la identidad la fuerza el prompt, no la temperatura.
 		temp = 0.5
 	}
-	return s.enhanceImageWithPrompt(ctx, imageData, mimeType,
-		buildEventAssetEnhancePrompt(kind, brief), "EVENT_ASSET_ENHANCE", temp)
+	hasFaceRef := len(images) > 1
+	return s.enhanceImagesWithPrompt(ctx, images,
+		buildEventAssetEnhancePrompt(kind, brief, hasFaceRef), "EVENT_ASSET_ENHANCE", temp)
 }
 
 // GenerateEventBadge renders an escarapela design for an event via Gemini and

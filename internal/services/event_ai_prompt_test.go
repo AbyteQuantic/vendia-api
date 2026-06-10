@@ -124,8 +124,7 @@ func TestBuildEventPosterPrompt_FreeAndNoDate(t *testing.T) {
 }
 
 func TestBuildEventAssetEnhancePrompt_BriefTransformsKeepingFace(t *testing.T) {
-	p := buildEventAssetEnhancePrompt(AssetPoster,
-		"La docente enseñando a un grupo de alumnas a aplicar tinte ámbar")
+	p := buildEventAssetEnhancePrompt(AssetPoster, "La docente enseñando a un grupo de alumnas a aplicar tinte ámbar", false)
 	low := strings.ToLower(p)
 	// Sigue las indicaciones del organizador…
 	if !strings.Contains(low, "alumnas a aplicar tinte ámbar") {
@@ -139,8 +138,21 @@ func TestBuildEventAssetEnhancePrompt_BriefTransformsKeepingFace(t *testing.T) {
 	}
 }
 
+func TestBuildEventAssetEnhancePrompt_FaceRefAnchorsIdentity(t *testing.T) {
+	p := buildEventAssetEnhancePrompt(AssetPoster, "la docente con sus alumnas", true)
+	low := strings.ToLower(p)
+	if !strings.Contains(low, "foto de rostro") || !strings.Contains(low, "última imagen") {
+		t.Fatalf("con 2ª foto el prompt debe usar el rostro de referencia:\n%s", p)
+	}
+	// Sin face ref no debe mencionarlo.
+	p2 := buildEventAssetEnhancePrompt(AssetPoster, "la docente con sus alumnas", false)
+	if strings.Contains(strings.ToLower(p2), "última imagen") {
+		t.Fatalf("sin 2ª foto no debe mencionar la imagen de rostro:\n%s", p2)
+	}
+}
+
 func TestBuildEventAssetEnhancePrompt_NoBriefIsFaithfulRetouch(t *testing.T) {
-	p := buildEventAssetEnhancePrompt(AssetBadge, "")
+	p := buildEventAssetEnhancePrompt(AssetBadge, "", false)
 	low := strings.ToLower(p)
 	// Sin brief: retoque fiel, no transforma.
 	if !strings.Contains(low, "mejorar esta misma pieza") {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -232,13 +233,9 @@ func eventAssetEnhanceHandler(db *gorm.DB, geminiSvc *services.GeminiService, st
 			return
 		}
 
-		// Indicaciones opcionales del organizador: si vienen, la IA RECREA la
-		// escena siguiéndolas (usando la foto como referencia); si no, retoca.
-		var body struct {
-			Brief string `json:"brief"`
-		}
-		_ = c.ShouldBindJSON(&body)
-		brief := strings.TrimSpace(body.Brief)
+		// Indicaciones opcionales del organizador (campo "brief", multipart).
+		// Si vienen, la IA RECREA la escena siguiéndolas; si no, retoca.
+		brief := strings.TrimSpace(c.PostForm("brief"))
 
 		ctx, cancel := context.WithTimeout(aiusage.WithTenantID(c.Request.Context(), tenantID), 60*time.Second)
 		defer cancel()
@@ -248,8 +245,23 @@ func eventAssetEnhanceHandler(db *gorm.DB, geminiSvc *services.GeminiService, st
 			c.JSON(http.StatusBadRequest, gin.H{"error": "no pudimos leer la imagen actual"})
 			return
 		}
+		images := []services.ReferenceImage{{MimeType: mime, Data: data}}
 
-		enhanced, err := geminiSvc.EnhanceEventAsset(ctx, data, mime, serviceAssetKind(kind), brief)
+		// Foto de rostro opcional (campo "reference"): ancla la identidad de la
+		// persona para que la cara salga idéntica.
+		if file, header, ferr := c.Request.FormFile("reference"); ferr == nil {
+			defer file.Close()
+			if header.Size <= maxEventAssetBytes {
+				refMime := header.Header.Get("Content-Type")
+				if strings.HasPrefix(refMime, "image/") {
+					if refData, rerr := io.ReadAll(file); rerr == nil {
+						images = append(images, services.ReferenceImage{MimeType: refMime, Data: refData})
+					}
+				}
+			}
+		}
+
+		enhanced, err := geminiSvc.EnhanceEventAsset(ctx, serviceAssetKind(kind), brief, images)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al mejorar la imagen: %v", err)})
 			return

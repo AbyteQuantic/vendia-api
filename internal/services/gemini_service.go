@@ -623,30 +623,37 @@ Output: a clean, professional e-commerce catalog photo of the SAME product on a 
 // productInfo is optional context (e.g., "Coca-Cola Botella 350ml").
 func (s *GeminiService) EnhancePhoto(ctx context.Context, imageData []byte, mimeType string, productInfo string) ([]byte, error) {
 	// Low temperature: a faithful retouch, never a transformation.
-	return s.enhanceImageWithPrompt(ctx, imageData, mimeType,
+	return s.enhanceImagesWithPrompt(ctx,
+		[]ReferenceImage{{MimeType: mimeType, Data: imageData}},
 		buildEnhancePhotoPrompt(productInfo), models.AIFeatureEnhancePhoto, 0.2)
 }
 
-// enhanceImageWithPrompt edits an attached image with a free-form instruction
+// enhanceImagesWithPrompt edits attached image(s) with a free-form instruction
 // (image-to-image). Shared by the product retoucher and the event-asset
-// improver. temperature controls how much it may transform the source: low
-// (~0.2) for a faithful retouch, higher (~0.65) for an instructed re-scene.
-func (s *GeminiService) enhanceImageWithPrompt(ctx context.Context, imageData []byte, mimeType, prompt, feature string, temperature float64) ([]byte, error) {
-	b64 := base64.StdEncoding.EncodeToString(imageData)
+// improver. Multiple images let the caller pass a base piece + a face/scene
+// reference. temperature controls how much it may transform the source.
+func (s *GeminiService) enhanceImagesWithPrompt(ctx context.Context, images []ReferenceImage, prompt, feature string, temperature float64) ([]byte, error) {
+	parts := make([]map[string]any, 0, len(images)+1)
+	for _, img := range images {
+		if len(img.Data) == 0 {
+			continue
+		}
+		mime := img.MimeType
+		if mime == "" {
+			mime = "image/png"
+		}
+		parts = append(parts, map[string]any{
+			"inlineData": map[string]any{
+				"mimeType": mime,
+				"data":     base64.StdEncoding.EncodeToString(img.Data),
+			},
+		})
+	}
+	parts = append(parts, map[string]any{"text": prompt})
 
 	payload := map[string]any{
 		"contents": []map[string]any{
-			{
-				"parts": []map[string]any{
-					{
-						"inlineData": map[string]any{
-							"mimeType": mimeType,
-							"data":     b64,
-						},
-					},
-					{"text": prompt},
-				},
-			},
+			{"parts": parts},
 		},
 		"generationConfig": map[string]any{
 			"responseModalities": []string{"TEXT", "IMAGE"},
