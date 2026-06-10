@@ -40,7 +40,7 @@ Datos a mostrar de forma legible:
 Requisitos de diseño:
 - Estilo limpio y elegante, apto para impresión y para verse en pantalla de celular.
 - Tipografía clara y de alto contraste; nada de texto decorativo ilegible.
-- Reserva un recuadro blanco bien visible en la parte inferior para colocar un CÓDIGO QR de validación (no dibujes el QR, solo deja el espacio rotulado "QR").
+- Reserva un recuadro blanco CUADRADO, centrado horizontalmente, ubicado en la MITAD INFERIOR de la escarapela (su centro alrededor del 70-75%% de la altura), que ocupe aproximadamente el 40%% del ancho, para colocar un CÓDIGO QR de validación (NO dibujes el QR; deja el espacio en blanco, opcionalmente rotulado "QR"). Debajo del recuadro deja un pequeño margen.
 - Paleta sobria con un color de acento; bordes redondeados.
 - Todo el texto en español.%s`, attendeeName, eventTitle, businessName, themeHint(description))
 }
