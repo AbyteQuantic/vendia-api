@@ -57,9 +57,11 @@ func GenerateEventDescriptionAI(geminiSvc *services.GeminiService) gin.HandlerFu
 		Title    string `json:"title"`
 		Type     string `json:"type"`
 		Modality string `json:"modality"`
+		Topic    string `json:"topic"`
 		Audience string `json:"audience"`
 		Includes string `json:"includes"`
 		Level    string `json:"level"`
+		Place    string `json:"place"`
 		Extra    string `json:"extra"`
 		Current  string `json:"current"`
 	}
@@ -83,8 +85,9 @@ func GenerateEventDescriptionAI(geminiSvc *services.GeminiService) gin.HandlerFu
 		text, err := geminiSvc.GenerateText(ctx, services.BuildEventDescriptionPrompt(
 			services.EventDescriptionInput{
 				Title: req.Title, Type: req.Type, Modality: req.Modality,
-				Audience: req.Audience, Includes: req.Includes,
-				Level: req.Level, Extra: req.Extra, Current: req.Current,
+				Topic: req.Topic, Audience: req.Audience, Includes: req.Includes,
+				Level: req.Level, Place: req.Place, Extra: req.Extra,
+				Current: req.Current,
 			}))
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "no pudimos generar la descripción, intenta de nuevo"})

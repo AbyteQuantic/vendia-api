@@ -30,9 +30,11 @@ type EventDescriptionInput struct {
 	Title    string
 	Type     string // curso/conferencia/…
 	Modality string // presencial/virtual/híbrido
-	Audience string // ¿para quién es?
+	Topic    string // ¿de qué trata?
+	Audience string // ¿para quién / qué nicho?
 	Includes string // ¿qué incluye / qué aprenderán?
 	Level    string // nivel (opcional)
+	Place    string // ciudad/país (contexto, no se repite literal)
 	Extra    string // algo más a destacar (opcional)
 	Current  string // descripción actual (si la quiere mejorar)
 }
@@ -57,8 +59,14 @@ func BuildEventDescriptionPrompt(in EventDescriptionInput) string {
 	if in.Modality != "" {
 		b.WriteString(fmt.Sprintf("- Modalidad: %s\n", in.Modality))
 	}
+	if s := strings.TrimSpace(in.Topic); s != "" {
+		b.WriteString(fmt.Sprintf("- De qué trata: %s\n", s))
+	}
 	if s := strings.TrimSpace(in.Audience); s != "" {
-		b.WriteString(fmt.Sprintf("- Para quién es: %s\n", s))
+		b.WriteString(fmt.Sprintf("- Para quién es / nicho: %s\n", s))
+	}
+	if s := strings.TrimSpace(in.Place); s != "" {
+		b.WriteString(fmt.Sprintf("- Lugar (solo contexto, NO lo repitas literal): %s\n", s))
 	}
 	if s := strings.TrimSpace(in.Includes); s != "" {
 		b.WriteString(fmt.Sprintf("- Qué incluye / qué aprenderán: %s\n", s))
