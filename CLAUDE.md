@@ -157,7 +157,10 @@ REDIS_URL             → Redis connection (optional, planned for cache)
 - **Admin (super_admin):** system analytics, tenant management, subscription updates
 
 ## Testing
-- `go test ./... -race` → all pass (85 PASS, 5 SKIP without Docker DB)
+- `go test ./... -race` → all pass. ~45 tests de integración (register,
+  business profile, secuencias de cotización) **saltan** sin un Postgres local
+  en `localhost:5499` (`make local`); en CI corren gracias al servicio
+  `postgres` del workflow. No son fallos: skip vía TCP pre-check.
 - Integration tests (tenant_register) skip gracefully with TCP pre-check when no PostgreSQL
 - Unit tests cover: models, services (pricing, WhatsApp, Gemini, OCR), handler validation, middleware, auth, config
 - Quality gates: `go build`, `go vet`, `go test -race` all pass clean

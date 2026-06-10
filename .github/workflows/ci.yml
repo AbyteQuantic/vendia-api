@@ -25,6 +25,25 @@ jobs:
   go:
     name: vet + build + test -race
     runs-on: ubuntu-latest
+    # Postgres para la suite de integración. Los tests dialan localhost:5499
+    # (mismo puerto que `docker-compose.yml` publica en local), así que el
+    # servicio mapea 5432→5499 y la TCP pre-check los deja correr en CI en
+    # lugar de saltarlos. Sin esto, ~45 tests de integración (register,
+    # business profile, secuencias de cotización) nunca se ejecutaban en CI.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: vendia
+          POSTGRES_PASSWORD: vendia_secret
+          POSTGRES_DB: vendia
+        ports:
+          - 5499:5432
+        options: >-
+          --health-cmd "pg_isready -U vendia"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -50,7 +69,8 @@ jobs:
         run: go build ./...
 
       - name: Test with race detector
-        # `-race` requires CGO; ubuntu-latest runners ship gcc. The
-        # 5 SKIP tests that gate on Docker Postgres skip gracefully
-        # via TCP pre-check (see `tenant_register_test.go`).
+        # `-race` requires CGO; ubuntu-latest runners ship gcc. La suite de
+        # integración (gated en localhost:5499) ahora SÍ corre gracias al
+        # servicio `postgres` de arriba; sin él, la TCP pre-check de
+        # `tenant_register_test.go` la saltaría.
         run: go test -race -count=1 ./...
