@@ -61,12 +61,19 @@ func TestBuildEventBadgePrompt_IncludesAnchors(t *testing.T) {
 }
 
 func TestBuildEventCertificatePrompt_IncludesAnchors(t *testing.T) {
-	p := buildEventCertificatePrompt("Curso de Repostería", "Tienda Doña Ana", "Ana Pérez", "")
+	p := buildEventCertificatePrompt("Curso de Repostería", "Tienda Doña Ana", "")
 	low := strings.ToLower(p)
-	for _, anchor := range []string{"certificado", "curso de repostería", "ana pérez"} {
+	for _, anchor := range []string{"certificado", "curso de repostería"} {
 		if !strings.Contains(low, anchor) {
 			t.Fatalf("prompt de certificado no contiene %q:\n%s", anchor, p)
 		}
+	}
+	// Plantilla: NO hornea el nombre; reserva línea para sobreponerlo.
+	if strings.Contains(low, "nombre del asistente") && !strings.Contains(low, "no escribas") {
+		t.Fatalf("el certificado no debe hornear el nombre:\n%s", p)
+	}
+	if !strings.Contains(low, "imprimirá el nombre del participante") {
+		t.Fatalf("el certificado debe reservar la línea del nombre:\n%s", p)
 	}
 }
 

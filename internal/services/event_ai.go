@@ -106,21 +106,22 @@ Requisitos de diseño:
 }
 
 // buildEventCertificatePrompt composes the prompt for a participation
-// certificate. Horizontal, formal, with space for the attendee's name.
-// description (optional) themes the piece to the event's subject.
-func buildEventCertificatePrompt(eventTitle, businessName, attendeeName, description string) string {
-	return fmt.Sprintf(`Diseña un CERTIFICADO de participación horizontal, formal y elegante.
+// certificate. Es una PLANTILLA por evento: NO hornea el nombre del
+// participante (se sobrepone después), reserva una línea limpia y centrada
+// para él. Horizontal, formal. description (optional) themes the piece.
+func buildEventCertificatePrompt(eventTitle, businessName, description string) string {
+	return fmt.Sprintf(`Diseña un CERTIFICADO de participación horizontal, formal y elegante. Es una PLANTILLA reutilizable: el nombre del participante y el QR se sobreponen después, así que NO los escribas tú.
 
 Datos a mostrar:
 - Título grande: "Certificado de participación"
-- Nombre del participante: "%s" (destacado, en el centro)
 - Evento: "%s"
 - Otorgado por: "%s"
 
 Requisitos de diseño:
 - Marco ornamental sobrio, fondo claro, tipografía serif legible.
-- Deja un espacio inferior derecho para un código QR de verificación rotulado "QR".
-- Todo el texto en español; aspecto digno de imprimir.%s`, attendeeName, eventTitle, businessName, themeHint(description))
+- Reserva una LÍNEA horizontal limpia y centrada en el CENTRO del certificado (su centro alrededor del 48%% de la altura), VACÍA (NO escribas ningún nombre ni el texto "Nombre del Asistente"), donde luego se imprimirá el nombre del participante en grande.
+- Deja un espacio en la esquina INFERIOR DERECHA para un código QR de verificación (NO dibujes el QR; deja el espacio en blanco).
+- Todo el texto en español; aspecto digno de imprimir.%s`, eventTitle, businessName, themeHint(description))
 }
 
 // PosterInput carries the event facts the marketing poster shows. Optional
@@ -328,6 +329,6 @@ func (s *GeminiService) GenerateEventBadge(ctx context.Context, eventTitle, busi
 
 // GenerateEventCertificate renders a participation certificate design. Same
 // FinOps-label caveat as GenerateEventBadge.
-func (s *GeminiService) GenerateEventCertificate(ctx context.Context, eventTitle, businessName, attendeeName, description string) ([]byte, error) {
-	return s.GeneratePromoBanner(ctx, buildEventCertificatePrompt(eventTitle, businessName, attendeeName, description), nil)
+func (s *GeminiService) GenerateEventCertificate(ctx context.Context, eventTitle, businessName, description string) ([]byte, error) {
+	return s.GeneratePromoBanner(ctx, buildEventCertificatePrompt(eventTitle, businessName, description), nil)
 }

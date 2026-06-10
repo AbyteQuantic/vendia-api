@@ -21,11 +21,6 @@ import (
 	"gorm.io/gorm"
 )
 
-// badgeSampleName is the placeholder attendee name used when the organizer is
-// designing the template (the real name + QR are filled in per attendee at
-// render time on the web view).
-const badgeSampleName = "Nombre del Asistente"
-
 // GenerateEventBadgeImage — POST /api/v1/events/:id/badge/ai-generate (admin).
 // Produces an escarapela design with Gemini, stores it, and saves the URL on
 // the event's badge template. The Flutter editor drives the accept/reject/
@@ -146,7 +141,7 @@ func eventAssetHandler(db *gorm.DB, geminiSvc *services.GeminiService, storageSv
 		case assetBadge:
 			img, err = geminiSvc.GenerateEventBadge(ctx, ev.Title, tenant.BusinessName, combineDescBrief(ev.Description, brief))
 		case assetCertificate:
-			img, err = geminiSvc.GenerateEventCertificate(ctx, ev.Title, tenant.BusinessName, badgeSampleName, combineDescBrief(ev.Description, brief))
+			img, err = geminiSvc.GenerateEventCertificate(ctx, ev.Title, tenant.BusinessName, combineDescBrief(ev.Description, brief))
 		case assetPoster:
 			img, err = geminiSvc.GenerateEventPoster(ctx, posterInputFor(ev, tenant.BusinessName, brief))
 		}
