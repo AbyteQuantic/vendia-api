@@ -110,12 +110,29 @@ type Event struct {
 // EventCertificateConfig holds the certificate's editable copy. The app fills
 // defaults (interpolating the event/organizer) when a field is blank.
 type EventCertificateConfig struct {
-	Title          string `json:"title"`     // "Certificado de Participación"
-	Intro          string `json:"intro"`     // "Se otorga el presente certificado a"
-	Body           string `json:"body"`      // "por haber participado satisfactoriamente en …"
-	Signatory      string `json:"signatory"` // firma / "Otorgado por …"
-	Footer         string `json:"footer"`    // normatividad / nota al pie (opcional)
-	SignatureImage string `json:"signature_image"` // imagen de la firma (limpia)
+	Title          string `json:"title"`           // "Certificado de Participación"
+	Intro          string `json:"intro"`           // "Se otorga el presente certificado a"
+	Body           string `json:"body"`            // "por haber participado satisfactoriamente en …"
+	Signatory      string `json:"signatory"`       // firma / "Otorgado por …"
+	Footer         string `json:"footer"`          // normatividad / nota al pie (opcional)
+	SignatureImage string `json:"signature_image"` // imagen de la firma (sin fondo)
+	LogoImage      string `json:"logo_image"`      // logotipo del negocio (opcional)
+
+	// Layout: posición/tamaño de cada elemento del diploma, editable por el
+	// organizador arrastrando/redimensionando en el diseñador. Las claves son
+	// "title","intro","name","body","date","signatory","signature","logo","qr".
+	// Vacío → la app usa un layout por defecto sensato.
+	Layout map[string]CertElementPos `json:"layout"`
+}
+
+// CertElementPos ubica un elemento del certificado en coordenadas
+// NORMALIZADAS (0..1) relativas al ancho/alto del fondo, con un tamaño
+// relativo al ancho. Así el diseño se ve igual en el editor y en el carné.
+type CertElementPos struct {
+	X      float64 `json:"x"`      // centro X (0..1)
+	Y      float64 `json:"y"`      // centro Y (0..1)
+	Scale  float64 `json:"scale"`  // tamaño relativo al ancho (texto: font; img: ancho)
+	Hidden bool    `json:"hidden"` // ocultar el elemento
 }
 
 // EventPaymentDetail are the organizer's payment data for ONE method: free

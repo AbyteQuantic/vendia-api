@@ -230,6 +230,8 @@ func PublicGetCarnet(db *gorm.DB) gin.HandlerFunc {
 				"signatory":       orDefault(cfg.Signatory, tenant.BusinessName),
 				"footer":          cfg.Footer,
 				"signature_image": cfg.SignatureImage,
+				"logo_image":      cfg.LogoImage,
+				"layout":          cfg.Layout,
 				"qr_token":        reg.QRToken,
 			}
 		}

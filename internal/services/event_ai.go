@@ -110,13 +110,14 @@ Requisitos de diseño:
 // participante (se sobrepone después), reserva una línea limpia y centrada
 // para él. Horizontal, formal. description (optional) themes the piece.
 func buildEventCertificatePrompt(eventTitle, businessName, description string) string {
-	return fmt.Sprintf(`Diseña SOLO EL FONDO/MARCO ornamental de un CERTIFICADO horizontal (apaisado), formal y elegante. La aplicación escribirá TODO el texto encima, así que esta pieza NO debe llevar texto.
+	return fmt.Sprintf(`Diseña SOLO EL FONDO de un CERTIFICADO horizontal (apaisado) MODERNO y elegante. La aplicación escribirá TODO el texto y pondrá la firma/logo encima, así que esta pieza NO debe llevar texto.
 
 Reglas ESTRICTAS:
-- NO escribas NINGÚN texto, NI título, NI nombres, NI "Certificado", NI fechas, NI firmas. Cero letras.
-- Solo un MARCO ornamental sobrio y elegante (filigrana, esquinas, bordes) sobre un FONDO CLARO, con el CENTRO COMPLETAMENTE DESPEJADO y limpio para que la app coloque el texto encima.
-- Deja también la esquina INFERIOR DERECHA despejada (ahí irá un QR de verificación).
-- Paleta elegante; aspecto digno de imprimir.%s`, themeHint(description))
+- NO escribas NINGÚN texto (ni título, ni nombres, ni "Certificado", ni fechas, ni firmas). Cero letras.
+- Estilo MODERNO de certificado: bordes/acentos geométricos finos, esquinas decorativas sutiles, una franja o detalle de color de acento, líneas limpias. Nada recargado ni anticuado.
+- Incluye una MARCA DE AGUA central MUY SUTIL (baja opacidad, tono claro) con una imagen/ícono ALUSIVO al tema del evento — debe ser tenue para que el texto encima se lea perfecto.
+- Fondo CLARO con el CENTRO bien despejado y legible. Deja también las esquinas inferiores despejadas (ahí van firma, logo y un QR).
+- Paleta elegante y contemporánea; aspecto digno de imprimir.%s`, themeHint(description))
 }
 
 // PosterInput carries the event facts the marketing poster shows. Optional

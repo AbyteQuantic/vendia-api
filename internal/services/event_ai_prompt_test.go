@@ -69,7 +69,7 @@ func TestBuildEventCertificatePrompt_FrameOnlyNoText(t *testing.T) {
 	// Es SOLO el marco/fondo: la app pone el texto. Debe prohibir texto y
 	// dejar el centro despejado.
 	for _, anchor := range []string{
-		"no escribas ningún texto", "centro completamente despejado",
+		"no escribas ningún texto", "marca de agua", "centro bien despejado",
 	} {
 		if !strings.Contains(low, anchor) {
 			t.Fatalf("el certificado debe ser solo marco sin texto (%q):\n%s", anchor, p)
