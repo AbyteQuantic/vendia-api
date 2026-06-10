@@ -628,6 +628,17 @@ func (s *GeminiService) EnhancePhoto(ctx context.Context, imageData []byte, mime
 		buildEnhancePhotoPrompt(productInfo), models.AIFeatureEnhancePhoto, 0.2)
 }
 
+// CleanSignature isolates the handwritten signature from a photo: removes the
+// paper/background/shadows and keeps only the crisp dark strokes on a clean
+// white background, ready to composite on a certificate. Low temperature — a
+// faithful extraction, never a redraw.
+func (s *GeminiService) CleanSignature(ctx context.Context, imageData []byte, mimeType string) ([]byte, error) {
+	const prompt = `Extrae ÚNICAMENTE la firma manuscrita de esta foto. Elimina por completo el fondo (papel, líneas, sombras, textura) y deja SOLO los trazos oscuros de la firma, nítidos y limpios, sobre un fondo BLANCO uniforme. No agregues texto, marcos ni adornos; no inventes trazos. La firma debe quedar recortada y centrada, lista para colocar en un certificado.`
+	return s.enhanceImagesWithPrompt(ctx,
+		[]ReferenceImage{{MimeType: mimeType, Data: imageData}},
+		prompt, models.AIFeatureEnhancePhoto, 0.2)
+}
+
 // enhanceImagesWithPrompt edits attached image(s) with a free-form instruction
 // (image-to-image). Shared by the product retoucher and the event-asset
 // improver. Multiple images let the caller pass a base piece + a face/scene

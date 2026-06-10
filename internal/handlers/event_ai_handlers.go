@@ -92,6 +92,61 @@ func GenerateEventDescriptionAI(geminiSvc *services.GeminiService) gin.HandlerFu
 	}
 }
 
+// CleanEventSignature — POST /api/v1/event-signature-clean (admin). Recibe la
+// foto/imagen de la firma, la limpia con IA (aísla los trazos, quita el fondo)
+// y devuelve la URL lista para el certificado. Ruta propia (sin id de evento).
+func CleanEventSignature(geminiSvc *services.GeminiService, storageSvc services.FileStorage) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !requireEventAdmin(c) {
+			return
+		}
+		if geminiSvc == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "servicio de IA no configurado"})
+			return
+		}
+		tenantID := middleware.GetTenantID(c)
+
+		file, header, err := c.Request.FormFile("image")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "imagen requerida (campo: image)"})
+			return
+		}
+		defer file.Close()
+		if header.Size > maxEventAssetBytes {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "la imagen excede 8MB"})
+			return
+		}
+		mime := header.Header.Get("Content-Type")
+		if !strings.HasPrefix(mime, "image/") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "el archivo debe ser una imagen"})
+			return
+		}
+		data, err := io.ReadAll(file)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al leer la imagen"})
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(
+			aiusage.WithTenantID(c.Request.Context(), tenantID), 60*time.Second)
+		defer cancel()
+		cleaned, err := geminiSvc.CleanSignature(ctx, data, mime)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "no pudimos limpiar la firma, intenta de nuevo"})
+			return
+		}
+
+		url := "data:image/png;base64," + base64.StdEncoding.EncodeToString(cleaned)
+		if storageSvc != nil {
+			key := fmt.Sprintf("events/%s/signature/%s", tenantID, uuid.NewString()[:8])
+			if up, e := storageSvc.Upload(ctx, "event-assets", key, cleaned, "image/png"); e == nil {
+				url = up
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{"url": url}})
+	}
+}
+
 type eventAssetKind int
 
 const (

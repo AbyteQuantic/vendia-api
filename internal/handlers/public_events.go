@@ -227,9 +227,10 @@ func PublicGetCarnet(db *gorm.DB) gin.HandlerFunc {
 				"attendee_name": customer.Name,
 				"body":          orDefault(cfg.Body, "por haber participado satisfactoriamente en "+ev.Title),
 				"date_text":     certificateDateText(ev),
-				"signatory":     orDefault(cfg.Signatory, tenant.BusinessName),
-				"footer":        cfg.Footer,
-				"qr_token":      reg.QRToken,
+				"signatory":       orDefault(cfg.Signatory, tenant.BusinessName),
+				"footer":          cfg.Footer,
+				"signature_image": cfg.SignatureImage,
+				"qr_token":        reg.QRToken,
 			}
 		}
 		// El QR (carné válido) solo viaja cuando el pago está completo.

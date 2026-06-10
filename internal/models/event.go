@@ -110,11 +110,12 @@ type Event struct {
 // EventCertificateConfig holds the certificate's editable copy. The app fills
 // defaults (interpolating the event/organizer) when a field is blank.
 type EventCertificateConfig struct {
-	Title     string `json:"title"`     // "Certificado de Participación"
-	Intro     string `json:"intro"`     // "Se otorga el presente certificado a"
-	Body      string `json:"body"`      // "por haber participado satisfactoriamente en …"
-	Signatory string `json:"signatory"` // firma / "Otorgado por …"
-	Footer    string `json:"footer"`    // normatividad / nota al pie (opcional)
+	Title          string `json:"title"`     // "Certificado de Participación"
+	Intro          string `json:"intro"`     // "Se otorga el presente certificado a"
+	Body           string `json:"body"`      // "por haber participado satisfactoriamente en …"
+	Signatory      string `json:"signatory"` // firma / "Otorgado por …"
+	Footer         string `json:"footer"`    // normatividad / nota al pie (opcional)
+	SignatureImage string `json:"signature_image"` // imagen de la firma (limpia)
 }
 
 // EventPaymentDetail are the organizer's payment data for ONE method: free

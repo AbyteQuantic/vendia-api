@@ -576,6 +576,8 @@ func main() {
 		v1.POST("/event-payment-qr", handlers.UploadEventPaymentQR(storageSvc))
 		// Agente de IA que redacta la descripción del evento.
 		v1.POST("/event-description-ai", handlers.GenerateEventDescriptionAI(geminiSvc))
+		// Limpia con IA la foto de la firma para el certificado.
+		v1.POST("/event-signature-clean", handlers.CleanEventSignature(geminiSvc, storageSvc))
 		// "Mejorar con IA" — retoca la imagen actual (subida o generada).
 		v1.POST("/events/:id/badge/ai-enhance", handlers.GenerateEventBadgeEnhance(db, geminiSvc, storageSvc))
 		v1.POST("/events/:id/certificate/ai-enhance", handlers.GenerateEventCertificateEnhance(db, geminiSvc, storageSvc))
