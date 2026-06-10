@@ -215,10 +215,22 @@ func PublicGetCarnet(db *gorm.DB) gin.HandlerFunc {
 			"confirmed":            confirmed,
 		}
 		// Certificado: el asistente lo ve en su sesión del catálogo cuando el
-		// organizador lo emite (FR-17). La imagen es la plantilla del evento.
+		// organizador lo emite (FR-17). La IA solo dibuja el MARCO; la app
+		// compone el texto (con defaults editables por el organizador).
 		if reg.CertificateIssuedAt != nil {
+			cfg := ev.CertificateConfig
 			out["certificate_issued"] = true
 			out["certificate_image"] = ev.CertificateTemplate.ImageURL
+			out["certificate"] = gin.H{
+				"title":         orDefault(cfg.Title, "Certificado de Participación"),
+				"intro":         orDefault(cfg.Intro, "Se otorga el presente certificado a"),
+				"attendee_name": customer.Name,
+				"body":          orDefault(cfg.Body, "por haber participado satisfactoriamente en "+ev.Title),
+				"date_text":     certificateDateText(ev),
+				"signatory":     orDefault(cfg.Signatory, tenant.BusinessName),
+				"footer":        cfg.Footer,
+				"qr_token":      reg.QRToken,
+			}
 		}
 		// El QR (carné válido) solo viaja cuando el pago está completo.
 		// El diseño de escarapela del evento (si el organizador lo configuró)
@@ -296,5 +308,33 @@ func writePublicEventError(c *gin.Context, err error) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	}
+}
+
+// orDefault returns v trimmed, or fallback when v is blank.
+func orDefault(v, fallback string) string {
+	if strings.TrimSpace(v) == "" {
+		return fallback
+	}
+	return v
+}
+
+// certificateDateText formats the event date in Spanish ("Ciudad, 10 de junio
+// de 2026") for the composed certificate; degrades to just the city/empty.
+func certificateDateText(ev *models.Event) string {
+	months := []string{"enero", "febrero", "marzo", "abril", "mayo", "junio",
+		"julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"}
+	date := ""
+	if ev.StartAt != nil {
+		t := ev.StartAt
+		date = fmt.Sprintf("%d de %s de %d", t.Day(), months[int(t.Month())-1], t.Year())
+	}
+	switch {
+	case ev.City != "" && date != "":
+		return ev.City + ", " + date
+	case ev.City != "":
+		return ev.City
+	default:
+		return date
 	}
 }

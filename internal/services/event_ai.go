@@ -110,18 +110,13 @@ Requisitos de diseño:
 // participante (se sobrepone después), reserva una línea limpia y centrada
 // para él. Horizontal, formal. description (optional) themes the piece.
 func buildEventCertificatePrompt(eventTitle, businessName, description string) string {
-	return fmt.Sprintf(`Diseña un CERTIFICADO de participación horizontal, formal y elegante. Es una PLANTILLA reutilizable: el nombre del participante y el QR se sobreponen después, así que NO los escribas tú.
+	return fmt.Sprintf(`Diseña SOLO EL FONDO/MARCO ornamental de un CERTIFICADO horizontal (apaisado), formal y elegante. La aplicación escribirá TODO el texto encima, así que esta pieza NO debe llevar texto.
 
-Datos a mostrar:
-- Título grande: "Certificado de participación"
-- Evento: "%s"
-- Otorgado por: "%s"
-
-Requisitos de diseño:
-- Marco ornamental sobrio, fondo claro, tipografía serif legible.
-- Reserva una LÍNEA horizontal limpia y centrada en el CENTRO del certificado (su centro alrededor del 48%% de la altura), VACÍA (NO escribas ningún nombre ni el texto "Nombre del Asistente"), donde luego se imprimirá el nombre del participante en grande.
-- Deja un espacio en la esquina INFERIOR DERECHA para un código QR de verificación (NO dibujes el QR; deja el espacio en blanco).
-- Todo el texto en español; aspecto digno de imprimir.%s`, eventTitle, businessName, themeHint(description))
+Reglas ESTRICTAS:
+- NO escribas NINGÚN texto, NI título, NI nombres, NI "Certificado", NI fechas, NI firmas. Cero letras.
+- Solo un MARCO ornamental sobrio y elegante (filigrana, esquinas, bordes) sobre un FONDO CLARO, con el CENTRO COMPLETAMENTE DESPEJADO y limpio para que la app coloque el texto encima.
+- Deja también la esquina INFERIOR DERECHA despejada (ahí irá un QR de verificación).
+- Paleta elegante; aspecto digno de imprimir.%s`, themeHint(description))
 }
 
 // PosterInput carries the event facts the marketing poster shows. Optional

@@ -52,10 +52,11 @@ type eventInput struct {
 	PaymentDetails        []models.EventPaymentDetail `json:"payment_details"`
 	InstallmentsEnabled   bool                        `json:"installments_enabled"`
 	InstallmentsCount     int                         `json:"installments_count"`
-	CustomFields          []models.EventCustomField `json:"custom_fields"`
-	Sessions              []models.EventSession     `json:"sessions"`
-	AttendanceRule        string                    `json:"attendance_rule"`
-	AttendancePct         int                       `json:"attendance_pct"`
+	CustomFields          []models.EventCustomField     `json:"custom_fields"`
+	Sessions              []models.EventSession         `json:"sessions"`
+	AttendanceRule        string                        `json:"attendance_rule"`
+	AttendancePct         int                           `json:"attendance_pct"`
+	CertificateConfig     models.EventCertificateConfig `json:"certificate_config"`
 }
 
 func (in eventInput) toModel() *models.Event {
@@ -78,6 +79,7 @@ func (in eventInput) toModel() *models.Event {
 		Sessions:              in.Sessions,
 		AttendanceRule:        in.AttendanceRule,
 		AttendancePct:         in.AttendancePct,
+		CertificateConfig:     in.CertificateConfig,
 	}
 	if in.AttendanceRule == "" {
 		e.AttendanceRule = models.AttendanceRuleInOut

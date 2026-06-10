@@ -99,6 +99,22 @@ type Event struct {
 	// surfaces. Unlike the badge/certificate it carries NO QR; it sells the
 	// event. Produced by the organizer with optional Gemini assistance.
 	PosterTemplate EventTemplate `gorm:"serializer:json;type:jsonb;default:'{}'" json:"poster_template"`
+
+	// CertificateConfig are the editable TEXTS the app composes over the
+	// certificate background (the AI only draws the frame). Empty fields fall
+	// back to sensible defaults at render time, so it works out of the box and
+	// the organizer can tweak the wording.
+	CertificateConfig EventCertificateConfig `gorm:"serializer:json;type:jsonb;default:'{}'" json:"certificate_config"`
+}
+
+// EventCertificateConfig holds the certificate's editable copy. The app fills
+// defaults (interpolating the event/organizer) when a field is blank.
+type EventCertificateConfig struct {
+	Title     string `json:"title"`     // "Certificado de Participación"
+	Intro     string `json:"intro"`     // "Se otorga el presente certificado a"
+	Body      string `json:"body"`      // "por haber participado satisfactoriamente en …"
+	Signatory string `json:"signatory"` // firma / "Otorgado por …"
+	Footer    string `json:"footer"`    // normatividad / nota al pie (opcional)
 }
 
 // EventPaymentDetail are the organizer's payment data for ONE method: free

@@ -60,20 +60,20 @@ func TestBuildEventBadgePrompt_IncludesAnchors(t *testing.T) {
 	}
 }
 
-func TestBuildEventCertificatePrompt_IncludesAnchors(t *testing.T) {
+func TestBuildEventCertificatePrompt_FrameOnlyNoText(t *testing.T) {
 	p := buildEventCertificatePrompt("Curso de Repostería", "Tienda Doña Ana", "")
 	low := strings.ToLower(p)
-	for _, anchor := range []string{"certificado", "curso de repostería"} {
+	if !strings.Contains(low, "certificado") {
+		t.Fatalf("debe mencionar certificado:\n%s", p)
+	}
+	// Es SOLO el marco/fondo: la app pone el texto. Debe prohibir texto y
+	// dejar el centro despejado.
+	for _, anchor := range []string{
+		"no escribas ningún texto", "centro completamente despejado",
+	} {
 		if !strings.Contains(low, anchor) {
-			t.Fatalf("prompt de certificado no contiene %q:\n%s", anchor, p)
+			t.Fatalf("el certificado debe ser solo marco sin texto (%q):\n%s", anchor, p)
 		}
-	}
-	// Plantilla: NO hornea el nombre; reserva línea para sobreponerlo.
-	if strings.Contains(low, "nombre del asistente") && !strings.Contains(low, "no escribas") {
-		t.Fatalf("el certificado no debe hornear el nombre:\n%s", p)
-	}
-	if !strings.Contains(low, "imprimirá el nombre del participante") {
-		t.Fatalf("el certificado debe reservar la línea del nombre:\n%s", p)
 	}
 }
 
