@@ -36,6 +36,7 @@ type RegisterInput struct {
 	ClientID      string // optional client UUID for offline/idempotent create
 	Name          string
 	Phone         string
+	Email         string // opcional: para recordatorios por correo
 	FormData      map[string]any
 	ConsentComms  bool
 	PaymentMethod string
@@ -86,7 +87,7 @@ func (s *EventRegistrationService) Register(tenantID string, in RegisterInput) (
 		return nil, ErrEventNotPublished
 	}
 
-	customerID, err := s.upsertCustomer(tenantID, in.Name, in.Phone)
+	customerID, err := s.upsertCustomer(tenantID, in.Name, in.Phone, in.Email)
 	if err != nil {
 		return nil, err
 	}
@@ -409,19 +410,28 @@ func (s *EventRegistrationService) assertCapacity(tenantID string, ev *models.Ev
 // by normalized phone (mirrors the public-order CRM upsert) and returns the
 // Customer ID. Anonymous (no phone) attendees still get a Customer row so the
 // registration always has an owner.
-func (s *EventRegistrationService) upsertCustomer(tenantID, name, rawPhone string) (string, error) {
+func (s *EventRegistrationService) upsertCustomer(tenantID, name, rawPhone, email string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		name = "Asistente"
 	}
 	phone := NormalizePhone(rawPhone)
+	email = strings.TrimSpace(email)
 
 	if phone != "" {
 		var existing models.Customer
 		err := s.db.Where("tenant_id = ? AND phone = ?", tenantID, phone).First(&existing).Error
 		if err == nil {
+			updates := map[string]any{}
 			if name != "Asistente" && name != existing.Name {
-				s.db.Model(&existing).Update("name", name)
+				updates["name"] = name
+			}
+			// Solo completa el email si no lo tenía (no lo pisa).
+			if email != "" && existing.Email == "" {
+				updates["email"] = email
+			}
+			if len(updates) > 0 {
+				s.db.Model(&existing).Updates(updates)
 			}
 			return existing.ID, nil
 		}
@@ -430,7 +440,7 @@ func (s *EventRegistrationService) upsertCustomer(tenantID, name, rawPhone strin
 		}
 	}
 
-	customer := models.Customer{TenantID: tenantID, Name: name, Phone: phone}
+	customer := models.Customer{TenantID: tenantID, Name: name, Phone: phone, Email: email}
 	if err := s.db.Create(&customer).Error; err != nil {
 		return "", fmt.Errorf("crear cliente del asistente: %w", err)
 	}

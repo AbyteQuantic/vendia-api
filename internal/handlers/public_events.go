@@ -76,6 +76,7 @@ func PublicRegisterEvent(db *gorm.DB) gin.HandlerFunc {
 		ID            string         `json:"id"`
 		Name          string         `json:"name" binding:"required,min=2"`
 		Phone         string         `json:"phone"`
+		Email         string         `json:"email"`
 		FormData      map[string]any `json:"form_data"`
 		ConsentComms  bool           `json:"consent_comms"`
 		PaymentMethod string         `json:"payment_method"`
@@ -95,6 +96,7 @@ func PublicRegisterEvent(db *gorm.DB) gin.HandlerFunc {
 			ClientID:      req.ID,
 			Name:          req.Name,
 			Phone:         req.Phone,
+			Email:         req.Email,
 			FormData:      req.FormData,
 			ConsentComms:  req.ConsentComms,
 			PaymentMethod: req.PaymentMethod,
@@ -144,17 +146,27 @@ func PublicGetCarnet(db *gorm.DB) gin.HandlerFunc {
 		if balance < 0 {
 			balance = 0
 		}
+		// Nombre del asistente (lo posee quien tiene el token).
+		var customer models.Customer
+		_ = db.Where("id = ? AND tenant_id = ?", reg.CustomerID, tenant.ID).First(&customer).Error
+
 		out := gin.H{
-			"event_title":    ev.Title,
-			"modality":       ev.Modality,
-			"start_at":       ev.StartAt,
-			"location":       ev.LocationOrLink,
-			"payment_status": reg.PaymentStatus,
-			"amount_paid":    reg.AmountPaid,
-			"price":          ev.Price,
-			"balance":        balance,
-			"currency":       ev.Currency,
-			"confirmed":      confirmed,
+			"event_title":          ev.Title,
+			"type":                 ev.Type,
+			"modality":             ev.Modality,
+			"start_at":             ev.StartAt,
+			"location":             ev.LocationOrLink,
+			"city":                 ev.City,
+			"location_notes":       ev.LocationNotes,
+			"attendee_name":        customer.Name,
+			"payment_status":       reg.PaymentStatus,
+			"amount_paid":          reg.AmountPaid,
+			"price":                ev.Price,
+			"balance":              balance,
+			"currency":             ev.Currency,
+			"installments_enabled": ev.InstallmentsEnabled,
+			"installments_count":   ev.InstallmentsCount,
+			"confirmed":            confirmed,
 		}
 		// El QR (carné válido) solo viaja cuando el pago está completo.
 		if confirmed {

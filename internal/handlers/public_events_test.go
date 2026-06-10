@@ -285,3 +285,52 @@ func TestSubmitProof_ThenApprove_ActivatesCarnet(t *testing.T) {
 	assert.Equal(t, models.RegistrationPaymentConfirmed, appResp.Data.PaymentStatus)
 	assert.Equal(t, int64(60000), appResp.Data.AmountPaid)
 }
+
+// Registrar con email lo guarda en el cliente; el carné expone ubicación.
+func TestPublicRegister_CapturesEmailAndCarnetLocation(t *testing.T) {
+	db, tenant := setupPublicEventsDB(t)
+	r := publicEventsRouter(db)
+
+	// Evento presencial con ubicación estructurada.
+	ev, err := services.NewEventService(db).Create(tenant.ID, &models.Event{
+		Type: models.EventTypeCurso, Title: "Curso", Modality: models.EventModalityPresencial,
+		Capacity: 10, Price: 50000,
+		LocationOrLink: "Calle 8 #28-14", City: "Medellín", LocationNotes: "Edificio Norte, piso 3",
+	})
+	require.NoError(t, err)
+	_, err = services.NewEventService(db).Publish(tenant.ID, ev.ID)
+	require.NoError(t, err)
+
+	reg := reqJSON(r, http.MethodPost, "/api/v1/store/mi-tienda/events/"+ev.ID+"/register", map[string]any{
+		"name": "Ana", "phone": "3001234567", "email": "ana@correo.com", "consent_comms": true,
+	})
+	require.Equal(t, http.StatusCreated, reg.Code)
+	var regResp struct {
+		Data struct {
+			PublicToken string `json:"public_token"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(reg.Body.Bytes(), &regResp))
+
+	// El email quedó en el cliente.
+	var c models.Customer
+	require.NoError(t, db.Where("tenant_id = ? AND phone = ?", tenant.ID, "3001234567").First(&c).Error)
+	assert.Equal(t, "ana@correo.com", c.Email)
+
+	// El carné expone la ubicación estructurada + el nombre.
+	w := reqJSON(r, http.MethodGet, "/api/v1/store/mi-tienda/carnet/"+regResp.Data.PublicToken, nil)
+	require.Equal(t, http.StatusOK, w.Code)
+	var carnet struct {
+		Data struct {
+			City          string `json:"city"`
+			Location      string `json:"location"`
+			LocationNotes string `json:"location_notes"`
+			AttendeeName  string `json:"attendee_name"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &carnet))
+	assert.Equal(t, "Medellín", carnet.Data.City)
+	assert.Equal(t, "Calle 8 #28-14", carnet.Data.Location)
+	assert.Equal(t, "Edificio Norte, piso 3", carnet.Data.LocationNotes)
+	assert.Equal(t, "Ana", carnet.Data.AttendeeName)
+}

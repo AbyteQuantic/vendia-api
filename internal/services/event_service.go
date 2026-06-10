@@ -127,6 +127,8 @@ func applyEventPatch(dst, src *models.Event) {
 		dst.Modality = src.Modality
 	}
 	dst.LocationOrLink = src.LocationOrLink
+	dst.City = src.City
+	dst.LocationNotes = src.LocationNotes
 	dst.StartAt = src.StartAt
 	dst.EndAt = src.EndAt
 	dst.Capacity = src.Capacity

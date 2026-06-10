@@ -52,6 +52,10 @@ type Event struct {
 	// LocationOrLink is the physical address (presencial) or the join URL
 	// (virtual). Híbrido may carry both joined by the UI.
 	LocationOrLink string `json:"location_or_link,omitempty"`
+	// City and LocationNotes detail a physical venue (ciudad, edificio /
+	// indicaciones de cómo llegar). Empty for virtual events.
+	City          string `json:"city,omitempty"`
+	LocationNotes string `json:"location_notes,omitempty"`
 
 	Capacity int   `gorm:"not null;default:0" json:"capacity"`
 	Price    int64 `gorm:"not null;default:0" json:"price"` // entero en la moneda; 0 = gratis

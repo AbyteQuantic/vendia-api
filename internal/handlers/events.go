@@ -43,6 +43,8 @@ type eventInput struct {
 	EndAt                 *string                   `json:"end_at"`
 	Modality              string                    `json:"modality"`
 	LocationOrLink        string                    `json:"location_or_link"`
+	City                  string                    `json:"city"`
+	LocationNotes         string                    `json:"location_notes"`
 	Capacity              int                       `json:"capacity"`
 	Price                 int64                     `json:"price"`
 	Currency              string                    `json:"currency"`
@@ -62,6 +64,8 @@ func (in eventInput) toModel() *models.Event {
 		Description:           in.Description,
 		Modality:              in.Modality,
 		LocationOrLink:        in.LocationOrLink,
+		City:                  in.City,
+		LocationNotes:         in.LocationNotes,
 		Capacity:              in.Capacity,
 		Price:                 in.Price,
 		Currency:              in.Currency,
