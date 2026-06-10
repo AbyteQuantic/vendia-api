@@ -200,12 +200,21 @@ func buildEventAssetEnhancePrompt(kind EventAssetKind, brief string) string {
 INDICACIONES DEL ORGANIZADOR (esto es lo que debe mostrar la pieza):
 %s
 
-CÓMO USAR LA FOTO:
-- Usa a la(s) PERSONA(S) de la foto como protagonista(s): conserva su parecido, rostro y rasgos reconocibles.
-- RECREA la escena, el entorno, las poses y los demás elementos según las indicaciones (puedes agregar personas, objetos, fondo y acciones que pidan las indicaciones). NO te limites a la escena original de la foto.
-- Ignora el fondo o los objetos de la foto que no correspondan a las indicaciones (p. ej. comida, bar): no los incluyas.
+IDENTIDAD DE LA PERSONA (lo más importante):
+- La persona protagonista del resultado debe ser RECONOCIBLEMENTE LA MISMA de la foto: mismo rostro, mismos rasgos faciales, mismo tono de piel, mismo color y estilo de cabello, misma complexión.
+- NO la reemplaces por otra persona, ni por una versión "genérica", "idealizada" o de stock. NO le cambies la edad, el peinado ni la cara.
+- Encuádrala como protagonista, bien iluminada y con el rostro claramente visible y sin deformaciones. Conserva su dignidad (nada caricaturesco).
 
-CALIDAD: fotografía/ilustración profesional, iluminación cinematográfica, composición de campaña real, español sin faltas. Resultado: %s.`, noun, brief, noun)
+CÓMO USAR LA FOTO:
+- RECREA la escena, el entorno, las poses y los demás elementos según las indicaciones (puedes AGREGAR otras personas —p. ej. alumnos—, objetos, fondo y acciones que pidan las indicaciones). Las personas AÑADIDAS pueden ser genéricas; SOLO la persona de la foto mantiene su identidad exacta.
+- IGNORA por completo el fondo y los objetos de la foto que no correspondan a las indicaciones (p. ej. comida, bar, mesa): NO los incluyas.
+
+COMPOSICIÓN Y CALIDAD:
+- Fotografía/ilustración profesional, iluminación cinematográfica, profundidad y composición de campaña publicitaria real.
+- Deja un espacio claro y equilibrado para el título; jerarquía visual limpia; coherencia de estilo y color.
+- Todo el texto en español, perfectamente escrito.
+
+Resultado: %s.`, noun, brief, noun)
 	}
 
 	base := `Eres un DISEÑADOR GRÁFICO PROFESIONAL retocando una pieza ya existente. La imagen adjunta ES la pieza: respétala como única fuente de verdad de su contenido.
@@ -232,7 +241,9 @@ PROHIBIDO:
 func (s *GeminiService) EnhanceEventAsset(ctx context.Context, imageData []byte, mimeType string, kind EventAssetKind, brief string) ([]byte, error) {
 	temp := 0.25
 	if strings.TrimSpace(brief) != "" {
-		temp = 0.65 // permite recrear la escena siguiendo las indicaciones
+		// Permite recrear la escena pero mantiene baja la deriva del rostro;
+		// la fidelidad de la identidad la fuerza el prompt, no la temperatura.
+		temp = 0.5
 	}
 	return s.enhanceImageWithPrompt(ctx, imageData, mimeType,
 		buildEventAssetEnhancePrompt(kind, brief), "EVENT_ASSET_ENHANCE", temp)

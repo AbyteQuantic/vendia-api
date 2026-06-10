@@ -123,6 +123,34 @@ func TestBuildEventPosterPrompt_FreeAndNoDate(t *testing.T) {
 	}
 }
 
+func TestBuildEventAssetEnhancePrompt_BriefTransformsKeepingFace(t *testing.T) {
+	p := buildEventAssetEnhancePrompt(AssetPoster,
+		"La docente enseñando a un grupo de alumnas a aplicar tinte ámbar")
+	low := strings.ToLower(p)
+	// Sigue las indicaciones del organizador…
+	if !strings.Contains(low, "alumnas a aplicar tinte ámbar") {
+		t.Fatalf("el enhance con brief debe seguir las indicaciones:\n%s", p)
+	}
+	// …y exige conservar la identidad/rostro de la persona de la foto.
+	for _, anchor := range []string{"misma de la foto", "mismo rostro", "no la reemplaces"} {
+		if !strings.Contains(low, anchor) {
+			t.Fatalf("el enhance debe exigir conservar el rostro (%q):\n%s", anchor, p)
+		}
+	}
+}
+
+func TestBuildEventAssetEnhancePrompt_NoBriefIsFaithfulRetouch(t *testing.T) {
+	p := buildEventAssetEnhancePrompt(AssetBadge, "")
+	low := strings.ToLower(p)
+	// Sin brief: retoque fiel, no transforma.
+	if !strings.Contains(low, "mejorar esta misma pieza") {
+		t.Fatalf("sin brief debe ser retoque fiel:\n%s", p)
+	}
+	if !strings.Contains(low, "qr") {
+		t.Fatalf("la escarapela debe conservar el QR:\n%s", p)
+	}
+}
+
 // The organizer's description should theme the piece, woven in as context
 // (not blank) — and an empty description must not inject a dangling label.
 func TestBuildEventBadgePrompt_WeavesDescription(t *testing.T) {
