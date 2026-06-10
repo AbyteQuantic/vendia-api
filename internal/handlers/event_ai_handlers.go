@@ -94,7 +94,7 @@ func eventAssetHandler(db *gorm.DB, geminiSvc *services.GeminiService, storageSv
 		var img []byte
 		switch kind {
 		case assetBadge:
-			img, err = geminiSvc.GenerateEventBadge(ctx, ev.Title, tenant.BusinessName, badgeSampleName, combineDescBrief(ev.Description, brief))
+			img, err = geminiSvc.GenerateEventBadge(ctx, ev.Title, tenant.BusinessName, combineDescBrief(ev.Description, brief))
 		case assetCertificate:
 			img, err = geminiSvc.GenerateEventCertificate(ctx, ev.Title, tenant.BusinessName, badgeSampleName, combineDescBrief(ev.Description, brief))
 		case assetPoster:

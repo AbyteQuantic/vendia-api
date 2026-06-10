@@ -25,24 +25,25 @@ func themeHint(description string) string {
 }
 
 // buildEventBadgePrompt composes the prompt for an event badge (escarapela).
-// It names the event, the organizer and the attendee, and explicitly reserves
-// a clear area for the validation QR (scanned at check-in/out — decision #3).
-// The design is professional and print-friendly; text in Spanish (Art. V).
-// description (optional) themes the piece to the event's subject.
-func buildEventBadgePrompt(eventTitle, businessName, attendeeName, description string) string {
-	return fmt.Sprintf(`Diseña una ESCARAPELA (credencial) vertical, moderna y profesional para un evento.
+// The escarapela is a PER-EVENT TEMPLATE reused by every attendee, so it must
+// NOT bake any attendee name into the pixels: it reserves a clean NAME band
+// (upper-middle) and a QR box (lower) that the public carné view overlays per
+// attendee at render time. The design is professional and print-friendly; text
+// in Spanish (Art. V). description (optional) themes the piece to the subject.
+func buildEventBadgePrompt(eventTitle, businessName, description string) string {
+	return fmt.Sprintf(`Diseña una ESCARAPELA (credencial) vertical, moderna y profesional para un evento. Es una PLANTILLA reutilizable: el nombre del asistente y el código QR se sobreponen después, así que NO los dibujes tú.
 
 Datos a mostrar de forma legible:
-- Nombre del asistente: "%s" (grande y destacado, centrado)
 - Evento: "%s"
 - Organizador: "%s"
 
 Requisitos de diseño:
 - Estilo limpio y elegante, apto para impresión y para verse en pantalla de celular.
 - Tipografía clara y de alto contraste; nada de texto decorativo ilegible.
-- Reserva un recuadro blanco CUADRADO, centrado horizontalmente, ubicado en la MITAD INFERIOR de la escarapela (su centro alrededor del 70-75%% de la altura), que ocupe aproximadamente el 40%% del ancho, para colocar un CÓDIGO QR de validación (NO dibujes el QR; deja el espacio en blanco, opcionalmente rotulado "QR"). Debajo del recuadro deja un pequeño margen.
+- Reserva una BANDA horizontal limpia, centrada y de buen contraste en la zona MEDIA-SUPERIOR (su centro alrededor del 40%% de la altura), VACÍA (NO escribas ningún nombre ni el texto "Nombre del Asistente"), donde luego se imprimirá el nombre del asistente.
+- Reserva un recuadro blanco CUADRADO, centrado horizontalmente, ubicado en la MITAD INFERIOR (su centro alrededor del 70-75%% de la altura), que ocupe aproximadamente el 40%% del ancho, para el CÓDIGO QR de validación (NO dibujes el QR; deja el espacio en blanco). Debajo del recuadro deja un pequeño margen.
 - Paleta sobria con un color de acento; bordes redondeados.
-- Todo el texto en español.%s`, attendeeName, eventTitle, businessName, themeHint(description))
+- Todo el texto en español.%s`, eventTitle, businessName, themeHint(description))
 }
 
 // buildEventCertificatePrompt composes the prompt for a participation
@@ -262,8 +263,8 @@ func (s *GeminiService) EnhanceEventAsset(ctx context.Context, kind EventAssetKi
 // tuned for legible typography). NOTE: FinOps usage is currently logged under
 // PROMO_BANNER; a dedicated EVENT_BADGE label (constant already defined) needs
 // the image path to be parameterized by feature — tracked as a follow-up.
-func (s *GeminiService) GenerateEventBadge(ctx context.Context, eventTitle, businessName, attendeeName, description string) ([]byte, error) {
-	return s.GeneratePromoBanner(ctx, buildEventBadgePrompt(eventTitle, businessName, attendeeName, description), nil)
+func (s *GeminiService) GenerateEventBadge(ctx context.Context, eventTitle, businessName, description string) ([]byte, error) {
+	return s.GeneratePromoBanner(ctx, buildEventBadgePrompt(eventTitle, businessName, description), nil)
 }
 
 // GenerateEventCertificate renders a participation certificate design. Same

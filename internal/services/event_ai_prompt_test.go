@@ -7,9 +7,9 @@ import (
 )
 
 func TestBuildEventBadgePrompt_IncludesAnchors(t *testing.T) {
-	p := buildEventBadgePrompt("Hackatón VendIA", "Tienda Doña Ana", "Ana Pérez", "")
+	p := buildEventBadgePrompt("Hackatón VendIA", "Tienda Doña Ana", "")
 	low := strings.ToLower(p)
-	for _, anchor := range []string{"escarapela", "hackatón vendia", "tienda doña ana", "ana pérez"} {
+	for _, anchor := range []string{"escarapela", "hackatón vendia", "tienda doña ana"} {
 		if !strings.Contains(low, anchor) {
 			t.Fatalf("prompt de escarapela no contiene %q:\n%s", anchor, p)
 		}
@@ -17,6 +17,15 @@ func TestBuildEventBadgePrompt_IncludesAnchors(t *testing.T) {
 	// Must reserve space for the validation QR (decision #3/#10).
 	if !strings.Contains(low, "qr") {
 		t.Fatalf("el prompt debe reservar el área del QR:\n%s", p)
+	}
+	// Es una PLANTILLA: no debe hornear un nombre de asistente en los píxeles;
+	// reserva una banda para sobreponerlo al renderizar.
+	if strings.Contains(low, "nombre del asistente") && !strings.Contains(low, "no escribas") {
+		t.Fatalf("la escarapela no debe hornear el nombre del asistente:\n%s", p)
+	}
+	if !strings.Contains(low, "nombre del asistente se imprim") &&
+		!strings.Contains(low, "imprimirá el nombre del asistente") {
+		t.Fatalf("la escarapela debe reservar una banda para el nombre:\n%s", p)
 	}
 }
 
@@ -166,7 +175,7 @@ func TestBuildEventAssetEnhancePrompt_NoBriefIsFaithfulRetouch(t *testing.T) {
 // The organizer's description should theme the piece, woven in as context
 // (not blank) — and an empty description must not inject a dangling label.
 func TestBuildEventBadgePrompt_WeavesDescription(t *testing.T) {
-	withDesc := buildEventBadgePrompt("Hackatón VendIA", "Tienda Doña Ana", "Ana Pérez",
+	withDesc := buildEventBadgePrompt("Hackatón VendIA", "Tienda Doña Ana",
 		"Maratón de programación con robótica y luces de neón")
 	if !strings.Contains(strings.ToLower(withDesc), "robótica") {
 		t.Fatalf("la descripción debe alimentar el prompt:\n%s", withDesc)
@@ -175,7 +184,7 @@ func TestBuildEventBadgePrompt_WeavesDescription(t *testing.T) {
 		t.Fatalf("falta el rótulo de contexto del evento:\n%s", withDesc)
 	}
 
-	noDesc := buildEventBadgePrompt("Hackatón VendIA", "Tienda Doña Ana", "Ana Pérez", "   ")
+	noDesc := buildEventBadgePrompt("Hackatón VendIA", "Tienda Doña Ana", "   ")
 	if strings.Contains(strings.ToLower(noDesc), "contexto del evento") {
 		t.Fatalf("descripción vacía no debe inyectar rótulo de contexto:\n%s", noDesc)
 	}
