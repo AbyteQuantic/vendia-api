@@ -120,7 +120,7 @@ func buildEventPosterPrompt(in PosterInput) string {
 		price = "Gratis"
 	}
 
-	prompt := fmt.Sprintf(`Actúa como un DISEÑADOR PUBLICITARIO EXPERTO. Crea un AFICHE PUBLICITARIO PROFESIONAL, vertical (relación 4:5 o 9:16), con calidad de agencia de publicidad, para promocionar este evento. Debe verse espectacular en la pantalla de un celular y dar ganas de inscribirse.
+	prompt := fmt.Sprintf(`Actúa como un DISEÑADOR PUBLICITARIO EXPERTO. Crea un AFICHE PUBLICITARIO PROFESIONAL en PROPORCIÓN 4:5 (vertical, más alto que ancho, formato de afiche), con calidad de agencia de publicidad, para promocionar este evento. Debe verse espectacular en la pantalla de un celular y dar ganas de inscribirse.
 
 LO MÁS IMPORTANTE — LA IMAGEN (no hagas SOLO texto sobre un fondo plano o un degradado):
 - Crea una composición visual RICA con una FOTOGRAFÍA o ILUSTRACIÓN PROFESIONAL como protagonista.
@@ -175,7 +175,7 @@ func assetKindNoun(kind EventAssetKind) string {
 	case AssetCertificate:
 		return "un CERTIFICADO formal y horizontal, elegante; conserva el espacio del QR de verificación si existe"
 	default:
-		return "un AFICHE PUBLICITARIO vertical, llamativo y profesional, listo para redes y catálogo, SIN código QR y con texto mínimo"
+		return "un AFICHE PUBLICITARIO vertical EN PROPORCIÓN 4:5 (más alto que ancho, formato de afiche), llamativo y profesional, listo para redes y catálogo, SIN código QR y con texto mínimo"
 	}
 }
 
