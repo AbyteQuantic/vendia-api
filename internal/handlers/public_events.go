@@ -210,6 +210,7 @@ func PublicGetCarnet(db *gorm.DB) gin.HandlerFunc {
 			"currency":             ev.Currency,
 			"installments_enabled": ev.InstallmentsEnabled,
 			"installments_count":   ev.InstallmentsCount,
+			"seat_number":          reg.SeatNumber,
 			"confirmed":            confirmed,
 		}
 		// El QR (carné válido) solo viaja cuando el pago está completo.
