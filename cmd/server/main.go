@@ -572,6 +572,8 @@ func main() {
 		// QR de un medio de pago → devuelve la URL para payment_details (sirve
 		// al crear y al editar; ruta propia para no chocar con /events/:id).
 		v1.POST("/event-payment-qr", handlers.UploadEventPaymentQR(storageSvc))
+		// Agente de IA que redacta la descripción del evento.
+		v1.POST("/event-description-ai", handlers.GenerateEventDescriptionAI(geminiSvc))
 		// "Mejorar con IA" — retoca la imagen actual (subida o generada).
 		v1.POST("/events/:id/badge/ai-enhance", handlers.GenerateEventBadgeEnhance(db, geminiSvc, storageSvc))
 		v1.POST("/events/:id/certificate/ai-enhance", handlers.GenerateEventCertificateEnhance(db, geminiSvc, storageSvc))

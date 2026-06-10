@@ -24,6 +24,57 @@ func themeHint(description string) string {
 	return fmt.Sprintf("\n\nContexto del evento (úsalo para inspirar colores, íconos y motivos acordes al tema, sin escribir este texto en la pieza):\n%s", d)
 }
 
+// EventDescriptionInput carries what the organizer answered about the event so
+// the AI agent can draft a compelling public description.
+type EventDescriptionInput struct {
+	Title    string
+	Type     string // curso/conferencia/…
+	Modality string // presencial/virtual/híbrido
+	Audience string // ¿para quién es?
+	Includes string // ¿qué incluye / qué aprenderán?
+	Level    string // nivel (opcional)
+	Extra    string // algo más a destacar (opcional)
+	Current  string // descripción actual (si la quiere mejorar)
+}
+
+// BuildEventDescriptionPrompt composes the prompt for the description agent.
+// Output: copy de catálogo en español neutro (modo USTED), cálido y concreto,
+// con markdown ligero (negritas/viñetas) pero sin títulos grandes.
+func BuildEventDescriptionPrompt(in EventDescriptionInput) string {
+	var b strings.Builder
+	b.WriteString("Actúa como un COPYWRITER experto en eventos. Escribe una descripción ATRACTIVA y clara para el catálogo público de un evento, que dé ganas de inscribirse.\n\n")
+	b.WriteString("Reglas:\n")
+	b.WriteString("- Español neutro de Colombia, en modo USTED (nunca voseo: usa 'descubra', 'aprenda', 'inscríbase').\n")
+	b.WriteString("- 2 a 4 párrafos cortos o una mezcla de párrafo + viñetas. Markdown LIGERO: puedes usar **negritas** y viñetas con '- ', NO uses títulos con '#'.\n")
+	b.WriteString("- Concreta y honesta: nada de promesas vacías ni relleno. No inventes datos que no te di.\n")
+	b.WriteString("- No repitas el precio, la fecha ni el lugar (eso ya se muestra aparte).\n")
+	b.WriteString("- Devuelve SOLO la descripción, sin comillas ni encabezados como 'Descripción:'.\n\n")
+	b.WriteString("Datos del evento:\n")
+	b.WriteString(fmt.Sprintf("- Título: %s\n", strings.TrimSpace(in.Title)))
+	if in.Type != "" {
+		b.WriteString(fmt.Sprintf("- Tipo: %s\n", in.Type))
+	}
+	if in.Modality != "" {
+		b.WriteString(fmt.Sprintf("- Modalidad: %s\n", in.Modality))
+	}
+	if s := strings.TrimSpace(in.Audience); s != "" {
+		b.WriteString(fmt.Sprintf("- Para quién es: %s\n", s))
+	}
+	if s := strings.TrimSpace(in.Includes); s != "" {
+		b.WriteString(fmt.Sprintf("- Qué incluye / qué aprenderán: %s\n", s))
+	}
+	if s := strings.TrimSpace(in.Level); s != "" {
+		b.WriteString(fmt.Sprintf("- Nivel: %s\n", s))
+	}
+	if s := strings.TrimSpace(in.Extra); s != "" {
+		b.WriteString(fmt.Sprintf("- Otros detalles a destacar: %s\n", s))
+	}
+	if s := strings.TrimSpace(in.Current); s != "" {
+		b.WriteString(fmt.Sprintf("\nMejora y pule esta descripción base manteniendo su intención:\n\"\"\"\n%s\n\"\"\"\n", s))
+	}
+	return b.String()
+}
+
 // buildEventBadgePrompt composes the prompt for an event badge (escarapela).
 // The escarapela is a PER-EVENT TEMPLATE reused by every attendee, so it must
 // NOT bake any attendee name into the pixels: it reserves a clean NAME band

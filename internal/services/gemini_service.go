@@ -1109,6 +1109,45 @@ func (s *GeminiService) callWithImage(ctx context.Context, imageData []byte, mim
 	return text, nil
 }
 
+// GenerateText runs a plain TEXT-only generation (no image) and returns the
+// model's text. Backs AI-assisted copy like the event description agent.
+func (s *GeminiService) GenerateText(ctx context.Context, prompt string) (string, error) {
+	if s == nil || s.apiKey == "" {
+		return "", fmt.Errorf("gemini not configured")
+	}
+	payload := map[string]any{
+		"contents": []map[string]any{
+			{"parts": []map[string]any{{"text": prompt}}},
+		},
+		"generationConfig": map[string]any{"temperature": 0.7},
+	}
+	body, _ := json.Marshal(payload)
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", s.model, s.apiKey)
+
+	reqCtx, cancel := s.requestContext(ctx)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(reqCtx, "POST", url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("gemini request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read gemini response: %w", err)
+	}
+	var gr geminiResponse
+	if err := json.Unmarshal(respBody, &gr); err != nil {
+		return "", fmt.Errorf("parse gemini response: %w", err)
+	}
+	if len(gr.Candidates) == 0 || len(gr.Candidates[0].Content.Parts) == 0 {
+		return "", fmt.Errorf("empty gemini response")
+	}
+	return strings.TrimSpace(gr.Candidates[0].Content.Parts[0].Text), nil
+}
+
 func (s *GeminiService) callImageGeneration(ctx context.Context, feature, prompt string, count int) ([]LogoResult, error) {
 	payload := map[string]any{
 		"contents": []map[string]any{

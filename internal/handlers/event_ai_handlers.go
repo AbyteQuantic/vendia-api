@@ -47,6 +47,53 @@ func GenerateEventPosterImage(db *gorm.DB, geminiSvc *services.GeminiService, st
 	return eventAssetHandler(db, geminiSvc, storageSvc, assetPoster)
 }
 
+// GenerateEventDescriptionAI — POST /api/v1/event-description-ai (admin).
+// Agente que redacta la descripción del evento a partir de lo que el
+// organizador respondió (audiencia, qué incluye, nivel…). No requiere id del
+// evento: sirve al crear y al editar. Ruta propia para no chocar con
+// /events/:id (Gin no mezcla :id y segmento estático al mismo nivel).
+func GenerateEventDescriptionAI(geminiSvc *services.GeminiService) gin.HandlerFunc {
+	type request struct {
+		Title    string `json:"title"`
+		Type     string `json:"type"`
+		Modality string `json:"modality"`
+		Audience string `json:"audience"`
+		Includes string `json:"includes"`
+		Level    string `json:"level"`
+		Extra    string `json:"extra"`
+		Current  string `json:"current"`
+	}
+	return func(c *gin.Context) {
+		if !requireEventAdmin(c) {
+			return
+		}
+		if geminiSvc == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "servicio de IA no configurado"})
+			return
+		}
+		var req request
+		_ = c.ShouldBindJSON(&req)
+		if strings.TrimSpace(req.Title) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "ponle primero un nombre al evento"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(
+			aiusage.WithTenantID(c.Request.Context(), middleware.GetTenantID(c)), 30*time.Second)
+		defer cancel()
+		text, err := geminiSvc.GenerateText(ctx, services.BuildEventDescriptionPrompt(
+			services.EventDescriptionInput{
+				Title: req.Title, Type: req.Type, Modality: req.Modality,
+				Audience: req.Audience, Includes: req.Includes,
+				Level: req.Level, Extra: req.Extra, Current: req.Current,
+			}))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "no pudimos generar la descripción, intenta de nuevo"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{"description": text}})
+	}
+}
+
 type eventAssetKind int
 
 const (

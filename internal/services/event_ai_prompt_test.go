@@ -6,6 +6,37 @@ import (
 	"testing"
 )
 
+func TestBuildEventDescriptionPrompt_WeavesAnswers(t *testing.T) {
+	p := BuildEventDescriptionPrompt(EventDescriptionInput{
+		Title:    "Curso de color Ámbar",
+		Type:     "curso",
+		Audience: "estilistas que quieren dominar el tono ámbar",
+		Includes: "teoría del color, práctica y kit de muestras",
+	})
+	low := strings.ToLower(p)
+	for _, anchor := range []string{
+		"curso de color ámbar", "estilistas", "teoría del color", "modo usted",
+	} {
+		if !strings.Contains(low, anchor) {
+			t.Fatalf("el prompt debe tejer %q:\n%s", anchor, p)
+		}
+	}
+	// No debe pedir repetir precio/fecha (van aparte).
+	if !strings.Contains(low, "no repitas el precio") {
+		t.Fatalf("debe evitar repetir precio/fecha:\n%s", p)
+	}
+}
+
+func TestBuildEventDescriptionPrompt_ImproveMode(t *testing.T) {
+	p := BuildEventDescriptionPrompt(EventDescriptionInput{
+		Title:   "Hackatón",
+		Current: "Un evento de programación.",
+	})
+	if !strings.Contains(strings.ToLower(p), "mejora y pule esta descripción base") {
+		t.Fatalf("con Current debe entrar en modo mejora:\n%s", p)
+	}
+}
+
 func TestBuildEventBadgePrompt_IncludesAnchors(t *testing.T) {
 	p := buildEventBadgePrompt("Hackatón VendIA", "Tienda Doña Ana", "")
 	low := strings.ToLower(p)
