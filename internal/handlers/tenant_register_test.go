@@ -247,12 +247,18 @@ func TestTenantRegister_JWT_HasCorrectExpiry(t *testing.T) {
 	claims, err := auth.ValidateToken(token, testSecret)
 	require.NoError(t, err)
 
+	// El token de acceso dura auth.AccessTokenDuration (7 días — fricción
+	// cero para tiendas, ver auth/jwt.go). Referenciamos la constante para
+	// que la prueba no se desactualice si el valor cambia, dejando ±2 min de
+	// tolerancia por la latencia del request en CI.
 	expiresAt := claims.ExpiresAt.Time
-	expectedMin := time.Now().Add(14 * time.Minute)
-	expectedMax := time.Now().Add(16 * time.Minute)
+	expectedMin := time.Now().Add(auth.AccessTokenDuration - 2*time.Minute)
+	expectedMax := time.Now().Add(auth.AccessTokenDuration + 2*time.Minute)
 
-	assert.True(t, expiresAt.After(expectedMin))
-	assert.True(t, expiresAt.Before(expectedMax))
+	assert.True(t, expiresAt.After(expectedMin),
+		"el token debe expirar ~%s en el futuro", auth.AccessTokenDuration)
+	assert.True(t, expiresAt.Before(expectedMax),
+		"el token no debe expirar más allá de ~%s", auth.AccessTokenDuration)
 
 	refreshToken, ok := resp["refresh_token"].(string)
 	assert.True(t, ok, "response must contain refresh_token")
@@ -261,8 +267,8 @@ func TestTenantRegister_JWT_HasCorrectExpiry(t *testing.T) {
 
 // TestTenantRegister_CreatesTrialSubscription verifies AC-01: registering
 // a tenant creates its TenantSubscription row in TRIAL state with a
-// trial_ends_at 14 days out — inside the registration transaction, not
-// via a DB trigger Render never runs.
+// trial_ends_at models.TrialDays out — inside the registration transaction,
+// not via a DB trigger Render never runs.
 func TestTenantRegister_CreatesTrialSubscription(t *testing.T) {
 	db := setupTestDB(t)
 	phone := uniquePhone()
@@ -286,13 +292,15 @@ func TestTenantRegister_CreatesTrialSubscription(t *testing.T) {
 		"el trial arranca en el plan base")
 	require.NotNil(t, sub.TrialEndsAt, "trial_ends_at no puede ser nil")
 
-	// 14 días ±1 día de tolerancia para latencia del request.
-	expectedMin := before.Add(13*24*time.Hour + 23*time.Hour)
-	expectedMax := before.Add(14*24*time.Hour + 1*time.Hour)
+	// models.TrialDays (7) ±1 hora de tolerancia. Referenciamos la constante
+	// para que la prueba siga al valor real del trial (reverse trial, F-SaaS).
+	trial := time.Duration(models.TrialDays) * 24 * time.Hour
+	expectedMin := before.Add(trial - 1*time.Hour)
+	expectedMax := before.Add(trial + 1*time.Hour)
 	assert.True(t, sub.TrialEndsAt.After(expectedMin),
-		"trial_ends_at debe estar ~14 días en el futuro")
+		"trial_ends_at debe estar ~%d días en el futuro", models.TrialDays)
 	assert.True(t, sub.TrialEndsAt.Before(expectedMax),
-		"trial_ends_at no debe pasar de ~14 días")
+		"trial_ends_at no debe pasar de ~%d días", models.TrialDays)
 }
 
 // ── T-04: Spec F023 — capability toggles in registration ──────────────────

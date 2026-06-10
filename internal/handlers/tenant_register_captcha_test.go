@@ -141,6 +141,10 @@ func TestRegisterCaptcha_ConTokenDePrueba(t *testing.T) {
 			"name": "La Tiendita Test",
 			"type": "tienda_barrio",
 		},
+		// sale_types es obligatorio en el contrato de registro (required,min=1).
+		"config": map[string]interface{}{
+			"sale_types": []string{"products"},
+		},
 	}
 
 	body, _ := json.Marshal(payload)

@@ -149,11 +149,13 @@ func TestUpdateStoreSlug_InvalidFormat(t *testing.T) {
 
 	r := setupSlugRouter(db, tenantID)
 
+	// Nota: las mayúsculas NO son inválidas — el handler las normaliza a
+	// minúsculas (fricción cero, Art. I). Eso lo cubre
+	// TestUpdateStoreSlug_NormalizesUppercase.
 	cases := []struct {
 		name string
 		slug string
 	}{
-		{"uppercase", "MiTienda"},
 		{"spaces", "mi tienda"},
 		{"leading-dash", "-mitienda"},
 		{"too-short", "ab"},
@@ -199,4 +201,33 @@ func TestUpdateStoreSlug_HappyPath(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, slug, resp.Data.Slug)
 	assert.Contains(t, resp.Data.PublicURL, slug)
+}
+
+// TestUpdateStoreSlug_NormalizesUppercase verifica que un slug con mayúsculas
+// NO se rechaza: el handler lo normaliza a minúsculas y lo acepta (Art. I,
+// fricción cero — el tendero no debería pelear con el formato).
+func TestUpdateStoreSlug_NormalizesUppercase(t *testing.T) {
+	db := setupTestDB(t)
+	tenantID := createTenantWithBusinessName(t, db, "Tienda X", uniquePhone())
+	t.Cleanup(func() { cleanupTenant(t, db, tenantID) })
+
+	r := setupSlugRouter(db, tenantID)
+
+	suffix := uniquePhone()[len(uniquePhone())-4:]
+	body, _ := json.Marshal(map[string]string{"slug": "MiTienda-" + suffix})
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("PATCH", "/api/v1/store/slug", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	var resp struct {
+		Data struct {
+			Slug string `json:"slug"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "mitienda-"+suffix, resp.Data.Slug,
+		"el slug debe normalizarse a minúsculas")
 }

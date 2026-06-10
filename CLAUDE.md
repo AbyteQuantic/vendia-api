@@ -24,7 +24,7 @@ VendIA is an offline-first POS (Point of Sale) system for small businesses in Co
 ## Tech Stack
 - **Language:** Go 1.25+ with Gin web framework (NOT Fiber)
 - **Database:** PostgreSQL with GORM ORM (auto-migrate, no raw SQL in handlers)
-- **Auth:** JWT HS256 (15min access + 30day refresh tokens via `golang-jwt/jwt/v5`)
+- **Auth:** JWT HS256 (7-day access + 90-day refresh tokens via `golang-jwt/jwt/v5` — ver `auth.AccessTokenDuration`/`RefreshTokenDuration`; access largo = fricción cero para tiendas)
 - **AI:** Google Gemini 2.0 Flash (invoice OCR, photo enhance, logo generation)
 - **Storage:** Cloudflare R2 via AWS SDK Go v2 (images converted to WebP, max 50KB)
 - **Cache:** Redis (planned, env var ready)
