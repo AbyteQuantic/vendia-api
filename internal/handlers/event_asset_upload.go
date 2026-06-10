@@ -39,6 +39,49 @@ func UploadEventCertificateImage(db *gorm.DB, storageSvc services.FileStorage) g
 	return eventAssetUploadHandler(db, storageSvc, assetCertificate)
 }
 
+// UploadEventPaymentQR — POST /api/v1/event-payment-qr (admin). Sube la imagen
+// del QR de un medio de pago y DEVUELVE su URL (no la persiste en un evento),
+// para incluirla en payment_details al guardar. Así funciona tanto al crear
+// (aún sin id) como al editar. Fallback a data URL si no hay storage.
+func UploadEventPaymentQR(storageSvc services.FileStorage) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !requireEventAdmin(c) {
+			return
+		}
+		tenantID := middleware.GetTenantID(c)
+
+		file, header, err := c.Request.FormFile("image")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "imagen requerida (campo: image)"})
+			return
+		}
+		defer file.Close()
+		if header.Size > maxEventAssetBytes {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "la imagen excede 8MB"})
+			return
+		}
+		mimeType := header.Header.Get("Content-Type")
+		if !strings.HasPrefix(mimeType, "image/") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "el archivo debe ser una imagen"})
+			return
+		}
+		data, err := io.ReadAll(file)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al leer la imagen"})
+			return
+		}
+
+		url := "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data)
+		if storageSvc != nil {
+			key := fmt.Sprintf("events/%s/payment-qr/%s", tenantID, uuid.NewString()[:8])
+			if uploaded, upErr := storageSvc.Upload(c.Request.Context(), "event-assets", key, data, mimeType); upErr == nil {
+				url = uploaded
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{"url": url}})
+	}
+}
+
 // eventAssetUploadHandler is shared by the three "upload your own" endpoints —
 // they differ only in which template field stores the URL. Mirrors the product
 // photo upload, with a data-URL fallback so it still works when object storage

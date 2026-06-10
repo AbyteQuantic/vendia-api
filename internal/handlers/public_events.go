@@ -210,6 +210,7 @@ func PublicGetCarnet(db *gorm.DB) gin.HandlerFunc {
 			"currency":             ev.Currency,
 			"installments_enabled": ev.InstallmentsEnabled,
 			"installments_count":   ev.InstallmentsCount,
+			"payment_details":      ev.PaymentDetails,
 			"seat_number":          reg.SeatNumber,
 			"confirmed":            confirmed,
 		}

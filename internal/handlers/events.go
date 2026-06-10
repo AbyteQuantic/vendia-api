@@ -48,9 +48,10 @@ type eventInput struct {
 	Capacity              int                       `json:"capacity"`
 	Price                 int64                     `json:"price"`
 	Currency              string                    `json:"currency"`
-	EnabledPaymentMethods []string                  `json:"enabled_payment_methods"`
-	InstallmentsEnabled   bool                      `json:"installments_enabled"`
-	InstallmentsCount     int                       `json:"installments_count"`
+	EnabledPaymentMethods []string                    `json:"enabled_payment_methods"`
+	PaymentDetails        []models.EventPaymentDetail `json:"payment_details"`
+	InstallmentsEnabled   bool                        `json:"installments_enabled"`
+	InstallmentsCount     int                         `json:"installments_count"`
 	CustomFields          []models.EventCustomField `json:"custom_fields"`
 	Sessions              []models.EventSession     `json:"sessions"`
 	AttendanceRule        string                    `json:"attendance_rule"`
@@ -70,6 +71,7 @@ func (in eventInput) toModel() *models.Event {
 		Price:                 in.Price,
 		Currency:              in.Currency,
 		EnabledPaymentMethods: in.EnabledPaymentMethods,
+		PaymentDetails:        in.PaymentDetails,
 		InstallmentsEnabled:   in.InstallmentsEnabled,
 		InstallmentsCount:     in.InstallmentsCount,
 		CustomFields:          in.CustomFields,

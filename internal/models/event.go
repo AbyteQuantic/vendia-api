@@ -69,6 +69,11 @@ type Event struct {
 	// accepted for this event (e.g. ["epayco","fiado","manual","cobro_digital"]).
 	EnabledPaymentMethods []string `gorm:"serializer:json;type:jsonb;default:'[]'" json:"enabled_payment_methods"`
 
+	// PaymentDetails carries, per enabled method, the organizer's payment data
+	// (account/Nequi number, instructions) and an optional QR image, so the
+	// attendee knows WHERE to pay before reporting the proof (FR-09).
+	PaymentDetails []EventPaymentDetail `gorm:"serializer:json;type:jsonb;default:'[]'" json:"payment_details"`
+
 	// Installments — manual mode only in the MVP (spec decision #9). The
 	// automatic recurring charge is out of MVP scope.
 	InstallmentsEnabled bool `gorm:"default:false" json:"installments_enabled"`
@@ -94,6 +99,15 @@ type Event struct {
 	// surfaces. Unlike the badge/certificate it carries NO QR; it sells the
 	// event. Produced by the organizer with optional Gemini assistance.
 	PosterTemplate EventTemplate `gorm:"serializer:json;type:jsonb;default:'{}'" json:"poster_template"`
+}
+
+// EventPaymentDetail are the organizer's payment data for ONE method: free
+// text instructions (account/Nequi number, name, etc.) and an optional QR
+// image. Shown to the attendee on the carné when the payment is pending.
+type EventPaymentDetail struct {
+	Method       string `json:"method"`        // matches an EnabledPaymentMethods value
+	Instructions string `json:"instructions"`  // número de cuenta / Nequi / indicaciones
+	QRImageURL   string `json:"qr_image_url"`  // imagen QR opcional (R2 o data URL)
 }
 
 // EventCustomField is one organizer-defined inscription field.
