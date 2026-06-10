@@ -232,6 +232,14 @@ func eventAssetEnhanceHandler(db *gorm.DB, geminiSvc *services.GeminiService, st
 			return
 		}
 
+		// Indicaciones opcionales del organizador: si vienen, la IA RECREA la
+		// escena siguiéndolas (usando la foto como referencia); si no, retoca.
+		var body struct {
+			Brief string `json:"brief"`
+		}
+		_ = c.ShouldBindJSON(&body)
+		brief := strings.TrimSpace(body.Brief)
+
 		ctx, cancel := context.WithTimeout(aiusage.WithTenantID(c.Request.Context(), tenantID), 60*time.Second)
 		defer cancel()
 
@@ -241,7 +249,7 @@ func eventAssetEnhanceHandler(db *gorm.DB, geminiSvc *services.GeminiService, st
 			return
 		}
 
-		enhanced, err := geminiSvc.EnhanceEventAsset(ctx, data, mime, serviceAssetKind(kind))
+		enhanced, err := geminiSvc.EnhanceEventAsset(ctx, data, mime, serviceAssetKind(kind), brief)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("error al mejorar la imagen: %v", err)})
 			return

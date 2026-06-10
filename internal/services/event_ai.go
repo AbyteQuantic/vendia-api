@@ -167,46 +167,75 @@ const (
 	AssetCertificate
 )
 
-// buildEventAssetEnhancePrompt instructs Gemini to IMPROVE an existing event
-// piece (the image the organizer uploaded or generated) — like the inventory
-// photo enhancer, but for design pieces: refine typography, color, composition
-// and polish to a professional level WITHOUT changing the textual content,
-// names, dates or layout intent. The badge/certificate must keep their QR area.
-func buildEventAssetEnhancePrompt(kind EventAssetKind) string {
-	base := `Eres un DISEÑADOR GRÁFICO PROFESIONAL retocando una pieza ya existente. La imagen adjunta ES la pieza: respétala como única fuente de verdad de su contenido.
-
-TU TAREA: MEJORAR esta misma pieza a calidad de agencia — refina tipografía, jerarquía, contraste, color, iluminación, composición y nitidez; corrige lo que se vea amateur. El resultado debe verse claramente como la MISMA pieza, solo más profesional.
-
-PROHIBIDO:
-- NO cambies el texto, los nombres, las fechas, los precios ni el idioma (español).
-- NO inventes ni elimines información; conserva todos los datos que ya aparecen.
-- NO agregues marcas de agua ni logos ajenos.`
-
+// assetKindNoun returns the Spanish piece name + framing per kind.
+func assetKindNoun(kind EventAssetKind) string {
 	switch kind {
 	case AssetBadge:
-		return base + `
-- CONSERVA el recuadro/área reservada para el CÓDIGO QR (no lo borres ni lo tapes).
-
-Es una ESCARAPELA (credencial) vertical: hazla más limpia, legible y elegante, apta para imprimir y para verse en celular.`
+		return "una ESCARAPELA (credencial) vertical, limpia y legible; CONSERVA el recuadro/área del CÓDIGO QR"
 	case AssetCertificate:
-		return base + `
-- CONSERVA el espacio para el código QR de verificación si existe.
-
-Es un CERTIFICADO formal y horizontal: mejora el marco, la tipografía serif y el aspecto digno de imprimir, sin perder solemnidad.`
-	default: // poster
-		return base + `
-- NO agregues ningún código QR (es una pieza publicitaria).
-- Mantén el texto al mínimo (título, fecha, precio, llamado a la acción); si hay una escena/foto, mejórala con iluminación y composición de campaña real.
-
-Es un AFICHE PUBLICITARIO vertical: hazlo más llamativo y profesional, listo para redes y catálogo.`
+		return "un CERTIFICADO formal y horizontal, elegante; conserva el espacio del QR de verificación si existe"
+	default:
+		return "un AFICHE PUBLICITARIO vertical, llamativo y profesional, listo para redes y catálogo, SIN código QR y con texto mínimo"
 	}
 }
 
-// EnhanceEventAsset improves an existing event piece image with Gemini,
-// preserving its content (image-to-image). Returns the enhanced bytes.
-func (s *GeminiService) EnhanceEventAsset(ctx context.Context, imageData []byte, mimeType string, kind EventAssetKind) ([]byte, error) {
+// buildEventAssetEnhancePrompt instructs Gemini on the image-to-image step.
+// Two very different modes depending on whether the organizer wrote a brief:
+//   - WITH brief → an INSTRUCTED TRANSFORM: use the attached photo as visual
+//     reference (keep the people's likeness) but RE-CREATE the scene following
+//     the organizer's instructions (e.g., "la docente enseñando a un grupo de
+//     alumnos"). This is what fixes "subí una foto y la IA hizo algo distinto".
+//   - WITHOUT brief → a faithful RETOUCH: only improve quality, never change
+//     the content.
+func buildEventAssetEnhancePrompt(kind EventAssetKind, brief string) string {
+	noun := assetKindNoun(kind)
+	brief = strings.TrimSpace(brief)
+	if len(brief) > 600 {
+		brief = brief[:600]
+	}
+
+	if brief != "" {
+		return fmt.Sprintf(`Eres un DISEÑADOR PUBLICITARIO experto. Tienes una FOTO de referencia (adjunta) y debes crear %s para un evento, SIGUIENDO AL PIE DE LA LETRA las indicaciones del organizador.
+
+INDICACIONES DEL ORGANIZADOR (esto es lo que debe mostrar la pieza):
+%s
+
+CÓMO USAR LA FOTO:
+- Usa a la(s) PERSONA(S) de la foto como protagonista(s): conserva su parecido, rostro y rasgos reconocibles.
+- RECREA la escena, el entorno, las poses y los demás elementos según las indicaciones (puedes agregar personas, objetos, fondo y acciones que pidan las indicaciones). NO te limites a la escena original de la foto.
+- Ignora el fondo o los objetos de la foto que no correspondan a las indicaciones (p. ej. comida, bar): no los incluyas.
+
+CALIDAD: fotografía/ilustración profesional, iluminación cinematográfica, composición de campaña real, español sin faltas. Resultado: %s.`, noun, brief, noun)
+	}
+
+	base := `Eres un DISEÑADOR GRÁFICO PROFESIONAL retocando una pieza ya existente. La imagen adjunta ES la pieza: respétala como única fuente de verdad de su contenido.
+
+TU TAREA: MEJORAR esta misma pieza a calidad de agencia — refina tipografía, jerarquía, contraste, color, iluminación, composición y nitidez. El resultado debe verse como la MISMA pieza, solo más profesional.
+
+PROHIBIDO:
+- NO cambies el texto, los nombres, las fechas ni los precios.
+- NO inventes ni elimines información; conserva todos los datos que ya aparecen.`
+
+	switch kind {
+	case AssetBadge:
+		return base + "\n- CONSERVA el recuadro del CÓDIGO QR.\n\nEs una escarapela vertical: hazla más limpia y legible."
+	case AssetCertificate:
+		return base + "\n- CONSERVA el espacio del QR si existe.\n\nEs un certificado formal: mejora marco y tipografía serif."
+	default:
+		return base + "\n- NO agregues QR; mantén el texto al mínimo.\n\nEs un afiche publicitario: hazlo más llamativo y profesional."
+	}
+}
+
+// EnhanceEventAsset improves/transforms an existing event piece image with
+// Gemini. With a brief it RE-CREATES the scene per the organizer's
+// instructions (higher temperature); without one it faithfully retouches.
+func (s *GeminiService) EnhanceEventAsset(ctx context.Context, imageData []byte, mimeType string, kind EventAssetKind, brief string) ([]byte, error) {
+	temp := 0.25
+	if strings.TrimSpace(brief) != "" {
+		temp = 0.65 // permite recrear la escena siguiendo las indicaciones
+	}
 	return s.enhanceImageWithPrompt(ctx, imageData, mimeType,
-		buildEventAssetEnhancePrompt(kind), "EVENT_ASSET_ENHANCE")
+		buildEventAssetEnhancePrompt(kind, brief), "EVENT_ASSET_ENHANCE", temp)
 }
 
 // GenerateEventBadge renders an escarapela design for an event via Gemini and
