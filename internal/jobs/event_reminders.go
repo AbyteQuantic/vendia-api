@@ -21,6 +21,11 @@ const EventReminderWindow = 24 * time.Hour
 // overdue) to trigger a reminder (D3 — uses the persisted schedule).
 const QuotaReminderWindow = 3 * 24 * time.Hour
 
+// ProofRetentionAfterEnd: los comprobantes de pago se conservan para revisión
+// como máximo 15 días después de que el evento termina; luego se purga la
+// referencia (privacidad + limpieza). Pedido del dueño.
+const ProofRetentionAfterEnd = 15 * 24 * time.Hour
+
 // publicSiteURL is the public catalog host. The reminder deep link carries the
 // attendee's token (?reg=) so opening it leaves them "logged in" to see their
 // event component (countdown, ubicación, estado de pago) and carné.
@@ -56,6 +61,7 @@ type EventReminderResult struct {
 	EventRemindersSent int `json:"event_reminders_sent"`
 	QuotaRemindersSent int `json:"quota_reminders_sent"`
 	OrganizerPushes    int `json:"organizer_pushes"`
+	ProofsPurged       int `json:"proofs_purged"`
 }
 
 // RunEventReminders emails attendees about upcoming events and pending
@@ -107,7 +113,33 @@ func RunEventReminders(db *gorm.DB, now time.Time, dispatcher *push.Dispatcher, 
 
 	// ── Pending-installment reminders ─────────────────────────────────
 	res.QuotaRemindersSent = sendQuotaReminders(ctx, db, emailSvc, now)
+
+	// ── Limpieza: comprobantes de pago de eventos terminados hace +15 días ─
+	res.ProofsPurged = purgeExpiredProofs(db, now)
 	return res, nil
+}
+
+// purgeExpiredProofs borra la referencia al comprobante (proof_url) de los
+// pagos cuyos eventos terminaron hace más de ProofRetentionAfterEnd. Usa el
+// fin del evento, o el inicio si no hay fin. Solo limpia la referencia en BD
+// (deja de mostrarse en la bandeja del organizador); el objeto en R2 se
+// recolecta aparte. Devuelve cuántas referencias purgó.
+func purgeExpiredProofs(db *gorm.DB, now time.Time) int {
+	cutoff := now.Add(-ProofRetentionAfterEnd)
+	var eventIDs []string
+	db.Model(&models.Event{}).
+		Where("COALESCE(end_at, start_at) IS NOT NULL AND COALESCE(end_at, start_at) < ?", cutoff).
+		Pluck("id", &eventIDs)
+	if len(eventIDs) == 0 {
+		return 0
+	}
+	r := db.Model(&models.EventPayment{}).
+		Where("event_id IN ? AND proof_url <> ''", eventIDs).
+		Update("proof_url", "")
+	if r.Error != nil {
+		return 0
+	}
+	return int(r.RowsAffected)
 }
 
 // regCustomer is a registration joined with its attendee contact info.

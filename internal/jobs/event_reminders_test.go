@@ -22,6 +22,7 @@ func setupReminderDB(t *testing.T) *gorm.DB {
 	require.NoError(t, db.AutoMigrate(
 		&models.Event{}, &models.EventRegistration{}, &models.Customer{},
 		&models.CreditAccount{}, &models.EventInstallment{}, &models.Tenant{},
+		&models.EventPayment{},
 	))
 	return db
 }
@@ -32,6 +33,42 @@ func seedTenant(t *testing.T, db *gorm.DB, id, slug string) {
 		BaseModel: models.BaseModel{ID: id}, OwnerName: "Org", Phone: "3000000000",
 		StoreSlug: &slug,
 	}).Error)
+}
+
+func TestRunEventReminders_PurgesProofsAfter15Days(t *testing.T) {
+	db := setupReminderDB(t)
+	now := time.Date(2026, 6, 9, 8, 0, 0, 0, time.UTC)
+	oldEnd := now.Add(-16 * 24 * time.Hour) // terminó hace 16 días → purgar
+	recentEnd := now.Add(-2 * 24 * time.Hour) // hace 2 días → conservar
+
+	require.NoError(t, db.Create(&models.Event{
+		BaseModel: models.BaseModel{ID: "evOld"}, TenantID: "t1", Title: "Viejo",
+		Status: models.EventStatusPublicado, StartAt: &oldEnd, EndAt: &oldEnd,
+	}).Error)
+	require.NoError(t, db.Create(&models.Event{
+		BaseModel: models.BaseModel{ID: "evNew"}, TenantID: "t1", Title: "Reciente",
+		Status: models.EventStatusPublicado, StartAt: &recentEnd, EndAt: &recentEnd,
+	}).Error)
+	require.NoError(t, db.Create(&models.EventPayment{
+		BaseModel: models.BaseModel{ID: "payOld"}, TenantID: "t1", EventID: "evOld",
+		RegistrationID: "r0", Amount: 1000, ProofURL: "https://r2/old.png",
+		Status: models.EventPaymentApproved,
+	}).Error)
+	require.NoError(t, db.Create(&models.EventPayment{
+		BaseModel: models.BaseModel{ID: "payNew"}, TenantID: "t1", EventID: "evNew",
+		RegistrationID: "r9", Amount: 1000, ProofURL: "https://r2/new.png",
+		Status: models.EventPaymentApproved,
+	}).Error)
+
+	res, err := jobs.RunEventReminders(db, now, nil, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.ProofsPurged)
+
+	var oldPay, newPay models.EventPayment
+	require.NoError(t, db.First(&oldPay, "id = ?", "payOld").Error)
+	require.NoError(t, db.First(&newPay, "id = ?", "payNew").Error)
+	require.Equal(t, "", oldPay.ProofURL, "el comprobante viejo se purga")
+	require.Equal(t, "https://r2/new.png", newPay.ProofURL, "el reciente se conserva")
 }
 
 func TestRunEventReminders_EmailsUpcomingAttendees(t *testing.T) {
