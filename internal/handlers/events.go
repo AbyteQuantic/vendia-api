@@ -45,6 +45,7 @@ type eventInput struct {
 	LocationOrLink        string                    `json:"location_or_link"`
 	Capacity              int                       `json:"capacity"`
 	Price                 int64                     `json:"price"`
+	Currency              string                    `json:"currency"`
 	EnabledPaymentMethods []string                  `json:"enabled_payment_methods"`
 	InstallmentsEnabled   bool                      `json:"installments_enabled"`
 	InstallmentsCount     int                       `json:"installments_count"`
@@ -63,6 +64,7 @@ func (in eventInput) toModel() *models.Event {
 		LocationOrLink:        in.LocationOrLink,
 		Capacity:              in.Capacity,
 		Price:                 in.Price,
+		Currency:              in.Currency,
 		EnabledPaymentMethods: in.EnabledPaymentMethods,
 		InstallmentsEnabled:   in.InstallmentsEnabled,
 		InstallmentsCount:     in.InstallmentsCount,

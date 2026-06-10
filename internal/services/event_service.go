@@ -131,6 +131,9 @@ func applyEventPatch(dst, src *models.Event) {
 	dst.EndAt = src.EndAt
 	dst.Capacity = src.Capacity
 	dst.Price = src.Price
+	if src.Currency != "" {
+		dst.Currency = src.Currency
+	}
 	if len(src.EnabledPaymentMethods) > 0 {
 		dst.EnabledPaymentMethods = src.EnabledPaymentMethods
 	}

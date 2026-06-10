@@ -23,6 +23,10 @@ const (
 	EventStatusArchivado = "archivado"
 	EventStatusCancelado = "cancelado"
 
+	// Currencies a paid event can charge in.
+	CurrencyCOP = "COP"
+	CurrencyUSD = "USD"
+
 	// AttendanceRule decides certificate eligibility (spec §7).
 	AttendanceRuleInOut       = "in_out"       // requires entrada + salida
 	AttendanceRulePctSessions = "pct_sessions" // requires % of sessions
@@ -50,7 +54,10 @@ type Event struct {
 	LocationOrLink string `json:"location_or_link,omitempty"`
 
 	Capacity int   `gorm:"not null;default:0" json:"capacity"`
-	Price    int64 `gorm:"not null;default:0" json:"price"` // COP, multiple of $50, 0 = free
+	Price    int64 `gorm:"not null;default:0" json:"price"` // entero en la moneda; 0 = gratis
+
+	// Currency of Price: "COP" (default, múltiplo de $50, Art. VII) or "USD".
+	Currency string `gorm:"not null;default:'COP'" json:"currency"`
 
 	Status string `gorm:"not null;default:'borrador';index" json:"status"`
 
@@ -156,10 +163,17 @@ func (e *Event) Validate() error {
 	if !validEventModality(e.Modality) {
 		return errors.New("modalidad de evento inválida")
 	}
+	if e.Currency == "" {
+		e.Currency = CurrencyCOP
+	}
+	if e.Currency != CurrencyCOP && e.Currency != CurrencyUSD {
+		return errors.New("moneda inválida")
+	}
 	if e.Price < 0 {
 		return errors.New("el precio no puede ser negativo")
 	}
-	if e.Price%50 != 0 {
+	// La regla del múltiplo de $50 es propia del peso colombiano (Art. VII).
+	if e.Currency == CurrencyCOP && e.Price%50 != 0 {
 		return errors.New("el precio debe ser múltiplo de $50")
 	}
 	if e.Capacity < 0 {

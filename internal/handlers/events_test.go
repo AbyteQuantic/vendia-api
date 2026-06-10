@@ -130,6 +130,23 @@ func TestCreateEvent_RejectsInvalidPrice(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+func TestCreateEvent_USDSkipsFiftyMultiple(t *testing.T) {
+	db := setupEventsDB(t)
+	r := eventsRouter(db, "tenant-a", "admin")
+
+	body := validEventBody()
+	body["currency"] = "USD"
+	body["price"] = 25 // no es múltiplo de 50, pero en USD es válido
+	w := reqJSON(r, http.MethodPost, "/api/v1/events", body)
+	require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+	var resp struct {
+		Data models.Event `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "USD", resp.Data.Currency)
+	assert.Equal(t, int64(25), resp.Data.Price)
+}
+
 func TestListAndGetEvent_TenantScoped(t *testing.T) {
 	db := setupEventsDB(t)
 	rA := eventsRouter(db, "tenant-a", "admin")
