@@ -146,31 +146,25 @@ func TestRegister_SamePersonSameEvent_ReturnsExistingNoDuplicate(t *testing.T) {
 	assert.Equal(t, int64(1), regs, "no debe duplicar la inscripción")
 }
 
-// El primer abono auto-asigna la silla más baja libre; el dueño puede
-// liberarla y reasignarla, y una silla ocupada por otro se rechaza.
+// La silla se auto-asigna AL INSCRIBIRSE (silla más baja libre); el dueño
+// puede liberarla y reasignarla, y una silla ocupada por otro se rechaza.
 func TestSeatAutoAssignAndManualAssign(t *testing.T) {
 	db := setupRegistrationDB(t)
 	ev := seedPublishedEvent(t, db, "tenant-a", 100000, 10)
 	svc := services.NewEventRegistrationService(db)
 
+	// Al inscribirse → silla 1 (sin esperar abono).
 	r1, err := svc.Register("tenant-a", services.RegisterInput{
 		EventID: ev.ID, Name: "Ana", Phone: "3001111111", ConsentComms: true,
 	})
 	require.NoError(t, err)
-	require.Nil(t, r1.SeatNumber, "sin abono, sin silla")
-
-	// Primer abono → silla 1.
-	r1, err = svc.RecordPayment("tenant-a", r1.ID, 10000)
-	require.NoError(t, err)
-	require.NotNil(t, r1.SeatNumber)
+	require.NotNil(t, r1.SeatNumber, "la silla se asigna al inscribirse")
 	assert.Equal(t, 1, *r1.SeatNumber)
 
-	// Segundo asistente, primer abono → silla 2.
+	// Segundo asistente al inscribirse → silla 2.
 	r2, err := svc.Register("tenant-a", services.RegisterInput{
 		EventID: ev.ID, Name: "Beto", Phone: "3002222222", ConsentComms: true,
 	})
-	require.NoError(t, err)
-	r2, err = svc.RecordPayment("tenant-a", r2.ID, 10000)
 	require.NoError(t, err)
 	require.NotNil(t, r2.SeatNumber)
 	assert.Equal(t, 2, *r2.SeatNumber)

@@ -133,6 +133,15 @@ func (s *EventRegistrationService) Register(tenantID string, in RegisterInput) (
 		reg.PaymentStatus = models.RegistrationPaymentConfirmed
 	}
 
+	// Auto-asignación de silla AL INSCRIBIRSE (pedido del dueño): apenas la
+	// persona se inscribe se le da la siguiente silla libre, sin esperar al
+	// abono. Cubre también eventos gratis (que se confirman aquí y no pasan
+	// por el flujo de pago). Si el cupo de sillas está lleno, queda sin silla
+	// y el organizador la asigna manualmente desde el mapa.
+	if seat := s.nextFreeSeat(tenantID, ev.ID, ev.Capacity); seat != nil {
+		reg.SeatNumber = seat
+	}
+
 	if err := s.db.Create(reg).Error; err != nil {
 		return nil, fmt.Errorf("crear inscripción: %w", err)
 	}
