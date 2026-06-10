@@ -3,6 +3,7 @@ package services_test
 
 import (
 	"testing"
+	"time"
 
 	"vendia-backend/internal/models"
 	"vendia-backend/internal/services"
@@ -52,4 +53,40 @@ func TestIssueCertificate_RequiresEligibility(t *testing.T) {
 	again, err := svc.Issue(tenantID, reg.ID)
 	require.NoError(t, err)
 	assert.Equal(t, first, *again.CertificateIssuedAt, "la reemisión es idempotente")
+}
+
+func TestIssueAllEligible_OnlyEligibleNotIssued(t *testing.T) {
+	db := setupCertDB(t)
+	tenantID := "tenant-a"
+	ev, err := services.NewEventService(db).Create(tenantID, &models.Event{
+		Type: models.EventTypeCurso, Title: "Curso", Modality: models.EventModalityVirtual, Price: 0,
+	})
+	require.NoError(t, err)
+
+	mk := func(id string, eligible bool, issued bool) {
+		r := &models.EventRegistration{
+			TenantID: tenantID, EventID: ev.ID, CustomerID: id,
+			QRToken: id + "-qr", PublicToken: id + "-pt",
+			CertificateEligible: eligible,
+		}
+		if issued {
+			now := time.Now().UTC()
+			r.CertificateIssuedAt = &now
+		}
+		require.NoError(t, db.Create(r).Error)
+	}
+	mk("a", true, false)  // elegible, sin emitir → SÍ
+	mk("b", true, false)  // elegible, sin emitir → SÍ
+	mk("c", true, true)   // ya emitido → NO
+	mk("d", false, false) // no elegible (sin salida) → NO
+
+	n, err := services.NewEventCertificateService(db).IssueAllEligible(tenantID, ev.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, n)
+
+	var total int64
+	db.Model(&models.EventRegistration{}).
+		Where("event_id = ? AND certificate_issued_at IS NOT NULL", ev.ID).
+		Count(&total)
+	assert.Equal(t, int64(3), total) // a, b (nuevos) + c (ya estaba)
 }

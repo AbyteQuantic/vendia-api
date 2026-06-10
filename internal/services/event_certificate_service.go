@@ -51,3 +51,18 @@ func (s *EventCertificateService) Issue(tenantID, registrationID string) (*model
 	}
 	return &reg, nil
 }
+
+// IssueAllEligible stamps the certificate for EVERY attendee who is eligible
+// (registró entrada y salida → certificate_eligible) and hasn't been issued
+// yet. Envío masivo pedido por el dueño. Returns how many it issued.
+func (s *EventCertificateService) IssueAllEligible(tenantID, eventID string) (int, error) {
+	now := time.Now().UTC()
+	res := s.db.Model(&models.EventRegistration{}).
+		Where("tenant_id = ? AND event_id = ? AND certificate_eligible = ? AND certificate_issued_at IS NULL",
+			tenantID, eventID, true).
+		Update("certificate_issued_at", now)
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	return int(res.RowsAffected), nil
+}

@@ -214,6 +214,12 @@ func PublicGetCarnet(db *gorm.DB) gin.HandlerFunc {
 			"seat_number":          reg.SeatNumber,
 			"confirmed":            confirmed,
 		}
+		// Certificado: el asistente lo ve en su sesión del catálogo cuando el
+		// organizador lo emite (FR-17). La imagen es la plantilla del evento.
+		if reg.CertificateIssuedAt != nil {
+			out["certificate_issued"] = true
+			out["certificate_image"] = ev.CertificateTemplate.ImageURL
+		}
 		// El QR (carné válido) solo viaja cuando el pago está completo.
 		// El diseño de escarapela del evento (si el organizador lo configuró)
 		// se entrega para pintar el carné con SU diseño, no un QR pelado. El

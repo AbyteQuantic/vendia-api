@@ -265,6 +265,24 @@ func IssueCertificate(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// IssueAllCertificates — POST /api/v1/events/:id/certificates/issue-all
+// (admin). Envío masivo: emite el certificado a todos los asistentes que
+// registraron entrada y salida (elegibles) y aún no lo tenían.
+func IssueAllCertificates(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !requireEventAdmin(c) {
+			return
+		}
+		n, err := services.NewEventCertificateService(db).IssueAllEligible(
+			middleware.GetTenantID(c), c.Param("id"))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al emitir los certificados"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{"issued": n}})
+	}
+}
+
 // RecordRegistrationPayment — POST /api/v1/events/:id/registrations/:rid/payments
 // (admin). Registers an abono (cuota or full payment) the organizer received
 // off-platform; once the running total reaches the price the carné activates.
