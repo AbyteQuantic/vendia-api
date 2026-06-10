@@ -333,6 +333,8 @@ func main() {
 	// Recupera la inscripción del asistente por teléfono (para mostrar su
 	// componente en el catálogo sin el deep link del correo).
 	r.POST("/api/v1/store/:slug/my-event-registration", handlers.PublicFindRegistration(db))
+	// Tasa de cambio USD→COP para convertir el precio del evento al cambiar moneda.
+	r.GET("/api/v1/fx/usd-cop", handlers.ExchangeRateUSDCOP())
 	// Carné del asistente (por public_token): el QR solo viaja si ya pagó.
 	r.GET("/api/v1/store/:slug/carnet/:token", handlers.PublicGetCarnet(db))
 	// Comprobante de pago manual del asistente (queda pendiente de aprobación).
