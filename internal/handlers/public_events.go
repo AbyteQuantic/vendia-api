@@ -219,6 +219,12 @@ func PublicGetCarnet(db *gorm.DB) gin.HandlerFunc {
 		// compone el texto (con defaults editables por el organizador).
 		if reg.CertificateIssuedAt != nil {
 			cfg := ev.CertificateConfig
+			// Logo por defecto = el del negocio, salvo que el organizador lo
+			// haya quitado a propósito (logo_cleared) — espejo del diseñador.
+			logoImg := cfg.LogoImage
+			if logoImg == "" && !cfg.LogoCleared {
+				logoImg = tenant.LogoURL
+			}
 			out["certificate_issued"] = true
 			out["certificate_image"] = ev.CertificateTemplate.ImageURL
 			out["certificate"] = gin.H{
@@ -230,7 +236,7 @@ func PublicGetCarnet(db *gorm.DB) gin.HandlerFunc {
 				"signatory":       orDefault(cfg.Signatory, tenant.BusinessName),
 				"footer":          cfg.Footer,
 				"signature_image": cfg.SignatureImage,
-				"logo_image":      cfg.LogoImage,
+				"logo_image":      logoImg,
 				"layout":          cfg.Layout,
 				"qr_token":        reg.QRToken,
 			}

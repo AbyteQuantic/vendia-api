@@ -117,6 +117,9 @@ type EventCertificateConfig struct {
 	Footer         string `json:"footer"`          // normatividad / nota al pie (opcional)
 	SignatureImage string `json:"signature_image"` // imagen de la firma (sin fondo)
 	LogoImage      string `json:"logo_image"`      // logotipo del negocio (opcional)
+	// LogoCleared distingue "logo nunca configurado" (→ usar el del negocio por
+	// defecto) de "el organizador quitó el logo a propósito" (→ no reinyectarlo).
+	LogoCleared bool `json:"logo_cleared"`
 
 	// Layout: posición/tamaño de cada elemento del diploma, editable por el
 	// organizador arrastrando/redimensionando en el diseñador. Las claves son
