@@ -47,7 +47,17 @@ func PublicListEvents(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al listar eventos"})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"data": events})
+		// Ocultar del catálogo los eventos ya finalizados (fin en el pasado):
+		// no tiene sentido ofrecer inscripción a algo que ya pasó.
+		now := time.Now()
+		visible := make([]models.Event, 0, len(events))
+		for i := range events {
+			if events[i].IsFinished(now) {
+				continue
+			}
+			visible = append(visible, events[i])
+		}
+		c.JSON(http.StatusOK, gin.H{"data": visible})
 	}
 }
 
@@ -240,11 +250,11 @@ func PublicGetCarnet(db *gorm.DB) gin.HandlerFunc {
 			out["certificate_issued"] = true
 			out["certificate_image"] = ev.CertificateTemplate.ImageURL
 			out["certificate"] = gin.H{
-				"title":         orDefault(cfg.Title, "Certificado de Participación"),
-				"intro":         orDefault(cfg.Intro, "Se otorga el presente certificado a"),
-				"attendee_name": customer.Name,
-				"body":          orDefault(cfg.Body, "por haber participado satisfactoriamente en "+ev.Title),
-				"date_text":     certificateDateText(ev),
+				"title":           orDefault(cfg.Title, "Certificado de Participación"),
+				"intro":           orDefault(cfg.Intro, "Se otorga el presente certificado a"),
+				"attendee_name":   customer.Name,
+				"body":            orDefault(cfg.Body, "por haber participado satisfactoriamente en "+ev.Title),
+				"date_text":       certificateDateText(ev),
 				"signatory":       orDefault(cfg.Signatory, tenant.BusinessName),
 				"footer":          cfg.Footer,
 				"signature_image": cfg.SignatureImage,

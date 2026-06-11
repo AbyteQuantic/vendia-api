@@ -148,9 +148,9 @@ type CertElementPos struct {
 // text instructions (account/Nequi number, name, etc.) and an optional QR
 // image. Shown to the attendee on the carné when the payment is pending.
 type EventPaymentDetail struct {
-	Method       string `json:"method"`        // matches an EnabledPaymentMethods value
-	Instructions string `json:"instructions"`  // número de cuenta / Nequi / indicaciones
-	QRImageURL   string `json:"qr_image_url"`  // imagen QR opcional (R2 o data URL)
+	Method       string `json:"method"`       // matches an EnabledPaymentMethods value
+	Instructions string `json:"instructions"` // número de cuenta / Nequi / indicaciones
+	QRImageURL   string `json:"qr_image_url"` // imagen QR opcional (R2 o data URL)
 }
 
 // EventCustomField is one organizer-defined inscription field.
@@ -241,4 +241,12 @@ func (e *Event) Validate() error {
 		return errors.New("el cupo no puede ser negativo")
 	}
 	return nil
+}
+
+// IsFinished reports whether the event already ended: it has an end date
+// (`EndAt`) and `now` is past it. Events without an end date never "finish"
+// (we don't know when they end). Used to hide finished events from the public
+// catalog — mirrors the app's derived `isFinished`.
+func (e *Event) IsFinished(now time.Time) bool {
+	return e.EndAt != nil && now.After(*e.EndAt)
 }

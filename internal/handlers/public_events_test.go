@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -75,6 +76,28 @@ func TestPublicListEvents_OnlyPublished(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.Len(t, resp.Data, 1)
 	assert.Equal(t, models.EventStatusPublicado, resp.Data[0].Status)
+}
+
+func TestPublicListEvents_HidesFinished(t *testing.T) {
+	db, tenant := setupPublicEventsDB(t)
+	// Próximo (fin en el futuro) → visible.
+	upcoming := seedPublished(t, db, tenant.ID, 100000, 10)
+	require.NoError(t, db.Model(&models.Event{}).Where("id = ?", upcoming.ID).
+		Update("end_at", time.Now().Add(48*time.Hour)).Error)
+	// Finalizado (fin en el pasado) → oculto del catálogo.
+	finished := seedPublished(t, db, tenant.ID, 100000, 10)
+	require.NoError(t, db.Model(&models.Event{}).Where("id = ?", finished.ID).
+		Update("end_at", time.Now().Add(-2*time.Hour)).Error)
+
+	r := publicEventsRouter(db)
+	w := reqJSON(r, http.MethodGet, "/api/v1/store/mi-tienda/events", nil)
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Data []models.Event `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data, 1, "el finalizado no debe aparecer")
+	assert.Equal(t, upcoming.ID, resp.Data[0].ID)
 }
 
 func TestPublicListEvents_UnknownSlug404(t *testing.T) {
