@@ -154,6 +154,51 @@ func CleanEventSignature(geminiSvc *services.GeminiService, storageSvc services.
 	}
 }
 
+// RemoveEventLogoBackground — POST /api/v1/event-logo-remove-bg (admin). Recibe
+// la URL del logo actual del certificado, le quita SOLO el fondo conectado a los
+// bordes (deja intactos los colores y los blancos internos del logo) y devuelve
+// un PNG transparente liviano. A diferencia de la firma, no pasa por Gemini: es
+// recorte determinista (flood-fill), más preciso y sin costo de IA (FR-12).
+func RemoveEventLogoBackground(storageSvc services.FileStorage) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !requireEventAdmin(c) {
+			return
+		}
+		tenantID := middleware.GetTenantID(c)
+
+		url := strings.TrimSpace(c.PostForm("url"))
+		if url == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "falta la URL del logo (campo: url)"})
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(
+			aiusage.WithTenantID(c.Request.Context(), tenantID), 30*time.Second)
+		defer cancel()
+
+		data, _, err := fetchEventImageBytes(ctx, url)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "no pudimos leer el logo actual"})
+			return
+		}
+
+		out, err := services.RemoveLogoBackground(data)
+		if err != nil {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "no pudimos quitar el fondo del logo, intenta con otra imagen"})
+			return
+		}
+
+		resultURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(out)
+		if storageSvc != nil {
+			key := fmt.Sprintf("events/%s/logo/%s.png", tenantID, uuid.NewString()[:8])
+			if up, e := storageSvc.Upload(ctx, "event-assets", key, out, "image/png"); e == nil {
+				resultURL = up
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{"url": resultURL}})
+	}
+}
+
 type eventAssetKind int
 
 const (
