@@ -77,7 +77,9 @@ func setupCloseOrderDB(t *testing.T) *gorm.DB {
 			receipt_image_url TEXT DEFAULT '',
 			price_tier TEXT NOT NULL DEFAULT 'retail',
 			-- Spec F031: link back to the converted quote.
-			quote_id TEXT
+			quote_id TEXT,
+			cost_amount REAL DEFAULT 0,
+			event_registration_id TEXT
 		)`,
 		`CREATE TABLE sale_items (
 			id TEXT PRIMARY KEY, created_at DATETIME, updated_at DATETIME,

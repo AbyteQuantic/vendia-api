@@ -81,8 +81,18 @@ type Sale struct {
 	// (Spec F031 AC-09). Nullable — only the converted-quote path sets
 	// it; every regular POS / web / table sale leaves it NULL. The
 	// reverse link lives on Quote.SaleID. Convention: *string + UUIDPtr.
-	QuoteID *string    `gorm:"type:uuid;index" json:"quote_id,omitempty"`
-	Items   []SaleItem `gorm:"foreignKey:SaleID" json:"items"`
+	QuoteID *string `gorm:"type:uuid;index" json:"quote_id,omitempty"`
+	// CostAmount is a NON-product cost booked directly on the sale, used when
+	// there are no SaleItems with a product purchase_price to derive COGS from.
+	// Event sales set it to the event's per-attendee cost so the profit formula
+	// (revenue − product COGS − cost_amount) works uniformly. Default 0 for
+	// every regular POS/web/table sale (their cost comes from product COGS).
+	CostAmount float64 `gorm:"type:numeric(12,2);not null;default:0" json:"cost_amount"`
+	// EventRegistrationID links a sale created from a confirmed event
+	// inscription (Source="EVENT"). Nullable — only event sales set it. It also
+	// guarantees idempotency: one confirmed registration ⇒ at most one sale.
+	EventRegistrationID *string    `gorm:"type:uuid;index" json:"event_registration_id,omitempty"`
+	Items               []SaleItem `gorm:"foreignKey:SaleID" json:"items"`
 	// Customer is the optional identified-clientele relation (Spec F030).
 	// Populated only when the handler Preloads it; nil for anonymous
 	// sales. The receipt-time identity is still frozen in
@@ -114,6 +124,9 @@ const (
 	SaleSourcePOS   = "POS"
 	SaleSourceWeb   = "WEB"
 	SaleSourceTable = "TABLE"
+	// SaleSourceEvent attributes a sale to a confirmed event inscription, so the
+	// unified ledger and the financial dashboard split it as its own channel.
+	SaleSourceEvent = "EVENT"
 )
 
 // SaleItem is agnostic as of migration 020: it can represent either a

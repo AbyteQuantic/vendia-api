@@ -4,6 +4,7 @@ package services
 import (
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -187,6 +188,11 @@ func (s *EventRegistrationService) ConfirmPayment(tenantID, registrationID strin
 	if err := s.db.Model(&reg).Updates(updates).Error; err != nil {
 		return nil, fmt.Errorf("confirmar pago: %w", err)
 	}
+	// Contabiliza la inscripción confirmada como venta del negocio (canal
+	// "Eventos"). Best-effort: no revierte la confirmación si falla.
+	if err := s.ensureEventSale(tenantID, &reg, &ev); err != nil {
+		log.Printf("[events] venta del evento no contabilizada (reg %s): %v", reg.ID, err)
+	}
 	return &reg, nil
 }
 
@@ -239,7 +245,47 @@ func (s *EventRegistrationService) RecordPayment(tenantID, registrationID string
 	if err := s.db.Model(&reg).Updates(updates).Error; err != nil {
 		return nil, fmt.Errorf("registrar abono: %w", err)
 	}
+	// Si este abono completó el pago, contabiliza la venta del evento (canal
+	// "Eventos"). Best-effort: el abono ya quedó registrado igual.
+	if reg.IsConfirmed() {
+		if err := s.ensureEventSale(tenantID, &reg, &ev); err != nil {
+			log.Printf("[events] venta del evento no contabilizada (reg %s): %v", reg.ID, err)
+		}
+	}
 	return &reg, nil
+}
+
+// ensureEventSale books a confirmed, paid inscription as a first-class Sale in
+// the unified ledger (Source="EVENT"), so the money counts in daily sales and
+// the financial dashboard like any other sale. Idempotent — one confirmed
+// registration produces at most one sale (guarded by event_registration_id) —
+// and a no-op for free events. Best-effort: a confirmation is never rolled back
+// because the bookkeeping sale failed; the bootstrap backfill catches any miss.
+func (s *EventRegistrationService) ensureEventSale(tenantID string, reg *models.EventRegistration, ev *models.Event) error {
+	if ev.Price <= 0 {
+		return nil
+	}
+	var existing int64
+	if err := s.db.Model(&models.Sale{}).
+		Where("tenant_id = ? AND event_registration_id = ?", tenantID, reg.ID).
+		Count(&existing).Error; err != nil {
+		return err
+	}
+	if existing > 0 {
+		return nil
+	}
+
+	var cust models.Customer
+	_ = s.db.Where("id = ? AND tenant_id = ?", reg.CustomerID, tenantID).First(&cust).Error
+
+	sale := models.BuildEventSale(reg, ev, cust.Name, cust.Phone)
+	if sale == nil {
+		return nil
+	}
+	if err := s.db.Create(sale).Error; err != nil {
+		return fmt.Errorf("contabilizar venta del evento: %w", err)
+	}
+	return nil
 }
 
 // nextFreeSeat returns the lowest unused seat number for an event, or nil when

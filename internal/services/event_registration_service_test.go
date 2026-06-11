@@ -19,9 +19,17 @@ func setupRegistrationDB(t *testing.T) *gorm.DB {
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(
 		&models.Event{}, &models.EventRegistration{}, &models.EventScan{},
-		&models.Customer{},
+		&models.Customer{}, &models.Sale{}, &models.SaleItem{},
 	))
 	return db
+}
+
+// eventSalesFor counts the ledger sales booked for a registration (Source=EVENT).
+func eventSalesFor(t *testing.T, db *gorm.DB, regID string) []models.Sale {
+	t.Helper()
+	var sales []models.Sale
+	require.NoError(t, db.Where("event_registration_id = ?", regID).Find(&sales).Error)
+	return sales
 }
 
 // seedPublishedEvent creates a published event with the given price/capacity.
@@ -215,4 +223,71 @@ func TestConfirmPayment_ReservesCupoAndEnforcesCapacity(t *testing.T) {
 	again, err := svc.ConfirmPayment("tenant-a", r1.ID)
 	require.NoError(t, err)
 	assert.Equal(t, models.RegistrationPaymentConfirmed, again.PaymentStatus)
+}
+
+func TestConfirmPayment_BooksEventSale_Idempotent(t *testing.T) {
+	db := setupRegistrationDB(t)
+	ev := seedPublishedEvent(t, db, "tenant-a", 60000, 10)
+	// Costo por asistente para verificar la ganancia.
+	require.NoError(t, db.Model(&models.Event{}).Where("id = ?", ev.ID).
+		Update("cost", int64(10000)).Error)
+	svc := services.NewEventRegistrationService(db)
+
+	reg, err := svc.Register("tenant-a", services.RegisterInput{
+		EventID: ev.ID, Name: "Ana", Phone: "3001234567", ConsentComms: true,
+		PaymentMethod: "transferencia",
+	})
+	require.NoError(t, err)
+	require.Empty(t, eventSalesFor(t, db, reg.ID)) // aún sin pagar → sin venta
+
+	_, err = svc.ConfirmPayment("tenant-a", reg.ID)
+	require.NoError(t, err)
+
+	sales := eventSalesFor(t, db, reg.ID)
+	require.Len(t, sales, 1)
+	assert.Equal(t, models.SaleSourceEvent, sales[0].Source)
+	assert.Equal(t, float64(60000), sales[0].Total)
+	assert.Equal(t, float64(10000), sales[0].CostAmount) // ganancia = 60000-10000
+	assert.Equal(t, models.PaymentTransfer, sales[0].PaymentMethod)
+
+	// Idempotente: confirmar de nuevo no duplica la venta.
+	_, err = svc.ConfirmPayment("tenant-a", reg.ID)
+	require.NoError(t, err)
+	assert.Len(t, eventSalesFor(t, db, reg.ID), 1)
+}
+
+func TestRecordPayment_BooksSaleOnlyWhenFullyPaid(t *testing.T) {
+	db := setupRegistrationDB(t)
+	ev := seedPublishedEvent(t, db, "tenant-a", 60000, 10)
+	svc := services.NewEventRegistrationService(db)
+
+	reg, err := svc.Register("tenant-a", services.RegisterInput{
+		EventID: ev.ID, Name: "Leo", Phone: "3009998888", ConsentComms: true,
+	})
+	require.NoError(t, err)
+
+	// Abono parcial → todavía sin venta.
+	_, err = svc.RecordPayment("tenant-a", reg.ID, 20000)
+	require.NoError(t, err)
+	assert.Empty(t, eventSalesFor(t, db, reg.ID))
+
+	// Abono que completa el pago → se contabiliza UNA venta.
+	_, err = svc.RecordPayment("tenant-a", reg.ID, 40000)
+	require.NoError(t, err)
+	sales := eventSalesFor(t, db, reg.ID)
+	require.Len(t, sales, 1)
+	assert.Equal(t, float64(60000), sales[0].Total)
+}
+
+func TestFreeEvent_DoesNotBookSale(t *testing.T) {
+	db := setupRegistrationDB(t)
+	ev := seedPublishedEvent(t, db, "tenant-a", 0, 10) // gratis
+	svc := services.NewEventRegistrationService(db)
+
+	reg, err := svc.Register("tenant-a", services.RegisterInput{
+		EventID: ev.ID, Name: "Gratis", Phone: "3001112222", ConsentComms: true,
+	})
+	require.NoError(t, err)
+	assert.True(t, reg.IsConfirmed())                 // gratis se confirma solo
+	assert.Empty(t, eventSalesFor(t, db, reg.ID))     // pero NO genera venta ($0)
 }

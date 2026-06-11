@@ -60,6 +60,12 @@ type Event struct {
 	Capacity int   `gorm:"not null;default:0" json:"capacity"`
 	Price    int64 `gorm:"not null;default:0" json:"price"` // entero en la moneda; 0 = gratis
 
+	// Cost is the organizer's cost PER ATTENDEE (refrigerio, material, kit…),
+	// usado para calcular la ganancia de cada inscripción confirmada cuando se
+	// contabiliza como venta del negocio (canal "Eventos"). 0 = sin costo →
+	// la inscripción es 100% ganancia. Entero en la misma moneda que Price.
+	Cost int64 `gorm:"not null;default:0" json:"cost"`
+
 	// Currency of Price: "COP" (default, múltiplo de $50, Art. VII) or "USD".
 	Currency string `gorm:"not null;default:'COP'" json:"currency"`
 

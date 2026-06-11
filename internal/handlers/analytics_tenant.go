@@ -284,7 +284,11 @@ func FinancialSummary(db *gorm.DB) gin.HandlerFunc {
 			Where("sales.tenant_id = ? AND sales.deleted_at IS NULL", tenantID).
 			Where("sales.created_at >= ?", since).
 			Scan(&totalCost)
-		totalProfit := totalSales - totalCost
+		// Non-product costs booked directly on the sale (event per-attendee cost,
+		// Source="EVENT"). Mirrors baseSales so scope/filters apply consistently.
+		var totalCostAmount float64
+		baseSales().Select("COALESCE(SUM(cost_amount), 0)").Scan(&totalCostAmount)
+		totalProfit := totalSales - totalCost - totalCostAmount
 
 		// ── accounts receivable (always tenant-wide) ──
 		var accountsReceivable float64

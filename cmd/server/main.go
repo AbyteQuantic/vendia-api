@@ -117,6 +117,15 @@ func main() {
 	if err := database.BackfillEventsCatalogModule(db); err != nil {
 		log.Printf("[BOOTSTRAP] eventos catalog backfill failed: %v", err)
 	}
+	// F042 — contabiliza las inscripciones confirmadas (de pago) como ventas
+	// del negocio (canal "Eventos"). Run-every-boot e idempotente: solo crea la
+	// venta de inscripciones que aún no la tienen. Pone al día las confirmadas
+	// antes de este deploy y repara cualquier venta no contabilizada en vivo.
+	if created, err := database.BackfillEventSales(db); err != nil {
+		log.Printf("[BOOTSTRAP] event sales backfill failed: %v", err)
+	} else if created > 0 {
+		log.Printf("[BOOTSTRAP] event sales backfill creó %d ventas de eventos", created)
+	}
 
 	// ── Initialize external services (optional, nil-safe) ───────────────────
 	var geminiSvc *services.GeminiService
