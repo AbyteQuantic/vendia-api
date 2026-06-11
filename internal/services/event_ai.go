@@ -3,6 +3,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -81,6 +82,75 @@ func BuildEventDescriptionPrompt(in EventDescriptionInput) string {
 		b.WriteString(fmt.Sprintf("\nMejora y pule esta descripción base manteniendo su intención:\n\"\"\"\n%s\n\"\"\"\n", s))
 	}
 	return b.String()
+}
+
+// CertificateTextsInput carries the event facts the certificate-texts agent
+// needs to draft the heading + lines. BusinessName is the default signatory.
+type CertificateTextsInput struct {
+	Title        string
+	Type         string // curso/conferencia/…
+	Modality     string // presencial/virtual/híbrido
+	Description  string // descripción pública (contexto)
+	BusinessName string // organizador; firmante por defecto
+}
+
+// CertificateTexts is the structured result the agent returns: the five editable
+// fields of the certificate. The attendee name is NEVER one of them — it is
+// overlaid separately at render time (the body reads as if continuing after it).
+type CertificateTexts struct {
+	Title     string `json:"title"`
+	Intro     string `json:"intro"`
+	Body      string `json:"body"`
+	Signatory string `json:"signatory"`
+	Footer    string `json:"footer"`
+}
+
+// BuildCertificateTextsPrompt composes the prompt for the certificate-texts
+// agent. It asks for a strict JSON object so the editor can drop each value into
+// its field, all still editable by the organizer.
+func BuildCertificateTextsPrompt(in CertificateTextsInput) string {
+	var b strings.Builder
+	b.WriteString("Eres un redactor experto en certificados. A partir de los datos del evento, redacta los textos de un certificado FORMAL de participación.\n\n")
+	b.WriteString("Devuelve EXCLUSIVAMENTE un objeto JSON válido (sin markdown, sin ```), con EXACTAMENTE estas claves:\n")
+	b.WriteString("{\n")
+	b.WriteString(`  "title": "encabezado corto del certificado (ej: Certificado de Participación / de Asistencia / de Finalización, según el tipo)",` + "\n")
+	b.WriteString(`  "intro": "frase breve que va ANTES del nombre del asistente (ej: Se otorga el presente certificado a / Hace constar que)",` + "\n")
+	b.WriteString(`  "body": "frase que va DESPUÉS del nombre; describe el logro y menciona el evento (ej: por haber participado satisfactoriamente en ...)",` + "\n")
+	b.WriteString(`  "signatory": "nombre de quien firma el certificado",` + "\n")
+	b.WriteString(`  "footer": "nota al pie breve y opcional, o cadena vacía"` + "\n")
+	b.WriteString("}\n\n")
+	b.WriteString("Reglas:\n")
+	b.WriteString("- Español neutro de Colombia, modo USTED (nunca voseo).\n")
+	b.WriteString("- NO incluyas el nombre del asistente en ningún campo: se imprime aparte. El 'body' debe leerse como si continuara justo después del nombre.\n")
+	b.WriteString("- Tono formal pero cálido; frases cortas y claras. No inventes datos que no te di (horas, ponentes, notas) salvo que estén en la descripción.\n")
+	b.WriteString(fmt.Sprintf("- Para 'signatory' usa por defecto el organizador: %q (o un cargo como \"La dirección de %s\").\n", strings.TrimSpace(in.BusinessName), strings.TrimSpace(in.BusinessName)))
+	b.WriteString("\nDatos del evento:\n")
+	b.WriteString(fmt.Sprintf("- Título: %s\n", strings.TrimSpace(in.Title)))
+	if in.Type != "" {
+		b.WriteString(fmt.Sprintf("- Tipo: %s\n", in.Type))
+	}
+	if in.Modality != "" {
+		b.WriteString(fmt.Sprintf("- Modalidad: %s\n", in.Modality))
+	}
+	if s := strings.TrimSpace(in.Description); s != "" {
+		b.WriteString(fmt.Sprintf("- Descripción / contexto: %s\n", s))
+	}
+	b.WriteString(fmt.Sprintf("- Organizador: %s\n", strings.TrimSpace(in.BusinessName)))
+	return b.String()
+}
+
+// GenerateCertificateTexts asks the agent to draft the certificate's editable
+// texts and parses its JSON answer. The organizer can edit anything afterward.
+func (s *GeminiService) GenerateCertificateTexts(ctx context.Context, in CertificateTextsInput) (CertificateTexts, error) {
+	var out CertificateTexts
+	raw, err := s.GenerateText(ctx, BuildCertificateTextsPrompt(in))
+	if err != nil {
+		return out, err
+	}
+	if err := json.Unmarshal([]byte(stripMarkdownJSON(raw)), &out); err != nil {
+		return out, fmt.Errorf("interpretar textos del certificado: %w", err)
+	}
+	return out, nil
 }
 
 // buildEventBadgePrompt composes the prompt for an event badge (escarapela).

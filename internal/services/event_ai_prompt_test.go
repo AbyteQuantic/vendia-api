@@ -27,6 +27,30 @@ func TestBuildEventDescriptionPrompt_WeavesAnswers(t *testing.T) {
 	}
 }
 
+func TestBuildCertificateTextsPrompt_AsksJSONAndWeavesEvent(t *testing.T) {
+	p := BuildCertificateTextsPrompt(CertificateTextsInput{
+		Title:        "Curso de color Ámbar",
+		Type:         "curso",
+		Modality:     "presencial",
+		Description:  "Formación intensiva en colorimetría.",
+		BusinessName: "Don Brayan",
+	})
+	low := strings.ToLower(p)
+	for _, key := range []string{`"title"`, `"intro"`, `"body"`, `"signatory"`, `"footer"`} {
+		if !strings.Contains(low, key) {
+			t.Fatalf("el prompt debe pedir la clave %s:\n%s", key, p)
+		}
+	}
+	for _, anchor := range []string{"curso de color ámbar", "colorimetría", "don brayan", "modo usted"} {
+		if !strings.Contains(low, anchor) {
+			t.Fatalf("el prompt debe tejer %q:\n%s", anchor, p)
+		}
+	}
+	if !strings.Contains(low, "no incluyas el nombre del asistente") {
+		t.Fatalf("debe excluir el nombre del asistente:\n%s", p)
+	}
+}
+
 func TestBuildEventDescriptionPrompt_ImproveMode(t *testing.T) {
 	p := BuildEventDescriptionPrompt(EventDescriptionInput{
 		Title:   "Hackatón",

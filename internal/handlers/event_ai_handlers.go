@@ -92,6 +92,53 @@ func GenerateEventDescriptionAI(geminiSvc *services.GeminiService) gin.HandlerFu
 	}
 }
 
+// GenerateEventCertificateTexts — POST /api/v1/event-certificate-texts-ai
+// (admin). Agente que redacta los 5 textos del certificado (título, frase,
+// cuerpo, firmante, nota al pie) a partir de la info del evento. Devuelve JSON
+// estructurado que el diseñador vuelca en los campos, todos editables. Ruta
+// propia (sin id) para servir al crear y al editar.
+func GenerateEventCertificateTexts(db *gorm.DB, geminiSvc *services.GeminiService) gin.HandlerFunc {
+	type request struct {
+		Title       string `json:"title"`
+		Type        string `json:"type"`
+		Modality    string `json:"modality"`
+		Description string `json:"description"`
+	}
+	return func(c *gin.Context) {
+		if !requireEventAdmin(c) {
+			return
+		}
+		if geminiSvc == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "servicio de IA no configurado"})
+			return
+		}
+		var req request
+		_ = c.ShouldBindJSON(&req)
+		if strings.TrimSpace(req.Title) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "ponle primero un nombre al evento"})
+			return
+		}
+		tenantID := middleware.GetTenantID(c)
+		var tenant models.Tenant
+		if err := db.Where("id = ?", tenantID).First(&tenant).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "negocio no encontrado"})
+			return
+		}
+		ctx, cancel := context.WithTimeout(
+			aiusage.WithTenantID(c.Request.Context(), tenantID), 30*time.Second)
+		defer cancel()
+		texts, err := geminiSvc.GenerateCertificateTexts(ctx, services.CertificateTextsInput{
+			Title: req.Title, Type: req.Type, Modality: req.Modality,
+			Description: req.Description, BusinessName: tenant.BusinessName,
+		})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "no pudimos redactar los textos, intenta de nuevo"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": texts})
+	}
+}
+
 // CleanEventSignature — POST /api/v1/event-signature-clean (admin). Recibe la
 // foto/imagen de la firma, la limpia con IA (aísla los trazos, quita el fondo)
 // y devuelve la URL lista para el certificado. Ruta propia (sin id de evento).

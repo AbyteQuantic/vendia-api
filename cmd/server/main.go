@@ -578,6 +578,8 @@ func main() {
 		v1.POST("/event-payment-qr", handlers.UploadEventPaymentQR(storageSvc))
 		// Agente de IA que redacta la descripción del evento.
 		v1.POST("/event-description-ai", handlers.GenerateEventDescriptionAI(geminiSvc))
+		// Agente de IA que redacta los textos del certificado (editables).
+		v1.POST("/event-certificate-texts-ai", handlers.GenerateEventCertificateTexts(db, geminiSvc))
 		// Limpia con IA la foto de la firma para el certificado.
 		v1.POST("/event-signature-clean", handlers.CleanEventSignature(geminiSvc, storageSvc))
 		// Quita solo el fondo del logo (flood-fill, sin tocar blancos internos).
