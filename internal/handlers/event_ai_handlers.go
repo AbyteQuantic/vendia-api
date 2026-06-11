@@ -136,6 +136,13 @@ func CleanEventSignature(geminiSvc *services.GeminiService, storageSvc services.
 			return
 		}
 
+		// Gemini devuelve la firma sobre fondo BLANCO (no sabe emitir alfa).
+		// Quitamos el fondo aquí → PNG con transparencia real, sin recuadro
+		// blanco (IMG_4096). Si fallara el recorte, usamos la versión de IA.
+		if transparent, terr := services.MakeSignatureTransparent(cleaned); terr == nil {
+			cleaned = transparent
+		}
+
 		url := "data:image/png;base64," + base64.StdEncoding.EncodeToString(cleaned)
 		if storageSvc != nil {
 			key := fmt.Sprintf("events/%s/signature/%s", tenantID, uuid.NewString()[:8])
