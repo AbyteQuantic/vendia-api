@@ -270,6 +270,30 @@ func PublicGetCarnet(db *gorm.DB) gin.HandlerFunc {
 		if confirmed {
 			out["qr_token"] = reg.QRToken
 			out["badge_image"] = ev.BadgeTemplate.ImageURL
+			// Si el organizador diseñó el carné en el editor WYSIWYG (hay
+			// layout), entregamos su config (textos + posiciones) para pintarlo
+			// igual que en el diseñador; si no, el front cae al overlay por
+			// defecto (nombre + QR en posiciones fijas). Misma forma que el
+			// certificado, así el renderer es compartido.
+			if bc := ev.BadgeConfig; len(bc.Layout) > 0 {
+				logoImg := bc.LogoImage
+				if logoImg == "" && !bc.LogoCleared {
+					logoImg = tenant.LogoURL
+				}
+				out["badge"] = gin.H{
+					"title":           orDefault(bc.Title, ev.Title),
+					"intro":           orDefault(bc.Intro, tenant.BusinessName),
+					"attendee_name":   customer.Name,
+					"body":            bc.Body,
+					"date_text":       certificateDateText(ev),
+					"signatory":       bc.Signatory,
+					"footer":          bc.Footer,
+					"signature_image": bc.SignatureImage,
+					"logo_image":      logoImg,
+					"layout":          bc.Layout,
+					"qr_token":        reg.QRToken,
+				}
+			}
 		}
 		c.JSON(http.StatusOK, gin.H{"data": out})
 	}

@@ -26,6 +26,7 @@ func setupPublicEventsDB(t *testing.T) (*gorm.DB, *models.Tenant) {
 	require.NoError(t, db.AutoMigrate(
 		&models.Tenant{}, &models.Event{}, &models.EventRegistration{},
 		&models.EventScan{}, &models.EventPayment{}, &models.Customer{},
+		&models.Sale{}, &models.SaleItem{},
 	))
 	slug := "mi-tienda"
 	tenant := models.Tenant{OwnerName: "Org", Phone: "3000000000", StoreSlug: &slug}
@@ -392,4 +393,76 @@ func TestPublicFindRegistration_ByPhone(t *testing.T) {
 	w2 := reqJSON(r, http.MethodPost, "/api/v1/store/mi-tienda/my-event-registration",
 		map[string]any{"phone": "3009999999"})
 	assert.Equal(t, http.StatusNotFound, w2.Code)
+}
+
+// El carné confirmado entrega el badge config (layout + textos) cuando el
+// organizador diseñó la escarapela en el editor WYSIWYG.
+func TestPublicGetCarnet_IncludesBadgeConfig(t *testing.T) {
+	db, tenant := setupPublicEventsDB(t)
+	r := publicEventsRouter(db)
+	ev := seedPublished(t, db, tenant.ID, 50000, 10)
+	// Re-fetch para no pisar el status con la copia stale de seedPublished.
+	fresh, gerr := services.NewEventService(db).Get(tenant.ID, ev.ID)
+	require.NoError(t, gerr)
+	fresh.BadgeConfig = models.EventCertificateConfig{
+		Layout: map[string]models.CertElementPos{
+			"name": {X: 0.5, Y: 0.42, Scale: 0.08},
+			"qr":   {X: 0.5, Y: 0.71, Scale: 0.4},
+		},
+	}
+	require.NoError(t, db.Save(fresh).Error)
+
+	reg := reqJSON(r, http.MethodPost, "/api/v1/store/mi-tienda/events/"+ev.ID+"/register", map[string]any{
+		"name": "Vivi", "phone": "3001234567", "consent_comms": true,
+	})
+	var regResp struct {
+		Data struct {
+			PublicToken string `json:"public_token"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(reg.Body.Bytes(), &regResp))
+
+	var dbReg models.EventRegistration
+	require.NoError(t, db.Where("public_token = ?", regResp.Data.PublicToken).First(&dbReg).Error)
+	_, err := services.NewEventRegistrationService(db).ConfirmPayment(tenant.ID, dbReg.ID)
+	require.NoError(t, err)
+
+	w := reqJSON(r, http.MethodGet, "/api/v1/store/mi-tienda/carnet/"+regResp.Data.PublicToken, nil)
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Data struct {
+			Badge map[string]any `json:"badge"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Data.Badge, "el carné confirmado debe traer el badge config")
+	assert.Equal(t, "Vivi", resp.Data.Badge["attendee_name"])
+	assert.NotNil(t, resp.Data.Badge["layout"])
+	assert.Contains(t, resp.Data.Badge, "intro") // organizador por defecto
+}
+
+// Sin badge config (layout vacío), el carné NO trae 'badge' → el front usa el
+// overlay por defecto (retrocompatible).
+func TestPublicGetCarnet_NoBadgeConfig_OmitsBadge(t *testing.T) {
+	db, tenant := setupPublicEventsDB(t)
+	r := publicEventsRouter(db)
+	ev := seedPublished(t, db, tenant.ID, 0, 10) // gratis → confirmado al inscribir
+
+	reg := reqJSON(r, http.MethodPost, "/api/v1/store/mi-tienda/events/"+ev.ID+"/register", map[string]any{
+		"name": "Leo", "phone": "3009998888", "consent_comms": true,
+	})
+	var regResp struct {
+		Data struct {
+			PublicToken string `json:"public_token"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(reg.Body.Bytes(), &regResp))
+
+	w := reqJSON(r, http.MethodGet, "/api/v1/store/mi-tienda/carnet/"+regResp.Data.PublicToken, nil)
+	var resp struct {
+		Data map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	_, hasBadge := resp.Data["badge"]
+	assert.False(t, hasBadge, "sin layout no debe venir 'badge'")
 }

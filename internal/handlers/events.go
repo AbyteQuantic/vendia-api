@@ -35,24 +35,24 @@ func requireEventAdmin(c *gin.Context) bool {
 // identity fields are validated by the model; status transitions go through
 // the dedicated publish/delete endpoints.
 type eventInput struct {
-	ID                    string                    `json:"id"`
-	Type                  string                    `json:"type"`
-	Title                 string                    `json:"title"`
-	Description           string                    `json:"description"`
-	StartAt               *string                   `json:"start_at"`
-	EndAt                 *string                   `json:"end_at"`
-	Modality              string                    `json:"modality"`
-	LocationOrLink        string                    `json:"location_or_link"`
-	City                  string                    `json:"city"`
-	LocationNotes         string                    `json:"location_notes"`
-	Capacity              int                       `json:"capacity"`
-	Price                 int64                     `json:"price"`
-	Cost                  int64                     `json:"cost"`
-	Currency              string                    `json:"currency"`
-	EnabledPaymentMethods []string                    `json:"enabled_payment_methods"`
-	PaymentDetails        []models.EventPaymentDetail `json:"payment_details"`
-	InstallmentsEnabled   bool                        `json:"installments_enabled"`
-	InstallmentsCount     int                         `json:"installments_count"`
+	ID                    string                        `json:"id"`
+	Type                  string                        `json:"type"`
+	Title                 string                        `json:"title"`
+	Description           string                        `json:"description"`
+	StartAt               *string                       `json:"start_at"`
+	EndAt                 *string                       `json:"end_at"`
+	Modality              string                        `json:"modality"`
+	LocationOrLink        string                        `json:"location_or_link"`
+	City                  string                        `json:"city"`
+	LocationNotes         string                        `json:"location_notes"`
+	Capacity              int                           `json:"capacity"`
+	Price                 int64                         `json:"price"`
+	Cost                  int64                         `json:"cost"`
+	Currency              string                        `json:"currency"`
+	EnabledPaymentMethods []string                      `json:"enabled_payment_methods"`
+	PaymentDetails        []models.EventPaymentDetail   `json:"payment_details"`
+	InstallmentsEnabled   bool                          `json:"installments_enabled"`
+	InstallmentsCount     int                           `json:"installments_count"`
 	CustomFields          []models.EventCustomField     `json:"custom_fields"`
 	Sessions              []models.EventSession         `json:"sessions"`
 	AttendanceRule        string                        `json:"attendance_rule"`
@@ -292,6 +292,35 @@ func UpdateEventCertificateConfig(db *gorm.DB) gin.HandlerFunc {
 		ev.CertificateConfig = cfg
 		if err := db.Save(ev).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al guardar el certificado"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": ev})
+	}
+}
+
+// UpdateEventBadgeConfig — PUT /api/v1/events/:id/badge-config (admin). Guarda
+// SOLO la configuración del CARNÉ/escarapela (texto, firma, logo y layout de
+// posiciones), sin tocar el resto del evento. Lo usa el diseñador WYSIWYG del
+// carné — espejo de UpdateEventCertificateConfig (misma forma de config).
+func UpdateEventBadgeConfig(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !requireEventAdmin(c) {
+			return
+		}
+		tenantID := middleware.GetTenantID(c)
+		var cfg models.EventCertificateConfig
+		if err := c.ShouldBindJSON(&cfg); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		ev, err := services.NewEventService(db).Get(tenantID, c.Param("id"))
+		if err != nil {
+			writeEventError(c, err)
+			return
+		}
+		ev.BadgeConfig = cfg
+		if err := db.Save(ev).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al guardar el carné"})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"data": ev})

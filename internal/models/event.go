@@ -111,6 +111,14 @@ type Event struct {
 	// back to sensible defaults at render time, so it works out of the box and
 	// the organizer can tweak the wording.
 	CertificateConfig EventCertificateConfig `gorm:"serializer:json;type:jsonb;default:'{}'" json:"certificate_config"`
+
+	// BadgeConfig is the WYSIWYG layout + texts the organizer composes for the
+	// CARNÉ (escarapela), same shape as CertificateConfig so the editor and the
+	// public renderer are shared. Here the keys mean: title=event title,
+	// intro=organizer/subtitle, name=attendee placeholder (overlaid per
+	// attendee), plus logo / signature / qr. Empty → the public carné falls back
+	// to its default name/QR overlay (backward compatible).
+	BadgeConfig EventCertificateConfig `gorm:"serializer:json;type:jsonb;default:'{}'" json:"badge_config"`
 }
 
 // EventCertificateConfig holds the certificate's editable copy. The app fills
