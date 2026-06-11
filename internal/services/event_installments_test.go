@@ -3,6 +3,7 @@ package services_test
 
 import (
 	"testing"
+	"time"
 
 	"vendia-backend/internal/models"
 	"vendia-backend/internal/services"
@@ -129,4 +130,55 @@ func TestSetupInstallments_PersistsDatedSchedule(t *testing.T) {
 		sum += r.Amount
 	}
 	assert.Equal(t, int64(150000), sum)
+}
+
+func TestBuildInstallmentPlan_FirstAtRegistrationLastAtStart(t *testing.T) {
+	reg := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	start := reg.Add(30 * 24 * time.Hour)
+	// Recién inscrito, nada pagado.
+	plan := services.BuildInstallmentPlan(reg, &start, 3, 60000, 0, reg)
+	require.NotNil(t, plan)
+	assert.Equal(t, 3, plan.Count)
+	assert.Len(t, plan.Cuotas, 3)
+	// 1ª vence al inscribirse, 3ª al iniciar el evento.
+	assert.True(t, plan.Cuotas[0].DueDate.Equal(reg))
+	assert.True(t, plan.Cuotas[2].DueDate.Equal(start))
+	// 2ª a la mitad.
+	assert.True(t, plan.Cuotas[1].DueDate.Equal(reg.Add(15*24*time.Hour)))
+	// Suman exactamente el precio.
+	var sum int64
+	for _, c := range plan.Cuotas {
+		sum += c.Amount
+	}
+	assert.Equal(t, int64(60000), sum)
+	assert.Equal(t, 0, plan.OverdueCount)
+	assert.Equal(t, 1, plan.NextDueNumber)
+}
+
+func TestBuildInstallmentPlan_OverdueAndPaidCounts(t *testing.T) {
+	reg := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	start := reg.Add(30 * 24 * time.Hour)
+	now := reg.Add(20 * 24 * time.Hour) // pasaron 20 días
+
+	// Nada pagado → cuota 1 (día 0) y cuota 2 (día 15) vencidas; cuota 3 (día 30) pendiente.
+	plan := services.BuildInstallmentPlan(reg, &start, 3, 60000, 0, now)
+	require.NotNil(t, plan)
+	assert.Equal(t, 2, plan.OverdueCount)
+	assert.Equal(t, int64(40000), plan.OverdueAmount)
+	assert.Equal(t, 1, plan.NextDueNumber)
+	assert.Equal(t, 0, plan.PaidCount)
+
+	// Pagó la 1ª cuota → siguiente vencida es la 2ª; solo 1 vencida.
+	plan = services.BuildInstallmentPlan(reg, &start, 3, 60000, 20000, now)
+	require.NotNil(t, plan)
+	assert.Equal(t, 1, plan.PaidCount)
+	assert.Equal(t, 1, plan.OverdueCount)
+	assert.Equal(t, 2, plan.NextDueNumber)
+}
+
+func TestBuildInstallmentPlan_NilWhenNotApplicable(t *testing.T) {
+	reg := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	start := reg.Add(30 * 24 * time.Hour)
+	assert.Nil(t, services.BuildInstallmentPlan(reg, &start, 1, 60000, 0, reg)) // <2 cuotas
+	assert.Nil(t, services.BuildInstallmentPlan(reg, &start, 3, 0, 0, reg))     // precio 0
 }

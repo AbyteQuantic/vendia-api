@@ -46,6 +46,114 @@ func ComputeInstallments(total int64, n int) ([]int64, error) {
 	return schedule, nil
 }
 
+// InstallmentCuota is one dated cuota in the derived (on-the-fly) plan shown to
+// the attendee and the organizer.
+type InstallmentCuota struct {
+	Number  int       `json:"number"`
+	Amount  int64     `json:"amount"`
+	DueDate time.Time `json:"due_date"`
+	Status  string    `json:"status"` // pagada | pendiente | vencida
+}
+
+// InstallmentPlan is the per-attendee cuota schedule derived from the
+// registration date, the event start and what's been paid. It is computed on
+// the fly (not persisted) so it always reflects the current event start and
+// payments — no migration, no staleness.
+type InstallmentPlan struct {
+	Count          int                `json:"count"`
+	PaidCount      int                `json:"paid_count"`
+	RemainingCount int                `json:"remaining_count"`
+	OverdueCount   int                `json:"overdue_count"`
+	OverdueAmount  int64              `json:"overdue_amount"`
+	NextDueNumber  int                `json:"next_due_number,omitempty"`
+	NextDueDate    *time.Time         `json:"next_due_date,omitempty"`
+	NextDueAmount  int64              `json:"next_due_amount,omitempty"`
+	FinalDueDate   *time.Time         `json:"final_due_date,omitempty"`
+	Cuotas         []InstallmentCuota `json:"cuotas"`
+}
+
+// BuildInstallmentPlan derives the cuota schedule for one registration.
+// Decision (confirmed with the organizer): the FIRST cuota is due at the
+// registration date and the rest are spread evenly up to the event start — the
+// last cuota falls on the start, since the carné only activates when the whole
+// price is paid. Amounts come from ComputeInstallments (exact $50 split). Each
+// cuota is marked pagada / pendiente / vencida from amountPaid (cumulative) and
+// `now`. Returns nil when there's no usable plan (cuotas < 2, price <= 0, or the
+// amounts can't be split), so callers can simply omit it.
+func BuildInstallmentPlan(
+	registeredAt time.Time,
+	startAt *time.Time,
+	count int,
+	price, amountPaid int64,
+	now time.Time,
+) *InstallmentPlan {
+	if count < 2 || price <= 0 {
+		return nil
+	}
+	amounts, err := ComputeInstallments(price, count)
+	if err != nil {
+		return nil
+	}
+
+	// Due dates: cuota 1 at registration, cuota N at the event start, the rest
+	// evenly in between. If the start is missing or not after registration (very
+	// late sign-up), the window collapses and every cuota is due now.
+	end := registeredAt
+	if startAt != nil && startAt.After(registeredAt) {
+		end = *startAt
+	}
+	window := end.Sub(registeredAt)
+	dues := make([]time.Time, count)
+	for i := 0; i < count; i++ {
+		frac := float64(i) / float64(count-1)
+		dues[i] = registeredAt.Add(time.Duration(float64(window) * frac))
+	}
+
+	plan := &InstallmentPlan{Count: count, Cuotas: make([]InstallmentCuota, count)}
+	final := dues[count-1]
+	plan.FinalDueDate = &final
+	var cum int64
+	for i := 0; i < count; i++ {
+		paidBefore := cum
+		cum += amounts[i]
+		status := InstallmentStatusPending
+		if amountPaid >= cum {
+			status = InstallmentStatusPaid
+			plan.PaidCount++
+		} else {
+			plan.RemainingCount++
+			// Unpaid portion of THIS cuota (handles a partial abono landing mid-cuota).
+			unpaid := cum - max(amountPaid, paidBefore)
+			if dues[i].Before(now) {
+				status = InstallmentStatusOverdue
+				plan.OverdueCount++
+				plan.OverdueAmount += unpaid
+			}
+			if plan.NextDueNumber == 0 {
+				plan.NextDueNumber = i + 1
+				d := dues[i]
+				plan.NextDueDate = &d
+				plan.NextDueAmount = unpaid
+			}
+		}
+		plan.Cuotas[i] = InstallmentCuota{
+			Number:  i + 1,
+			Amount:  amounts[i],
+			DueDate: dues[i],
+			Status:  status,
+		}
+	}
+	return plan
+}
+
+// InstallmentStatus* mirror the persisted model's statuses so the derived plan
+// speaks the same vocabulary (Spanish, surfaced to users).
+const (
+	InstallmentStatusPending = models.InstallmentStatusPending
+	InstallmentStatusPaid    = models.InstallmentStatusPaid
+	InstallmentStatusOverdue = models.InstallmentStatusOverdue
+)
+
 // SetupInstallments creates the event-scoped fiado account for a registration
 // and returns it with the computed cuota schedule. Per decision R-02 the
 // account is SEPARATE from any store fiado account — it is linked only from

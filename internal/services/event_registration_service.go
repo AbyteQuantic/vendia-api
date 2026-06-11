@@ -444,6 +444,9 @@ type EventRegistrationView struct {
 	CertIssued    bool   `json:"certificate_issued"`
 	QRToken       string `json:"qr_token"`
 	PublicToken   string `json:"public_token"`
+	// Cronograma de cuotas del inscrito (solo si el evento admite cuotas y aún
+	// hay saldo) — el organizador ve próximo vencimiento, vencidas y restantes.
+	Installments *InstallmentPlan `json:"installments,omitempty"`
 }
 
 // ListByEvent returns the attendee panel for an event (tenant-scoped, Art. III):
@@ -477,6 +480,13 @@ func (s *EventRegistrationService) ListByEvent(tenantID, eventID string) ([]Even
 			Where("registration_id = ? AND tenant_id = ? AND scan_type = ?", r.ID, tenantID, models.ScanTypeOut).
 			Count(&outN)
 
+		var plan *InstallmentPlan
+		if ev.InstallmentsEnabled && ev.InstallmentsCount >= 2 && balance > 0 {
+			plan = BuildInstallmentPlan(
+				r.CreatedAt, ev.StartAt, ev.InstallmentsCount,
+				ev.Price, r.AmountPaid, time.Now().UTC())
+		}
+
 		out = append(out, EventRegistrationView{
 			ID:            r.ID,
 			CustomerName:  c.Name,
@@ -493,6 +503,7 @@ func (s *EventRegistrationService) ListByEvent(tenantID, eventID string) ([]Even
 			CertIssued:    r.CertificateIssuedAt != nil,
 			QRToken:       r.QRToken,
 			PublicToken:   r.PublicToken,
+			Installments:  plan,
 		})
 	}
 	return out, nil

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"vendia-backend/internal/models"
 	"vendia-backend/internal/services"
@@ -213,6 +214,17 @@ func PublicGetCarnet(db *gorm.DB) gin.HandlerFunc {
 			"payment_details":      ev.PaymentDetails,
 			"seat_number":          reg.SeatNumber,
 			"confirmed":            confirmed,
+		}
+		// Cronograma de cuotas derivado (1ª al inscribirse, resto hasta el
+		// inicio): el asistente ve vencimientos, cuánto/cuántas le faltan y
+		// avisos de cuotas vencidas. Solo mientras quede saldo por pagar.
+		if ev.InstallmentsEnabled && ev.InstallmentsCount >= 2 && !confirmed {
+			if plan := services.BuildInstallmentPlan(
+				reg.CreatedAt, ev.StartAt, ev.InstallmentsCount,
+				ev.Price, reg.AmountPaid, time.Now().UTC(),
+			); plan != nil {
+				out["installment_plan"] = plan
+			}
 		}
 		// Certificado: el asistente lo ve en su sesión del catálogo cuando el
 		// organizador lo emite (FR-17). La IA solo dibuja el MARCO; la app
