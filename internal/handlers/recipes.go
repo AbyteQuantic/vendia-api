@@ -127,6 +127,9 @@ func CreateRecipe(db *gorm.DB) gin.HandlerFunc {
 				IsAvailable: true,
 				IsRecipe:    true,
 				RecipeID:    &recipeID,
+				// F043 — un plato/receta también es un ítem del menú del
+				// restaurante: alimenta la sección "Menú restaurante" del catálogo.
+				IsMenuItem: true,
 			}
 			if err := tx.Create(&product).Error; err != nil {
 				return err

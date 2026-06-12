@@ -37,6 +37,18 @@ type Product struct {
 	IsRecipe bool    `gorm:"default:false" json:"is_recipe"`
 	RecipeID *string `gorm:"type:uuid;index" json:"recipe_id,omitempty"`
 
+	// ── Spec F043 — Menú de restaurante ─────────────────────────────────
+	// Description: texto del plato para el catálogo ("Hamburguesa artesanal
+	// con queso, papas y bebida"). Vacío para productos retail normales.
+	Description string `json:"description,omitempty"`
+	// Portion: tamaño/porción libre ("Personal", "Para compartir", "300g").
+	Portion string `json:"portion,omitempty"`
+	// IsMenuItem marca un PLATO de menú de restaurante: alimenta la sección
+	// "Menú restaurante" del catálogo público. Aditivo + default false: los
+	// productos existentes no se ven afectados. Lo activan los 3 caminos del
+	// módulo (cámara/manual/voz) y las recetas.
+	IsMenuItem bool `gorm:"default:false;index" json:"is_menu_item"`
+
 	// ── Spec F029 — precios multi-tier por tipo de cliente ──────────────
 	// PriceTier1 / PriceTier2 / PriceTier3 are optional per-tier prices
 	// applied when Tenant.EnablePriceTiers is ON. Nullable (pointer)

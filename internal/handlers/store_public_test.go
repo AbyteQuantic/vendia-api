@@ -65,8 +65,8 @@ func TestPublicCatalog_AlwaysShowsProducts(t *testing.T) {
 
 	var res struct {
 		Data struct {
-			IsOpen   bool `json:"is_open"`
-			Products []any `json:"products"`
+			IsOpen   bool           `json:"is_open"`
+			Products []any          `json:"products"`
 			Theme    map[string]any `json:"theme"`
 		} `json:"data"`
 	}
@@ -324,4 +324,63 @@ func TestPublicCatalog_NeverExposesPriceTiers(t *testing.T) {
 		assert.False(t, exists,
 			"el catálogo público NO debe exponer %s (FR-09, AC-08)", leak)
 	}
+}
+
+// F043 — el catálogo público expone los campos del PLATO de menú para que el
+// front arme la sección "Menú restaurante".
+func TestPublicCatalog_ExposesMenuFields(t *testing.T) {
+	db := setupStoreTestDB()
+	gin.SetMode(gin.TestMode)
+	slug := "resto"
+	tenant := models.Tenant{
+		BaseModel: models.BaseModel{ID: "t-resto"}, BusinessName: "Resto",
+		StoreSlug: &slug,
+	}
+	db.Create(&tenant)
+	dish := models.Product{
+		BaseModel: models.BaseModel{ID: "dish-1"}, TenantID: "t-resto",
+		Name: "Bandeja Paisa", Price: 25000, IsAvailable: true,
+		Category: "Platos fuertes", Description: "Frijoles, arroz, carne, chicharrón",
+		Portion: "Personal", IsMenuItem: true,
+	}
+	db.Create(&dish)
+	retail := models.Product{
+		BaseModel: models.BaseModel{ID: "ret-1"}, TenantID: "t-resto",
+		Name: "Coca Cola", Price: 3000, IsAvailable: true,
+	}
+	db.Create(&retail)
+
+	r := gin.New()
+	r.GET("/catalog/:slug", PublicCatalog(db))
+	req, _ := http.NewRequest(http.MethodGet, "/catalog/resto", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var res struct {
+		Data struct {
+			Products []struct {
+				Name        string `json:"name"`
+				Description string `json:"description"`
+				Portion     string `json:"portion"`
+				IsMenuItem  bool   `json:"is_menu_item"`
+			} `json:"products"`
+		} `json:"data"`
+	}
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &res))
+	assert.Len(t, res.Data.Products, 2)
+
+	var dishes, retails int
+	for _, p := range res.Data.Products {
+		if p.IsMenuItem {
+			dishes++
+			assert.Equal(t, "Bandeja Paisa", p.Name)
+			assert.Equal(t, "Frijoles, arroz, carne, chicharrón", p.Description)
+			assert.Equal(t, "Personal", p.Portion)
+		} else {
+			retails++
+		}
+	}
+	assert.Equal(t, 1, dishes)
+	assert.Equal(t, 1, retails)
 }

@@ -231,6 +231,11 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 			// add-to-cart on zero stock — same source of truth as the
 			// POS app, no separate "current_stock" column.
 			Stock int `json:"stock"`
+			// F043 — campos del PLATO de menú. El front arma la sección "Menú
+			// restaurante" con los productos donde is_menu_item = true.
+			Description string `json:"description,omitempty"`
+			Portion     string `json:"portion,omitempty"`
+			IsMenuItem  bool   `json:"is_menu_item"`
 		}
 
 		var catalog []CatalogProduct
@@ -240,13 +245,16 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 				photo = p.ImageURL
 			}
 			catalog = append(catalog, CatalogProduct{
-				UUID:     p.ID,
-				Name:     p.Name,
-				Price:    p.Price,
-				PhotoURL: photo,
-				Emoji:    p.Emoji,
-				Category: p.Category,
-				Stock:    p.Stock,
+				UUID:        p.ID,
+				Name:        p.Name,
+				Price:       p.Price,
+				PhotoURL:    photo,
+				Emoji:       p.Emoji,
+				Category:    p.Category,
+				Stock:       p.Stock,
+				Description: p.Description,
+				Portion:     p.Portion,
+				IsMenuItem:  p.IsMenuItem,
 			})
 		}
 
