@@ -25,24 +25,29 @@ func SendReceipt(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		if sale.CustomerID == nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "la venta no tiene cliente asociado"})
-			return
-		}
-
-		var customer models.Customer
-		if err := db.Where("id = ?", *sale.CustomerID).First(&customer).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "cliente no encontrado"})
-			return
+		// Venta de mostrador (anónima, sin cliente — válida por F030): NO se
+		// rechaza. Sin teléfono, BuildURL produce `wa.me/?text=…`, que abre
+		// WhatsApp con el recibo listo y deja al tendero elegir el contacto.
+		// Si el cliente existe pero su fila ya no está, degradamos igual al
+		// selector en vez de un 404 que deja al tendero sin salida.
+		var phone string
+		if sale.CustomerID != nil {
+			var customer models.Customer
+			if err := db.Where("id = ?", *sale.CustomerID).
+				First(&customer).Error; err == nil {
+				phone = customer.Phone
+			}
 		}
 
 		var tenant models.Tenant
 		db.Where("id = ?", tenantID).First(&tenant)
 
 		waSvc := services.NewWhatsAppService()
-		receiptURL := fmt.Sprintf("https://vendia.co/receipt/%s", sale.ID)
-		message := waSvc.ReceiptMessage(tenant.BusinessName, sale.Total, receiptURL)
-		waURL := waSvc.BuildURL(customer.Phone, message)
+		// Sin URL de recibo: el link viejo (vendia.co/receipt/…) apuntaba a
+		// un dominio equivocado y a una ruta que no existe — el cliente
+		// recibía un enlace roto. El mensaje lleva negocio + total.
+		message := waSvc.ReceiptMessage(tenant.BusinessName, sale.Total, "")
+		waURL := waSvc.BuildURL(phone, message)
 
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{

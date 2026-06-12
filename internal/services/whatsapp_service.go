@@ -15,6 +15,14 @@ func NewWhatsAppService() *WhatsAppService {
 }
 
 func (s *WhatsAppService) ReceiptMessage(businessName string, total float64, receiptURL string) string {
+	// receiptURL vacío = sin link en el mensaje (el portal público de
+	// recibos no existe aún; antes se enviaba un enlace roto a vendia.co).
+	if receiptURL == "" {
+		return fmt.Sprintf(
+			"¡Hola! Gracias por comprar en %s. Su total fue $%s. "+
+				"¡Guarde este número!",
+			businessName, formatCOP(total))
+	}
 	return fmt.Sprintf(
 		"¡Hola! Gracias por comprar en %s. Su total fue $%s. "+
 			"Vea su recibo aquí: %s. ¡Guarde este número!",
