@@ -349,6 +349,14 @@ func TestPublicCatalog_ExposesMenuFields(t *testing.T) {
 		Name: "Coca Cola", Price: 3000, IsAvailable: true,
 	}
 	db.Create(&retail)
+	// F044 — un SERVICIO publicable (sin inventario).
+	service := models.Product{
+		BaseModel: models.BaseModel{ID: "svc-1"}, TenantID: "t-resto",
+		Name: "Corte de cabello", Price: 15000, IsAvailable: true,
+		Category: "Servicios", Description: "Corte clásico a tijera",
+		IsService: true,
+	}
+	db.Create(&service)
 
 	r := gin.New()
 	r.GET("/catalog/:slug", PublicCatalog(db))
@@ -364,23 +372,30 @@ func TestPublicCatalog_ExposesMenuFields(t *testing.T) {
 				Description string `json:"description"`
 				Portion     string `json:"portion"`
 				IsMenuItem  bool   `json:"is_menu_item"`
+				IsService   bool   `json:"is_service"`
 			} `json:"products"`
 		} `json:"data"`
 	}
 	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &res))
-	assert.Len(t, res.Data.Products, 2)
+	assert.Len(t, res.Data.Products, 3)
 
-	var dishes, retails int
+	var dishes, retails, services int
 	for _, p := range res.Data.Products {
-		if p.IsMenuItem {
+		switch {
+		case p.IsMenuItem:
 			dishes++
 			assert.Equal(t, "Bandeja Paisa", p.Name)
 			assert.Equal(t, "Frijoles, arroz, carne, chicharrón", p.Description)
 			assert.Equal(t, "Personal", p.Portion)
-		} else {
+		case p.IsService:
+			services++
+			assert.Equal(t, "Corte de cabello", p.Name)
+			assert.Equal(t, "Corte clásico a tijera", p.Description)
+		default:
 			retails++
 		}
 	}
 	assert.Equal(t, 1, dishes)
 	assert.Equal(t, 1, retails)
+	assert.Equal(t, 1, services)
 }

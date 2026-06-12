@@ -147,6 +147,8 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		Description string `json:"description"`
 		Portion    string `json:"portion"`
 		IsMenuItem bool   `json:"is_menu_item"`
+		// Spec F044 — servicio publicable (catálogo unificado).
+		IsService bool `json:"is_service"`
 
 		// Spec F029 — optional tier prices. Nullable pointer so we
 		// can distinguish "not sent" from "explicit 0" (invalid). When
@@ -267,6 +269,7 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			Description:       req.Description,
 			Portion:           req.Portion,
 			IsMenuItem:        req.IsMenuItem,
+			IsService:         req.IsService,
 			PriceTier1:        req.PriceTier1,
 			PriceTier2:        req.PriceTier2,
 			PriceTier3:        req.PriceTier3,

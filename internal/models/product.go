@@ -49,6 +49,15 @@ type Product struct {
 	// módulo (cámara/manual/voz) y las recetas.
 	IsMenuItem bool `gorm:"default:false;index" json:"is_menu_item"`
 
+	// ── Spec F044 — catálogo público unificado ──────────────────────────
+	// IsService marca un SERVICIO publicable (corte de cabello, reparación,
+	// mano de obra, domicilio…): se publica en el link público como "oferta"
+	// junto a los platos, sin inventario y pedible siempre que la tienda esté
+	// abierta. Espeja IsMenuItem (aditivo + default false). Generaliza el
+	// catálogo a todo tipo de negocio, no solo restaurantes. Description se
+	// reusa para el detalle del servicio.
+	IsService bool `gorm:"default:false;index" json:"is_service"`
+
 	// ── Spec F029 — precios multi-tier por tipo de cliente ──────────────
 	// PriceTier1 / PriceTier2 / PriceTier3 are optional per-tier prices
 	// applied when Tenant.EnablePriceTiers is ON. Nullable (pointer)

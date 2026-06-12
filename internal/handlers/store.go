@@ -236,6 +236,9 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 			Description string `json:"description,omitempty"`
 			Portion     string `json:"portion,omitempty"`
 			IsMenuItem  bool   `json:"is_menu_item"`
+			// F044 — servicio publicable. El front lo trata como "oferta"
+			// (sin stock, pedible) junto a los platos en el catálogo unificado.
+			IsService bool `json:"is_service"`
 		}
 
 		var catalog []CatalogProduct
@@ -255,6 +258,7 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 				Description: p.Description,
 				Portion:     p.Portion,
 				IsMenuItem:  p.IsMenuItem,
+				IsService:   p.IsService,
 			})
 		}
 
