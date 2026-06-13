@@ -44,6 +44,12 @@ func CreateRecipe(db *gorm.DB) gin.HandlerFunc {
 		SalePrice   float64 `json:"sale_price"   binding:"required,gt=0"`
 		Emoji       string  `json:"emoji"`
 		PhotoURL    string  `json:"photo_url"`
+		// F043 — el plato/receta también es un ítem del menú: la
+		// descripción apetitosa y la porción alimentan la tarjeta del
+		// catálogo público. Opcionales; viajan al Product, no a la Recipe
+		// (que solo modela el costo).
+		Description string `json:"description"`
+		Portion     string `json:"portion"`
 		// `dive` makes the validator descend into each slice element so
 		// the per-field rules on IngredientInput (required ingredient_uuid,
 		// quantity > 0) are actually enforced.
@@ -130,6 +136,10 @@ func CreateRecipe(db *gorm.DB) gin.HandlerFunc {
 				// F043 — un plato/receta también es un ítem del menú del
 				// restaurante: alimenta la sección "Menú restaurante" del catálogo.
 				IsMenuItem: true,
+				// Descripción y porción para la tarjeta del catálogo (F043
+				// slice manual: foto + descripción + porción).
+				Description: req.Description,
+				Portion:     req.Portion,
 			}
 			if err := tx.Create(&product).Error; err != nil {
 				return err

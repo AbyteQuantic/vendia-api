@@ -112,6 +112,42 @@ func TestCreateRecipe_CreatesLinkedVendibleProduct(t *testing.T) {
 	assert.Equal(t, product.ID, *stored.ProductID)
 }
 
+// F043 slice manual — POST /recipes carries the optional plato
+// description + portion straight onto the vendible Product so the public
+// menu card shows them. is_menu_item must also stay true.
+func TestCreateRecipe_CopiesDescriptionAndPortionToProduct(t *testing.T) {
+	db := setupRecipeProductDB(t)
+	tenantID := "tenant-rp"
+	arrozID := seedInsumoP(t, db, tenantID, "c1000000-0000-4000-8000-000000000090", "Arroz", 2900)
+
+	r := mountRecipeCRUDHandlers(db, tenantID)
+	payload := map[string]any{
+		"product_name": "Bandeja Paisa",
+		"category":     "Platos fuertes",
+		"sale_price":   25000,
+		"emoji":        "🍛",
+		"description":  "Frijoles, arroz, carne, chicharrón y huevo",
+		"portion":      "Para compartir",
+		"ingredients": []map[string]any{
+			{"ingredient_uuid": arrozID, "quantity": 0.2},
+		},
+	}
+	w := doJSON(t, r, http.MethodPost, "/recipes", payload)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var resp struct {
+		Data models.Recipe `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Data.ProductID)
+
+	var product models.Product
+	require.NoError(t, db.Where("id = ?", *resp.Data.ProductID).First(&product).Error)
+	assert.Equal(t, "Frijoles, arroz, carne, chicharrón y huevo", product.Description)
+	assert.Equal(t, "Para compartir", product.Portion)
+	assert.True(t, product.IsMenuItem, "a recipe is also a menu item")
+}
+
 // BUG-3 — a rejected recipe (unknown insumo) must NOT leave an orphan
 // product behind: the whole CreateRecipe transaction rolls back.
 func TestCreateRecipe_RejectedRecipeLeavesNoOrphanProduct(t *testing.T) {
