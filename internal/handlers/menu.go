@@ -14,6 +14,7 @@ import (
 	"vendia-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 // ScanMenu — POST /api/v1/menu/scan-photo. Lee una foto de la CARTA/MENÚ del
@@ -130,5 +131,63 @@ REGLAS:
 		}
 
 		c.JSON(http.StatusOK, gin.H{"data": gin.H{"description": desc}})
+	}
+}
+
+// GenerateMenuImage — POST /api/v1/menu/generate-image. Genera una foto de
+// MUESTRA del plato con IA a partir del nombre (name-based, sin crear ningún
+// producto — concilio 2026-06-13 opción C: evita el "first write wins" y los
+// productos fantasma). Devuelve la URL en R2; el editor la guarda como un
+// campo más del plato y la incluye en el createProduct del "Publicar".
+//
+// Síncrono como /menu/scan-photo (mismo patrón probado en producción): la
+// llamada a Gemini tarda ~20-40s, dentro del timeout. Si en el futuro
+// aparecen gateway-timeouts, migrar al patrón job+polling de Spec 016.
+func GenerateMenuImage(geminiSvc *services.GeminiService, storageSvc services.FileStorage) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		if geminiSvc == nil || storageSvc == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "servicios de IA no configurados"})
+			return
+		}
+
+		var req struct {
+			Name     string `json:"name"`
+			Category string `json:"category"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "nombre del plato requerido"})
+			return
+		}
+		name := strings.TrimSpace(req.Name)
+		if len(name) < 2 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "escribe el nombre del plato primero"})
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(
+			aiusage.WithTenantID(c.Request.Context(), tenantID), 90*time.Second)
+		defer cancel()
+
+		// presentation vacío: la categoría no es una presentación de producto;
+		// el nombre del plato es suficiente para una foto de muestra.
+		img, err := geminiSvc.GenerateProductImage(ctx, name, "")
+		if err != nil || len(img) == 0 {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{
+				"error": "No pudimos crear la foto. Intenta de nuevo.",
+			})
+			return
+		}
+
+		key := fmt.Sprintf("menu/%s/%s.png", tenantID, uuid.NewString())
+		url, err := storageSvc.Upload(ctx, "product-photos", key, img, "image/png")
+		if err != nil || url == "" {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "No pudimos guardar la foto. Intenta de nuevo.",
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{"image_url": url}})
 	}
 }

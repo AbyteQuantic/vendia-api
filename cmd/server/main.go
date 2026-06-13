@@ -515,6 +515,8 @@ func main() {
 		v1.POST("/menu/scan-photo", handlers.ScanMenu(geminiSvc))
 		// F043 — descripción del plato generada con IA (texto, síncrono).
 		v1.POST("/menu/generate-description", handlers.GenerateMenuDescription(geminiSvc))
+		// F043 — foto de muestra del plato generada con IA (name-based, síncrono).
+		v1.POST("/menu/generate-image", handlers.GenerateMenuImage(geminiSvc, storageSvc))
 		v1.GET("/inventory/alerts", handlers.InventoryAlerts(db))
 		v1.GET("/inventory/expiring", handlers.ExpiringProducts(db))
 		// Kardex & Smart Dedup
