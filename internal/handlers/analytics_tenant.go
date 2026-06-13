@@ -492,7 +492,12 @@ func ProductInsights(db *gorm.DB) gin.HandlerFunc {
 			Joins("LEFT JOIN products p ON p.id = si.product_id").
 			Where("s.tenant_id = ? AND s.created_at >= ? AND s.deleted_at IS NULL",
 				tenantID, since).
-			Where("si.product_id IS NOT NULL AND si.product_id <> ''")
+			// product_id es UUID en Postgres: `<> ''` lanza
+			// "invalid input syntax for type uuid" en runtime → la query
+			// fallaba y top_sellers volvía VACÍO (el módulo mostraba "aún
+			// no hay ventas" aunque sí las había). Un UUID es NULL o
+			// válido; basta con IS NOT NULL. (sqlite lo toleraba en tests.)
+			Where("si.product_id IS NOT NULL")
 		if scope.BranchID != "" {
 			qTop = qTop.Where("s.branch_id = ?", scope.BranchID)
 		}
