@@ -49,6 +49,13 @@ type Product struct {
 	// módulo (cámara/manual/voz) y las recetas.
 	IsMenuItem bool `gorm:"default:false;index" json:"is_menu_item"`
 
+	// PhotoIsSample marca que ImageURL es una foto de MUESTRA generada por IA
+	// a partir del nombre (una ilustración), NO la foto real del plato. El
+	// catálogo público la etiqueta como "Imagen de muestra" para no engañar al
+	// comensal (F043). Default false: una foto real subida (o mejorada
+	// fielmente con IA) NO es muestra. Aditivo (Art. X).
+	PhotoIsSample bool `gorm:"default:false" json:"photo_is_sample"`
+
 	// ── Spec F044 — catálogo público unificado ──────────────────────────
 	// IsService marca un SERVICIO publicable (corte de cabello, reparación,
 	// mano de obra, domicilio…): se publica en el link público como "oferta"

@@ -517,6 +517,9 @@ func main() {
 		v1.POST("/menu/generate-description", handlers.GenerateMenuDescription(geminiSvc))
 		// F043 — foto de muestra del plato generada con IA (name-based, síncrono).
 		v1.POST("/menu/generate-image", handlers.GenerateMenuImage(geminiSvc, storageSvc))
+		// F043 — mejora FIEL de la foto real del plato (multipart, EnhancePhoto):
+		// recorta fondo + luz de estudio sin redibujar (no engaña al comensal).
+		v1.POST("/menu/enhance-image", handlers.EnhanceMenuImage(geminiSvc, storageSvc))
 		v1.GET("/inventory/alerts", handlers.InventoryAlerts(db))
 		v1.GET("/inventory/expiring", handlers.ExpiringProducts(db))
 		// Kardex & Smart Dedup

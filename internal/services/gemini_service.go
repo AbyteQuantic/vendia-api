@@ -915,8 +915,25 @@ Output ONLY the finished product photo. No mockups, no frames, no captions.`, na
 // packaging context only. See buildGenerateProductPrompt for the full
 // rationale on why mixing the two produced the wrong product.
 func (s *GeminiService) GenerateProductImage(ctx context.Context, name, presentation string) ([]byte, error) {
-	prompt := buildGenerateProductPrompt(name, presentation)
+	return s.generateImageFromTextPrompt(ctx,
+		buildGenerateProductPrompt(name, presentation), models.AIFeatureProductImage)
+}
 
+// GenerateDishImage creates a SAMPLE catalog photo of a restaurant dish from
+// its name, description and optional presentation (how it is served). Unlike
+// GenerateProductImage (whose prompt has retail "don't draw the packaging"
+// traps), this uses a food-photography prompt: the description drives the
+// visible ingredients so the sample is much more accurate (F043 — el fundador
+// pidió que la imagen se base en título + descripción + presentación).
+func (s *GeminiService) GenerateDishImage(ctx context.Context, name, description, presentation string) ([]byte, error) {
+	return s.generateImageFromTextPrompt(ctx,
+		buildGenerateDishPrompt(name, description, presentation), models.AIFeatureProductImage)
+}
+
+// generateImageFromTextPrompt runs a text-only image generation and returns the
+// first image's bytes. Shared by GenerateProductImage and GenerateDishImage so
+// the proven HTTP/decoding path lives in one place.
+func (s *GeminiService) generateImageFromTextPrompt(ctx context.Context, prompt, feature string) ([]byte, error) {
 	payload := map[string]any{
 		"contents": []map[string]any{
 			{
@@ -963,7 +980,7 @@ func (s *GeminiService) GenerateProductImage(ctx context.Context, name, presenta
 		return nil, fmt.Errorf("gemini error %d: %s", geminiResp.Error.Code, geminiResp.Error.Message)
 	}
 
-	s.recordTokenUsage(ctx, models.AIFeatureProductImage, s.imageModel, &geminiResp)
+	s.recordTokenUsage(ctx, feature, s.imageModel, &geminiResp)
 
 	for _, candidate := range geminiResp.Candidates {
 		for _, part := range candidate.Content.Parts {
@@ -981,6 +998,48 @@ func (s *GeminiService) GenerateProductImage(ctx context.Context, name, presenta
 	}
 
 	return nil, fmt.Errorf("no image returned from Gemini for product generation")
+}
+
+// buildGenerateDishPrompt assembles a food-photography prompt for a SAMPLE dish
+// image. The description is the strongest signal for the visible ingredients,
+// so the sample matches what the diner will actually get; presentation (how it
+// is served — "en plato", "para llevar", "en vaso") refines the composition.
+func buildGenerateDishPrompt(name, description, presentation string) string {
+	name = strings.TrimSpace(name)
+	description = strings.TrimSpace(description)
+	presentation = strings.TrimSpace(presentation)
+
+	descLine := ""
+	if description != "" {
+		descLine = fmt.Sprintf(`
+
+INGREDIENTS & PREPARATION (the strongest signal — draw exactly this):
+- The dish is described as: "%s".
+- Make the visible ingredients and preparation match this description as closely as possible, so the photo looks like the real dish the customer will receive. Do NOT add famous garnishes or sides that are not implied by the name or this description.`, description)
+	}
+
+	servingLine := ""
+	if presentation != "" {
+		servingLine = fmt.Sprintf(`
+
+HOW IT IS SERVED:
+- This dish is served like this: "%s" (for example: on a plate, in a takeaway box, in a glass/cup, in a bowl). Compose the photo with the dish presented in that way.`, presentation)
+	}
+
+	return fmt.Sprintf(`You are a professional FOOD photographer for a restaurant menu. Generate ONE realistic, appetizing catalog photo of the dish described below.
+
+THE DISH: "%s"%s%s
+
+PHOTOGRAPHY STYLE:
+- A real, appetizing photo of the prepared dish, freshly served, top-quality menu photography.
+- The dish is centered, complete and fully visible, never cropped, never touching the edges.
+- Clean, softly lit background (neutral white or a subtle wooden/table surface), natural soft studio lighting, realistic and vibrant colours, square 1:1 framing.
+- One subtle soft shadow so the dish sits naturally on the surface.
+- No added text, no logos, no watermarks, no people, no hands, no menus or price tags.
+
+IMPORTANT — this is a SAMPLE illustration to help the merchant: keep it realistic and faithful to the name and description; never invent a different dish or a fancier version than described.
+
+Output ONLY the finished food photo.`, name, descLine, servingLine)
 }
 
 // callWithImageLowTemp is like callWithImage but forces temperature=0 for strict OCR extraction.

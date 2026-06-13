@@ -147,6 +147,10 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		Description string `json:"description"`
 		Portion    string `json:"portion"`
 		IsMenuItem bool   `json:"is_menu_item"`
+		// PhotoIsSample: la foto es una MUESTRA generada por IA desde el
+		// nombre (ilustración), no la foto real del plato. El catálogo la
+		// etiqueta para no engañar al comensal (F043).
+		PhotoIsSample bool `json:"photo_is_sample"`
 		// Spec F044 — servicio publicable (catálogo unificado).
 		IsService bool `json:"is_service"`
 
@@ -269,6 +273,7 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			Description:       req.Description,
 			Portion:           req.Portion,
 			IsMenuItem:        req.IsMenuItem,
+			PhotoIsSample:     req.PhotoIsSample,
 			IsService:         req.IsService,
 			PriceTier1:        req.PriceTier1,
 			PriceTier2:        req.PriceTier2,
