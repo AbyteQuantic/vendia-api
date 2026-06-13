@@ -236,6 +236,10 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 			Description string `json:"description,omitempty"`
 			Portion     string `json:"portion,omitempty"`
 			IsMenuItem  bool   `json:"is_menu_item"`
+			// PhotoIsSample — la foto es una MUESTRA generada por IA (ilustración),
+			// no la foto real del plato. El front la etiqueta para no engañar al
+			// comensal (F043).
+			PhotoIsSample bool `json:"photo_is_sample"`
 			// F044 — servicio publicable. El front lo trata como "oferta"
 			// (sin stock, pedible) junto a los platos en el catálogo unificado.
 			IsService bool `json:"is_service"`
@@ -255,10 +259,11 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 				Emoji:       p.Emoji,
 				Category:    p.Category,
 				Stock:       p.Stock,
-				Description: p.Description,
-				Portion:     p.Portion,
-				IsMenuItem:  p.IsMenuItem,
-				IsService:   p.IsService,
+				Description:   p.Description,
+				Portion:       p.Portion,
+				IsMenuItem:    p.IsMenuItem,
+				PhotoIsSample: p.PhotoIsSample,
+				IsService:     p.IsService,
 			})
 		}
 
