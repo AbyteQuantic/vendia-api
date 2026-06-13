@@ -304,6 +304,10 @@ func main() {
 		loginLimiter, handlers.PreviewLogoIA(geminiSvc, storageSvc))
 	r.POST("/api/v1/auth/preview-logo-upload",
 		loginLimiter, handlers.PreviewLogoUpload(storageSvc))
+	// F045 — onboarding agéntico: extrae campos del registro desde texto/
+	// voz (público, stateless, no crea tenant). Rate-limit por IP reusado.
+	r.POST("/api/v1/auth/onboarding-parse",
+		loginLimiter, handlers.OnboardingParse(geminiSvc))
 
 	r.POST("/api/v1/auth/refresh", handlers.RefreshToken(db, cfg.JWTSecret))
 	r.POST("/api/v1/auth/select-workspace", middleware.Auth(cfg.JWTSecret), handlers.SelectWorkspace(db, cfg.JWTSecret))

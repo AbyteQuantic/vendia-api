@@ -13,4 +13,6 @@ const (
 	// Spec F042 — diseño de escarapela y certificado de eventos con IA.
 	AIFeatureEventBadge = "EVENT_BADGE"
 	AIFeatureEventCert  = "EVENT_CERT"
+	// Spec F045 — extracción de campos del onboarding desde texto/voz.
+	AIFeatureOnboarding = "ONBOARDING_PARSE"
 )
