@@ -513,6 +513,8 @@ func main() {
 		v1.POST("/inventory/scan-invoice", handlers.ScanInvoice(db, geminiSvc, offSvc))
 		// F043 — OCR de la carta/menú del restaurante → platos editables.
 		v1.POST("/menu/scan-photo", handlers.ScanMenu(geminiSvc))
+		// F043 — descripción del plato generada con IA (texto, síncrono).
+		v1.POST("/menu/generate-description", handlers.GenerateMenuDescription(geminiSvc))
 		v1.GET("/inventory/alerts", handlers.InventoryAlerts(db))
 		v1.GET("/inventory/expiring", handlers.ExpiringProducts(db))
 		// Kardex & Smart Dedup
