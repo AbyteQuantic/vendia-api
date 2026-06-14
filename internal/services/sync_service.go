@@ -83,8 +83,19 @@ func (s *SyncService) ProcessBatch(tenantID string, req SyncRequest) (*SyncRespo
 	}, nil
 }
 
+// canonicalSyncEntity normaliza alias de entidad enviados por clientes viejos.
+// Spec 047 AC-06: versiones previas del cliente encolaban offline `entity:
+// "credit"`, que no existía en el switch y se descartaba silenciosamente
+// (default → true,nil). Lo mapeamos a su nombre real para drenar esas ops.
+func canonicalSyncEntity(entity string) string {
+	if entity == "credit" {
+		return "credit_account"
+	}
+	return entity
+}
+
 func (s *SyncService) processOperation(tx *gorm.DB, tenantID string, op SyncOperation) (bool, error) {
-	switch op.Entity {
+	switch canonicalSyncEntity(op.Entity) {
 	case "product":
 		return s.syncEntity(tx, &models.Product{}, tenantID, op)
 	case "sale":
