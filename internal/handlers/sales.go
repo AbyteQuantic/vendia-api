@@ -46,6 +46,22 @@ type SaleItemRequest struct {
 	IsService         bool    `json:"is_service"`
 	CustomDescription string  `json:"custom_description"`
 	CustomUnitPrice   float64 `json:"custom_unit_price"`
+
+	// UnitPrice is the EFFECTIVE per-unit price the client charged (tier price
+	// for F029). Optional pointer: nil or <= 0 → server falls back to the
+	// product's retail Price, so retail sales are unchanged. Spec 049.
+	UnitPrice *float64 `json:"unit_price"`
+}
+
+// resolveLineUnitPrice returns the effective per-unit price for a product line:
+// the client-provided unit price when present and positive (the tier price),
+// else the product's retail price. Spec 049 — keeps retail sales unchanged
+// while honoring the tier the cashier actually charged.
+func resolveLineUnitPrice(productPrice float64, reqUnitPrice *float64) float64 {
+	if reqUnitPrice != nil && *reqUnitPrice > 0 {
+		return *reqUnitPrice
+	}
+	return productPrice
 }
 
 type CreateSaleRequest struct {
@@ -331,14 +347,17 @@ func CreateSale(db *gorm.DB, dispatcher *push.Dispatcher) gin.HandlerFunc {
 					return &gin.Error{Err: errProductNotFound(item.ProductID), Type: gin.ErrorTypePublic}
 				}
 
-				subtotal := product.Price * float64(item.Quantity)
+				// Spec 049: precio efectivo del cliente (tier) si vino; si no,
+				// retail. Las ventas sin tier no cambian.
+				unitPrice := resolveLineUnitPrice(product.Price, item.UnitPrice)
+				subtotal := unitPrice * float64(item.Quantity)
 				total += subtotal
 
 				productID := product.ID
 				items = append(items, models.SaleItem{
 					ProductID: &productID,
 					Name:      product.Name,
-					Price:     product.Price,
+					Price:     unitPrice,
 					Quantity:  item.Quantity,
 					Subtotal:  subtotal,
 				})
