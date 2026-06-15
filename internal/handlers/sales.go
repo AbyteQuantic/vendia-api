@@ -392,9 +392,11 @@ func CreateSale(db *gorm.DB, dispatcher *push.Dispatcher) gin.HandlerFunc {
 				// together with the recipe explosion — see below.
 			}
 
-			// Tax and tip ride on top of the item total. Keep them
-			// separate on the row so reports can strip them out.
-			total += req.TaxAmount + req.TipAmount
+			// Spec 049 (IVA): el IVA NO se suma al total — el cliente nunca lo
+			// agrega a lo cobrado (precio inclusivo o base). `tax_amount` es el
+			// DESGLOSE para reportes y se guarda aparte (Sale.TaxAmount, abajo).
+			// La propina SÍ va sobre el total (es un cargo on-top real).
+			total += req.TipAmount
 
 			paymentStatus := req.PaymentStatus
 			if paymentStatus == "" {
