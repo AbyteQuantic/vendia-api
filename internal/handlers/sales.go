@@ -79,9 +79,9 @@ type CreateSaleRequest struct {
 	PaymentStatus    string  `json:"payment_status"`
 	DynamicQRPayload *string `json:"dynamic_qr_payload"`
 
-	// TaxAmount / TipAmount are added on top of the item subtotals. Kept
-	// nullable so callers that don't compute them (legacy cashier flow)
-	// can send zero. Stored on the Sale row directly for reporting.
+	// TipAmount se suma al total (cargo real on-top). TaxAmount (IVA) NO se
+	// suma — el cliente nunca lo agrega a lo cobrado (precio inclusivo o base);
+	// es solo el DESGLOSE, que se guarda en Sale.TaxAmount para reportes (F049).
 	TaxAmount float64 `json:"tax_amount"`
 	TipAmount float64 `json:"tip_amount"`
 
