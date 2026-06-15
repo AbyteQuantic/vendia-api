@@ -94,6 +94,23 @@ func canonicalSyncEntity(entity string) string {
 	return entity
 }
 
+// isLegacyOfflineSalePayload reconoce el envoltorio de venta offline que los
+// clientes viejos encolaban en /sync/batch (op.Data = localSale.toJson()). Esas
+// llaves NO son columnas de `sales`; si llegan a syncEntity.Create(map) el
+// INSERT revienta y envenena el lote. Cualquiera de estas llaves delata el
+// payload legado — el insert real de Sale nunca las lleva.
+func isLegacyOfflineSalePayload(data map[string]any) bool {
+	if data == nil {
+		return false
+	}
+	for _, k := range []string{"items", "uuid", "customer_uuid", "is_credit_sale", "sale_origin", "table_label"} {
+		if _, ok := data[k]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *SyncService) processOperation(tx *gorm.DB, tenantID string, op SyncOperation) (bool, error) {
 	switch canonicalSyncEntity(op.Entity) {
 	case "product":
@@ -250,6 +267,24 @@ func applyUpdate(tx *gorm.DB, model any, op SyncOperation) (bool, error) {
 // double-discounts the insumos (Art. II). A direct-product sale is
 // untouched — ExplodeRecipe is a no-op for non-recipe products (AC-06).
 func (s *SyncService) syncSale(tx *gorm.DB, tenantID string, op SyncOperation) (bool, error) {
+	// Spec 047 — las ventas viajan SOLO por POST /api/v1/sales (CreateSale,
+	// idempotente por UUID: re-POST devuelve 200 sin doble descuento). El
+	// camino /sync/batch para 'sale' quedó obsoleto y ROTO: clientes viejos
+	// encolaban op.Data = localSale.toJson(), cuyas llaves
+	// (uuid/customer_uuid/is_credit_sale/sale_origin/table_label/items) NO son
+	// columnas de `sales`. syncEntity.Create(map) usa las llaves como columnas
+	// → el INSERT falla → ProcessBatch hace rollback de TODO el lote (también
+	// las ops de producto/cliente encoladas detrás) y el cliente reintenta para
+	// siempre (replay real: HTTP 500). Mismo patrón ack-and-skip que el `default`
+	// del switch (canonicalSyncEntity, Spec 047 AC-06): reconocemos la op como
+	// aplicada (true,nil) para que el cliente la borre de su cola — la venta NO
+	// se pierde: vive en LocalSale(synced=false) y sincroniza vía
+	// getUnsyncedSales()→pushToServer()→/api/v1/sales. Esto drena las colas rotas
+	// ya instaladas sin SQL ni migración (viven en el Isar del dispositivo).
+	if isLegacyOfflineSalePayload(op.Data) {
+		return true, nil
+	}
+
 	applied, err := s.syncEntity(tx, &models.Sale{}, tenantID, op)
 	if err != nil || !applied {
 		return applied, err
