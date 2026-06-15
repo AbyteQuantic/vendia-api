@@ -130,23 +130,26 @@ func LookupProductByBarcode(db *gorm.DB) gin.HandlerFunc {
 
 func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.HandlerFunc {
 	type Request struct {
-		ID                string  `json:"id"`
-		Name              string  `json:"name"     binding:"required"`
-		Price             float64 `json:"price"    binding:"required,gt=0"`
-		Stock             int     `json:"stock"`
-		Barcode           string  `json:"barcode"`
-		ImageURL          string  `json:"image_url"`
-		RequiresContainer bool    `json:"requires_container"`
-		ContainerPrice    int64   `json:"container_price"`
-		CatalogImageID    string  `json:"catalog_image_id"`
-		Presentation      string  `json:"presentation"`
-		Content           string  `json:"content"`
-		ExpiryDate        string  `json:"expiry_date"`
-		Category          string  `json:"category"`
+		ID    string  `json:"id"`
+		Name  string  `json:"name"     binding:"required"`
+		Price float64 `json:"price"    binding:"required,gt=0"`
+		Stock int     `json:"stock"`
+		// Spec 050 — punto de reorden fijable al crear (antes solo por CSV).
+		// Dispara la cadena de alerta/pedido cuando stock <= min_stock.
+		MinStock          int    `json:"min_stock"`
+		Barcode           string `json:"barcode"`
+		ImageURL          string `json:"image_url"`
+		RequiresContainer bool   `json:"requires_container"`
+		ContainerPrice    int64  `json:"container_price"`
+		CatalogImageID    string `json:"catalog_image_id"`
+		Presentation      string `json:"presentation"`
+		Content           string `json:"content"`
+		ExpiryDate        string `json:"expiry_date"`
+		Category          string `json:"category"`
 		// Spec F043 — platos de menú de restaurante.
 		Description string `json:"description"`
-		Portion    string `json:"portion"`
-		IsMenuItem bool   `json:"is_menu_item"`
+		Portion     string `json:"portion"`
+		IsMenuItem  bool   `json:"is_menu_item"`
 		// PhotoIsSample: la foto es una MUESTRA generada por IA desde el
 		// nombre (ilustración), no la foto real del plato. El catálogo la
 		// etiqueta para no engañar al comensal (F043).
@@ -254,6 +257,12 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			return
 		}
 
+		// Spec 050 AC-03 — el punto de reorden no puede ser negativo.
+		if req.MinStock < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "el stock mínimo no puede ser negativo"})
+			return
+		}
+
 		product := models.Product{
 			TenantID:          tenantID,
 			CreatedBy:         middleware.UUIDPtr(userID),
@@ -261,6 +270,7 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			Name:              req.Name,
 			Price:             req.Price,
 			Stock:             req.Stock,
+			MinStock:          req.MinStock,
 			Barcode:           req.Barcode,
 			ImageURL:          req.ImageURL,
 			IsAvailable:       true,
@@ -323,6 +333,8 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		Name  *string  `json:"name"`
 		Price *float64 `json:"price"`
 		Stock *int     `json:"stock"`
+		// Spec 050 — punto de reorden editable (parcial). Antes solo CSV.
+		MinStock *int `json:"min_stock"`
 		// Barcode was missing from this struct, so PATCH /products/:id
 		// silently dropped the field. Two real workflows broke because
 		// of it: (1) "Crear producto" via the scanner flow that pre-fills
@@ -374,6 +386,14 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		oldStock := product.Stock
 		if req.Stock != nil {
 			updates["stock"] = *req.Stock
+		}
+		// Spec 050 AC-02/AC-03 — punto de reorden editable, no negativo.
+		if req.MinStock != nil {
+			if *req.MinStock < 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "el stock mínimo no puede ser negativo"})
+				return
+			}
+			updates["min_stock"] = *req.MinStock
 		}
 		if req.Barcode != nil {
 			updates["barcode"] = strings.TrimSpace(*req.Barcode)
