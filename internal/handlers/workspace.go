@@ -38,11 +38,19 @@ func createWorkspaceTokenPair(db *gorm.DB, user models.User, tenantID, branchID,
 		return nil, err
 	}
 
+	// Spec 051 — además del JSONB feature_flags, cargamos las columnas de
+	// capacidad top-level para emitirlas en la respuesta. Sin ellas el
+	// dashboard re-clasificaba una capacidad ACTIVA como "Descubre más
+	// opciones" en cada login (eran columnas omitidas del Select y del payload).
 	var tenant models.Tenant
-	_ = db.Select("id", "business_types", "feature_flags", "credit_label_mode").
-		First(&tenant, "id = ?", tenantID).Error
+	_ = db.Select(
+		"id", "business_types", "feature_flags", "credit_label_mode",
+		"enable_recipes", "enable_marketing_hub", "enable_quotes",
+		"enable_promotions", "enable_customer_management", "enable_supplies",
+		"enable_furniture_jobs", "enable_purchase_orders", "enable_price_tiers",
+	).First(&tenant, "id = ?", tenantID).Error
 
-	return &AuthResponse{
+	resp := &AuthResponse{
 		Token:           accessToken,
 		AccessToken:     accessToken,
 		RefreshToken:    refreshStr,
@@ -55,7 +63,9 @@ func createWorkspaceTokenPair(db *gorm.DB, user models.User, tenantID, branchID,
 		Role:            role,
 		BranchID:        branchID,
 		UserID:          user.ID,
-	}, nil
+	}
+	applyCapabilityFlags(resp, tenant)
+	return resp, nil
 }
 
 // SelectWorkspace exchanges the temp_token + a per-workspace password

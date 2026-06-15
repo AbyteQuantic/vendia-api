@@ -29,12 +29,43 @@ type AuthResponse struct {
 	// Surfaced at login so the Flutter app can cache it alongside feature_flags
 	// and use it offline without an extra round-trip (FR-05, NFR offline).
 	CreditLabelMode string `json:"credit_label_mode"`
+	// Spec 051 — capacidades opcionales que viven como COLUMNAS top-level del
+	// tenant (no dentro del JSONB feature_flags). Antes el login solo emitía el
+	// JSONB, así que el dashboard degradaba una capacidad ACTIVA (Recetas,
+	// Marketing, etc.) a "Descubre más opciones" tras cada login. La app las
+	// mergea en FeatureFlags (_saveFeatureFlags topLevelKeys). Siempre se
+	// emiten (true y false) para encender Y apagar correctamente.
+	EnableRecipes            bool `json:"enable_recipes"`
+	EnableMarketingHub       bool `json:"enable_marketing_hub"`
+	EnableQuotes             bool `json:"enable_quotes"`
+	EnablePromotions         bool `json:"enable_promotions"`
+	EnableCustomerManagement bool `json:"enable_customer_management"`
+	EnableSupplies           bool `json:"enable_supplies"`
+	EnableFurnitureJobs      bool `json:"enable_furniture_jobs"`
+	EnablePurchaseOrders     bool `json:"enable_purchase_orders"`
+	EnablePriceTiers         bool `json:"enable_price_tiers"`
 	// Role / BranchID / UserID expose the workspace context the
 	// JWT already carries so the client can persist them without
 	// decoding the token. Empty on the legacy tenants-only path.
 	Role     string `json:"role,omitempty"`
 	BranchID string `json:"branch_id,omitempty"`
 	UserID   string `json:"user_id,omitempty"`
+}
+
+// applyCapabilityFlags copia las columnas de capacidad top-level del tenant a
+// la respuesta de auth. Centralizado para que createTokenPair (camino legacy) y
+// createWorkspaceTokenPair (camino multi-workspace) no se desincronicen
+// (Spec 051).
+func applyCapabilityFlags(resp *AuthResponse, t models.Tenant) {
+	resp.EnableRecipes = t.EnableRecipes
+	resp.EnableMarketingHub = t.EnableMarketingHub
+	resp.EnableQuotes = t.EnableQuotes
+	resp.EnablePromotions = t.EnablePromotions
+	resp.EnableCustomerManagement = t.EnableCustomerManagement
+	resp.EnableSupplies = t.EnableSupplies
+	resp.EnableFurnitureJobs = t.EnableFurnitureJobs
+	resp.EnablePurchaseOrders = t.EnablePurchaseOrders
+	resp.EnablePriceTiers = t.EnablePriceTiers
 }
 
 func createTokenPair(db *gorm.DB, tenant models.Tenant, jwtSecret string) (*AuthResponse, error) {
@@ -57,7 +88,7 @@ func createTokenPair(db *gorm.DB, tenant models.Tenant, jwtSecret string) (*Auth
 		return nil, err
 	}
 
-	return &AuthResponse{
+	resp := &AuthResponse{
 		Token:           accessToken,
 		AccessToken:     accessToken,
 		RefreshToken:    refreshStr,
@@ -67,7 +98,9 @@ func createTokenPair(db *gorm.DB, tenant models.Tenant, jwtSecret string) (*Auth
 		BusinessTypes:   tenant.BusinessTypes,
 		FeatureFlags:    tenant.FeatureFlags,
 		CreditLabelMode: tenant.CreditLabelMode,
-	}, nil
+	}
+	applyCapabilityFlags(resp, tenant)
+	return resp, nil
 }
 
 type refreshRequest struct {
