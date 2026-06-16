@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 	"vendia-backend/internal/models"
+	"vendia-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -26,6 +27,19 @@ func AdminTenantActivity(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// Toda tienda debe tener link de catálogo por defecto. Si el slug
+		// nunca se provisionó (el tendero no abrió su config de catálogo),
+		// lo generamos y persistimos acá — igual que GetStoreSlug.
+		if tenant.StoreSlug == nil || *tenant.StoreSlug == "" {
+			if generated, err := services.GenerateUniqueSlug(db, tenant.BusinessName, tenant.ID); err == nil {
+				if err := db.Model(&models.Tenant{}).
+					Where("id = ?", tenant.ID).
+					Update("store_slug", generated).Error; err == nil {
+					tenant.StoreSlug = &generated
+				}
+			}
+		}
+
 		var products []models.Product
 		db.Where("tenant_id = ?", tenantID).Find(&products)
 
@@ -40,7 +54,7 @@ func AdminTenantActivity(db *gorm.DB) gin.HandlerFunc {
 		db.Table("sale_items si").
 			Select("si.product_id AS product_id, SUM(si.quantity) AS qty, SUM(si.subtotal) AS revenue").
 			Joins("JOIN sales s ON s.id = si.sale_id").
-			Where("s.tenant_id = ? AND s.deleted_at IS NULL AND si.product_id IS NOT NULL", tenantID).
+			Where("s.tenant_id = ? AND s.deleted_at IS NULL AND si.deleted_at IS NULL AND si.product_id IS NOT NULL", tenantID).
 			Group("si.product_id").
 			Scan(&sold)
 		soldByID := make(map[string]soldRow, len(sold))
@@ -58,6 +72,7 @@ func AdminTenantActivity(db *gorm.DB) gin.HandlerFunc {
 			UnitsSold       int     `json:"units_sold"`
 			Revenue         float64 `json:"revenue"`
 			Profit          float64 `json:"profit"`
+			ProfitKnown     bool    `json:"profit_known"`
 			IngestionMethod string  `json:"ingestion_method"`
 		}
 
@@ -68,10 +83,15 @@ func AdminTenantActivity(db *gorm.DB) gin.HandlerFunc {
 
 		for _, p := range products {
 			s := soldByID[p.ID]
-			// Ganancia estimada: ingresos − (costo actual × unidades vendidas).
-			// Aproximación: SaleItem no guarda snapshot del costo, usamos el
-			// purchase_price vigente del producto.
-			profit := s.Revenue - p.PurchasePrice*float64(s.Qty)
+			// Ganancia estimada SOLO si el producto tiene costo definido.
+			// Con purchase_price = 0 (costo sin capturar, muy común) la
+			// "ganancia" sería = ingresos e INFLARÍA la cifra; en ese caso
+			// la marcamos como desconocida y NO la sumamos al total.
+			profitKnown := p.PurchasePrice > 0
+			profit := 0.0
+			if profitKnown {
+				profit = s.Revenue - p.PurchasePrice*float64(s.Qty)
+			}
 			rows = append(rows, productRow{
 				ID:              p.ID,
 				Name:            p.Name,
@@ -82,10 +102,13 @@ func AdminTenantActivity(db *gorm.DB) gin.HandlerFunc {
 				UnitsSold:       s.Qty,
 				Revenue:         s.Revenue,
 				Profit:          profit,
+				ProfitKnown:     profitKnown,
 				IngestionMethod: ingestionOrManual(p.IngestionMethod),
 			})
 			totalRevenue += s.Revenue
-			totalProfit += profit
+			if profitKnown {
+				totalProfit += profit
+			}
 			totalUnits += s.Qty
 			switch {
 			case p.Stock <= 0:

@@ -60,18 +60,21 @@ func TestAdminTenantActivity_AggregatesStockSalesAndProfit(t *testing.T) {
 		INSERT INTO tenants (id, created_at, owner_name, phone, business_name, store_slug, logo_url, enable_recipes)
 		VALUES ('t1', datetime('now'), 'Ana', '300', 'Tienda Ana', 'tienda-ana', 'https://cdn/logo.png', 1)`).Error)
 
-	// 3 productos: A (más vendido), B (agotado, vendido 1), C (sin ventas).
+	// 4 productos: A (más vendido), D (sin costo → ganancia desconocida),
+	// B (agotado, vendido 1), C (sin ventas).
 	require.NoError(t, db.Exec(`
 		INSERT INTO products (id, tenant_id, name, price, purchase_price, stock, min_stock, ingestion_method) VALUES
 			('pA','t1','Arroz', 300, 100, 5, 2, 'manual'),
 			('pB','t1','Aceite', 100, 50, 0, 2, 'ia_factura'),
-			('pC','t1','Atún', 200, 80, 10, 2, 'import')`).Error)
+			('pC','t1','Atún', 200, 80, 10, 2, 'import'),
+			('pD','t1','Pan', 150, 0, 7, 2, 'manual')`).Error)
 
-	require.NoError(t, db.Exec(`INSERT INTO sales (id, tenant_id, total, created_at) VALUES ('s1','t1',680, datetime('now'))`).Error)
+	require.NoError(t, db.Exec(`INSERT INTO sales (id, tenant_id, total, created_at) VALUES ('s1','t1',880, datetime('now'))`).Error)
 	require.NoError(t, db.Exec(`
 		INSERT INTO sale_items (id, sale_id, product_id, name, price, quantity, subtotal) VALUES
 			('i1','s1','pA','Arroz', 200, 3, 600),
-			('i2','s1','pB','Aceite', 80, 1, 80)`).Error)
+			('i2','s1','pB','Aceite', 80, 1, 80),
+			('i3','s1','pD','Pan', 100, 2, 200)`).Error)
 
 	r := gin.New()
 	r.GET("/api/v1/admin/tenants/:id/activity", handlers.AdminTenantActivity(db))
@@ -94,10 +97,11 @@ func TestAdminTenantActivity_AggregatesStockSalesAndProfit(t *testing.T) {
 			ActiveModules   int     `json:"active_modules"`
 		} `json:"summary"`
 		Products []struct {
-			ID        string  `json:"id"`
-			UnitsSold int     `json:"units_sold"`
-			Revenue   float64 `json:"revenue"`
-			Profit    float64 `json:"profit"`
+			ID          string  `json:"id"`
+			UnitsSold   int     `json:"units_sold"`
+			Revenue     float64 `json:"revenue"`
+			Profit      float64 `json:"profit"`
+			ProfitKnown bool    `json:"profit_known"`
 		} `json:"products"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
@@ -107,19 +111,27 @@ func TestAdminTenantActivity_AggregatesStockSalesAndProfit(t *testing.T) {
 	assert.Contains(t, body.CatalogURL, "tienda-ana")
 
 	// Resumen.
-	assert.Equal(t, 3, body.Summary.TotalProducts)
-	assert.Equal(t, 4, body.Summary.TotalUnitsSold) // 3 + 1
-	assert.Equal(t, 680.0, body.Summary.TotalRevenue)
-	// Ganancia: A 600-100*3=300 ; B 80-50*1=30 ; C 0 → 330.
+	assert.Equal(t, 4, body.Summary.TotalProducts)
+	assert.Equal(t, 6, body.Summary.TotalUnitsSold) // 3 + 1 + 2
+	assert.Equal(t, 880.0, body.Summary.TotalRevenue)
+	// Ganancia: A 600-100*3=300 ; B 80-50*1=30 ; D sin costo (excluido) ; C 0 → 330.
 	assert.Equal(t, 330.0, body.Summary.EstimatedProfit)
 	assert.Equal(t, 1, body.Summary.OutOfStock)    // B stock 0
 	assert.Equal(t, 1, body.Summary.ActiveModules) // recetas
 
 	// Orden por frecuencia: A (3) primero, C (0) último.
-	require.Len(t, body.Products, 3)
+	require.Len(t, body.Products, 4)
 	assert.Equal(t, "pA", body.Products[0].ID)
 	assert.Equal(t, 3, body.Products[0].UnitsSold)
 	assert.Equal(t, 300.0, body.Products[0].Profit)
-	assert.Equal(t, "pC", body.Products[2].ID)
-	assert.Equal(t, 0, body.Products[2].UnitsSold)
+	assert.True(t, body.Products[0].ProfitKnown)
+	assert.Equal(t, "pC", body.Products[3].ID)
+	assert.Equal(t, 0, body.Products[3].UnitsSold)
+
+	// Producto sin costo → ganancia desconocida, no infla el total.
+	byID := map[string]bool{}
+	for _, p := range body.Products {
+		byID[p.ID] = p.ProfitKnown
+	}
+	assert.False(t, byID["pD"], "producto sin costo: profit_known=false")
 }
