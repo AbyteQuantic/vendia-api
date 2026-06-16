@@ -7,7 +7,6 @@ import (
 
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
-	"vendia-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -119,25 +118,10 @@ func UpsertTableTab(db *gorm.DB) gin.HandlerFunc {
 				if err := tx.Create(&created).Error; err != nil {
 					return err
 				}
-				// Deduct stock for all new items
-				for _, it := range newItems {
-					if it.ProductUUID != "" && it.Quantity > 0 {
-						services.LogInventoryMovement(tx, services.MovementParams{
-							TenantID:      tenantID,
-							BranchID:      middleware.UUIDPtr(branchID),
-							ProductID:     it.ProductUUID,
-							ProductName:   it.ProductName,
-							MovementType:  models.MovementTableTab,
-							Quantity:      -it.Quantity,
-							ReferenceID:   &created.ID,
-							ReferenceType: "order",
-							UserID:        middleware.UUIDPtr(userID),
-						})
-						tx.Model(&models.Product{}).
-							Where("id = ? AND tenant_id = ?", it.ProductUUID, tenantID).
-							UpdateColumn("stock", gorm.Expr("GREATEST(stock - ?, 0)", it.Quantity))
-					}
-				}
+				// Spec 052: el tab es un BORRADOR — NO descuenta stock al agregar.
+				// El stock se descuenta una sola vez al cobrar (CloseOrder →
+				// ApplyPostSale). Antes se descontaba acá Y al cerrar = doble
+				// descuento (fuga de stock confirmada en prod).
 				result = created
 				return nil
 			}
@@ -145,15 +129,10 @@ func UpsertTableTab(db *gorm.DB) gin.HandlerFunc {
 				return err
 			}
 
-			// ── UPDATE existing ticket with stock diff ──
+			// ── UPDATE existing ticket — reemplaza ítems, SIN tocar stock ──
+			// Spec 052: el tab es un borrador; el stock se mueve solo al cobrar.
 
-			// 1. Old quantities by product UUID
-			oldQty := map[string]int{}
-			for _, oi := range existing.Items {
-				oldQty[oi.ProductUUID] += oi.Quantity
-			}
-
-			// 2. Replace items atomically
+			// Reemplaza los ítems atómicamente.
 			if err := tx.Where("order_uuid = ?", existing.ID).
 				Delete(&models.OrderItem{}).Error; err != nil {
 				return err
@@ -167,57 +146,7 @@ func UpsertTableTab(db *gorm.DB) gin.HandlerFunc {
 				}
 			}
 
-			// 3. New quantities by product UUID
-			newQty := map[string]int{}
-			for _, ni := range newItems {
-				newQty[ni.ProductUUID] += ni.Quantity
-			}
-
-			// 4. Apply stock diff
-			allUUIDs := map[string]bool{}
-			for k := range oldQty {
-				allUUIDs[k] = true
-			}
-			for k := range newQty {
-				allUUIDs[k] = true
-			}
-			for uuid := range allUUIDs {
-				if uuid == "" {
-					continue
-				}
-				diff := newQty[uuid] - oldQty[uuid]
-				if diff > 0 {
-					services.LogInventoryMovement(tx, services.MovementParams{
-						TenantID:      tenantID,
-						BranchID:      middleware.UUIDPtr(branchID),
-						ProductID:     uuid,
-						MovementType:  models.MovementTableTab,
-						Quantity:      -diff,
-						ReferenceID:   &existing.ID,
-						ReferenceType: "order",
-						UserID:        middleware.UUIDPtr(userID),
-					})
-					tx.Model(&models.Product{}).
-						Where("id = ? AND tenant_id = ?", uuid, tenantID).
-						UpdateColumn("stock", gorm.Expr("GREATEST(stock - ?, 0)", diff))
-				} else if diff < 0 {
-					services.LogInventoryMovement(tx, services.MovementParams{
-						TenantID:      tenantID,
-						BranchID:      middleware.UUIDPtr(branchID),
-						ProductID:     uuid,
-						MovementType:  models.MovementTableTab,
-						Quantity:      -diff,
-						ReferenceID:   &existing.ID,
-						ReferenceType: "order",
-						UserID:        middleware.UUIDPtr(userID),
-					})
-					tx.Model(&models.Product{}).
-						Where("id = ? AND tenant_id = ?", uuid, tenantID).
-						UpdateColumn("stock", gorm.Expr("stock + ?", -diff))
-				}
-			}
-
-			// 5. Update total + metadata
+			// Update total + metadata
 			updates := map[string]any{"total": total}
 			if req.CustomerName != "" {
 				updates["customer_name"] = req.CustomerName
@@ -333,24 +262,7 @@ func AddItemsToTableTab(db *gorm.DB) gin.HandlerFunc {
 				if err := tx.Create(&created).Error; err != nil {
 					return err
 				}
-				for _, it := range items {
-					if it.ProductUUID != "" && it.Quantity > 0 {
-						services.LogInventoryMovement(tx, services.MovementParams{
-							TenantID:      tenantID,
-							BranchID:      middleware.UUIDPtr(branchID),
-							ProductID:     it.ProductUUID,
-							ProductName:   it.ProductName,
-							MovementType:  models.MovementTableTab,
-							Quantity:      -it.Quantity,
-							ReferenceID:   &created.ID,
-							ReferenceType: "order",
-							UserID:        middleware.UUIDPtr(userID),
-						})
-						tx.Model(&models.Product{}).
-							Where("id = ? AND tenant_id = ?", it.ProductUUID, tenantID).
-							UpdateColumn("stock", gorm.Expr("GREATEST(stock - ?, 0)", it.Quantity))
-					}
-				}
+				// Spec 052: el tab no descuenta stock al agregar (solo al cobrar).
 				result = created
 				return nil
 			}
@@ -358,13 +270,7 @@ func AddItemsToTableTab(db *gorm.DB) gin.HandlerFunc {
 				return err
 			}
 
-			// Existing tab — accumulate items
-			// Build map of existing quantities
-			existingQty := map[string]int{}
-			for _, oi := range existing.Items {
-				existingQty[oi.ProductUUID] += oi.Quantity
-			}
-
+			// Existing tab — accumulate items (Spec 052: sin tocar stock).
 			var addedTotal float64
 			for _, it := range req.Items {
 				addedTotal += it.UnitPrice * float64(it.Quantity)
@@ -391,24 +297,7 @@ func AddItemsToTableTab(db *gorm.DB) gin.HandlerFunc {
 					}
 					tx.Create(&newItem)
 				}
-
-				// Deduct stock for the added quantity
-				if it.ProductUUID != "" && it.Quantity > 0 {
-					services.LogInventoryMovement(tx, services.MovementParams{
-						TenantID:      tenantID,
-						BranchID:      middleware.UUIDPtr(branchID),
-						ProductID:     it.ProductUUID,
-						ProductName:   it.ProductName,
-						MovementType:  models.MovementTableTab,
-						Quantity:      -it.Quantity,
-						ReferenceID:   &existing.ID,
-						ReferenceType: "order",
-						UserID:        middleware.UUIDPtr(userID),
-					})
-					tx.Model(&models.Product{}).
-						Where("id = ? AND tenant_id = ?", it.ProductUUID, tenantID).
-						UpdateColumn("stock", gorm.Expr("GREATEST(stock - ?, 0)", it.Quantity))
-				}
+				// Spec 052: sin descuento de stock al agregar (solo al cobrar).
 			}
 
 			// Update total
@@ -494,7 +383,6 @@ func GetTableTab(db *gorm.DB) gin.HandlerFunc {
 func RemoveItemFromTab(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
-		userID := middleware.GetUserID(c)
 		orderUUID := c.Param("uuid")
 		itemID := c.Param("item_id")
 
@@ -517,23 +405,9 @@ func RemoveItemFromTab(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		err := db.Transaction(func(tx *gorm.DB) error {
-			// Restore stock
-			if item.ProductUUID != "" && item.Quantity > 0 {
-				services.LogInventoryMovement(tx, services.MovementParams{
-					TenantID:      tenantID,
-					ProductID:     item.ProductUUID,
-					ProductName:   item.ProductName,
-					MovementType:  models.MovementOrderCancel,
-					Quantity:      item.Quantity,
-					ReferenceID:   &order.ID,
-					ReferenceType: "order",
-					UserID:        middleware.UUIDPtr(userID),
-					Notes:         "item eliminado de cuenta abierta",
-				})
-				tx.Model(&models.Product{}).
-					Where("id = ? AND tenant_id = ?", item.ProductUUID, tenantID).
-					UpdateColumn("stock", gorm.Expr("stock + ?", item.Quantity))
-			}
+			// Spec 052: el tab no descontó stock al agregar, así que quitar un
+			// ítem NO restaura stock (no había nada que revertir). El stock solo
+			// se mueve al cobrar (CloseOrder).
 
 			// Remove the item
 			if err := tx.Unscoped().Delete(&item).Error; err != nil {

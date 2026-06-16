@@ -367,7 +367,9 @@ func setupTableTabsDBFull(t *testing.T) *gorm.DB {
 	return db
 }
 
-func TestAddItemsToTableTab_CreatesNewTabAndDeductsStock(t *testing.T) {
+// Spec 052: agregar ítems a un tab NO descuenta stock (el descuento ocurre una
+// sola vez al cobrar, vía CloseOrder). Antes descontaba acá Y al cerrar = doble.
+func TestAddItemsToTableTab_DoesNotDeductStock(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupTableTabsDBFull(t)
 	tenant := seedTenant(t, db, uuid.NewString(), "brasas")
@@ -413,8 +415,12 @@ func TestAddItemsToTableTab_CreatesNewTabAndDeductsStock(t *testing.T) {
 	if len(items) != 1 {
 		t.Fatalf("item rows: want 1, got %d", len(items))
 	}
-	// Note: stock deduction uses GREATEST() which is Postgres-only.
-	// Verified via real DB tests (Supabase). SQLite skips it silently.
+	// AC-01: el stock NO se movió al agregar (sigue en 10).
+	var p models.Product
+	db.First(&p, "id = ?", productID)
+	if p.Stock != 10 {
+		t.Fatalf("stock debió quedar 10 (sin descuento al agregar), got %d", p.Stock)
+	}
 }
 
 func TestAddItemsToTableTab_AccumulatesOnExistingTab(t *testing.T) {
@@ -476,7 +482,9 @@ func TestAddItemsToTableTab_AccumulatesOnExistingTab(t *testing.T) {
 	}
 }
 
-func TestRemoveItemFromTab_RestoresStockAndRecalcTotal(t *testing.T) {
+// Spec 052: quitar un ítem del tab NO restaura stock (porque agregar tampoco lo
+// descontó). El stock solo se mueve al cobrar.
+func TestRemoveItemFromTab_DoesNotRestoreStock_RecalcTotal(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupTableTabsDBFull(t)
 	tenant := seedTenant(t, db, uuid.NewString(), "brasas")
@@ -522,5 +530,11 @@ func TestRemoveItemFromTab_RestoresStockAndRecalcTotal(t *testing.T) {
 	db.First(&order, "id = ?", orderID)
 	if order.Total != 0 {
 		t.Fatalf("total after delete: want 0, got %v", order.Total)
+	}
+	// AC-02: el stock sigue intacto (ni se descontó al agregar ni se restauró).
+	var p models.Product
+	db.First(&p, "id = ?", p1)
+	if p.Stock != 10 {
+		t.Fatalf("stock debió quedar 10 (sin movimientos por el tab), got %d", p.Stock)
 	}
 }
