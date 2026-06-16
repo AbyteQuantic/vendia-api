@@ -295,6 +295,11 @@ type Tenant struct {
 	// one PurchaseOrder row.
 	EnablePurchaseOrders bool `gorm:"not null;default:false" json:"enable_purchase_orders"`
 
+	// HideOffersSection oculta la sección de "Ofertas" (promociones) del
+	// catálogo público. Default false = visible. Lo controla el switch
+	// "Sección de Ofertas visible" del Marketing Hub (antes no persistía).
+	HideOffersSection bool `gorm:"not null;default:false" json:"hide_offers_section"`
+
 	// Spec F038 — umbral global de stock crítico por tenant.
 	// Cuando un producto cruza este valor hacia abajo en una venta,
 	// el dispatcher envía push "Stock bajo" al dueño + cashiers.

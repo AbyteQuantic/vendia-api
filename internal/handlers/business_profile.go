@@ -88,6 +88,7 @@ func GetBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 				"enable_supplies":        tenant.EnableSupplies,
 				"enable_furniture_jobs":  tenant.EnableFurnitureJobs,
 				"enable_purchase_orders": tenant.EnablePurchaseOrders,
+				"hide_offers_section":    tenant.HideOffersSection,
 			},
 		})
 	}
@@ -136,6 +137,8 @@ type ProfileConfigInput struct {
 	EnableSupplies       *bool `json:"enable_supplies"`
 	EnableFurnitureJobs  *bool `json:"enable_furniture_jobs"`
 	EnablePurchaseOrders *bool `json:"enable_purchase_orders"`
+	// Oculta la sección de Ofertas del catálogo público (Marketing Hub).
+	HideOffersSection *bool `json:"hide_offers_section"`
 }
 
 // UpdateBusinessProfile partially updates the tenant's business profile.
@@ -320,6 +323,11 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 			// sin validación adicional; mismo patrón que los toggles previos.
 			if req.Config.EnablePromotions != nil {
 				updates["enable_promotions"] = *req.Config.EnablePromotions
+			}
+
+			// Visibilidad de la sección de Ofertas en el catálogo público.
+			if req.Config.HideOffersSection != nil {
+				updates["hide_offers_section"] = *req.Config.HideOffersSection
 			}
 
 			// Spec F037 — capacidades del reel del Dashboard. Toggles

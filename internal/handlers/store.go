@@ -252,13 +252,13 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 				photo = p.ImageURL
 			}
 			catalog = append(catalog, CatalogProduct{
-				UUID:        p.ID,
-				Name:        p.Name,
-				Price:       p.Price,
-				PhotoURL:    photo,
-				Emoji:       p.Emoji,
-				Category:    p.Category,
-				Stock:       p.Stock,
+				UUID:          p.ID,
+				Name:          p.Name,
+				Price:         p.Price,
+				PhotoURL:      photo,
+				Emoji:         p.Emoji,
+				Category:      p.Category,
+				Stock:         p.Stock,
 				Description:   p.Description,
 				Portion:       p.Portion,
 				IsMenuItem:    p.IsMenuItem,
@@ -273,14 +273,19 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 		// include items so the web cart can pre-fill the combo lines.
 		now := time.Now()
 		var promos []models.Promotion
-		db.Preload("Items").
-			Where(`tenant_id = ? AND is_active = true
-			       AND (start_date IS NULL OR start_date <= ?)
-			       AND (end_date IS NULL OR end_date >= ?)
-			       AND name <> ''`,
-				tenant.ID, now, now).
-			Order("start_date DESC NULLS LAST").
-			Find(&promos)
+		// El dueño puede ocultar la sección de Ofertas del catálogo público
+		// (switch del Marketing Hub). Cuando está oculta, no consultamos ni
+		// devolvemos promociones — la sección desaparece del catálogo.
+		if !tenant.HideOffersSection {
+			db.Preload("Items").
+				Where(`tenant_id = ? AND is_active = true
+				       AND (start_date IS NULL OR start_date <= ?)
+				       AND (end_date IS NULL OR end_date >= ?)
+				       AND name <> ''`,
+					tenant.ID, now, now).
+				Order("start_date DESC NULLS LAST").
+				Find(&promos)
+		}
 
 		type PromoItemOut struct {
 			ProductID  string  `json:"product_id"`
