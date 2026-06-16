@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"time"
 	"vendia-backend/internal/models"
@@ -152,11 +153,57 @@ func AdminGetTenant(db *gorm.DB) gin.HandlerFunc {
 		db.Model(&models.Sale{}).Where("tenant_id = ? AND deleted_at IS NULL", tenantID).
 			Select("COALESCE(SUM(total), 0)").Scan(&salesTotal)
 
-		c.JSON(http.StatusOK, gin.H{
-			"tenant":      tenant,
-			"sales_count": salesCount,
-			"sales_total": salesTotal,
-		})
+		now := time.Now()
+
+		// Ventas del mes en curso.
+		startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		var monthTotal float64
+		db.Model(&models.Sale{}).
+			Where("tenant_id = ? AND deleted_at IS NULL AND created_at >= ?", tenantID, startOfMonth).
+			Select("COALESCE(SUM(total), 0)").Scan(&monthTotal)
+
+		// Serie de ventas de los últimos 30 días (para la gráfica del detalle).
+		type dayPoint struct {
+			Date  string  `json:"date"`
+			Total float64 `json:"total"`
+		}
+		series := []dayPoint{}
+		db.Model(&models.Sale{}).
+			Select("TO_CHAR(created_at, 'YYYY-MM-DD') AS date, COALESCE(SUM(total), 0) AS total").
+			Where("tenant_id = ? AND deleted_at IS NULL AND created_at >= ?", tenantID, now.AddDate(0, 0, -30)).
+			Group("TO_CHAR(created_at, 'YYYY-MM-DD')").
+			Order("date ASC").
+			Scan(&series)
+
+		// Estado de suscripción canónico (tenant_subscriptions), igual que
+		// la lista god-mode.
+		sub := loadSubscriptionsByTenantID(db, []string{tenantID})[tenantID]
+		subStatus := sub.Status
+		if subStatus == "" {
+			subStatus = models.SubscriptionStatusFree
+		}
+		primaryType := ""
+		if len(tenant.BusinessTypes) > 0 {
+			primaryType = tenant.BusinessTypes[0]
+		}
+
+		// La pantalla de detalle (admin-web) lee el tenant en PLANO
+		// (AdminTenantDetail), no anidado. Aplanamos el modelo y le sumamos
+		// las métricas para que coincida con el contrato y no truene
+		// (created_at undefined hacía que formatDate lanzara → página caída).
+		resp := gin.H{}
+		if b, err := json.Marshal(tenant); err == nil {
+			_ = json.Unmarshal(b, &resp)
+		}
+		resp["business_type"] = primaryType
+		resp["subscription_status"] = subStatus
+		resp["subscription_ends_at"] = sub.TrialEndsAt
+		resp["sales_count"] = salesCount
+		resp["sales_total"] = salesTotal
+		resp["total_sales_month"] = monthTotal
+		resp["sales_30d"] = series
+
+		c.JSON(http.StatusOK, resp)
 	}
 }
 
