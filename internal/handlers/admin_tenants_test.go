@@ -46,10 +46,22 @@ func TestBuildGodModeTenants_TransformsRawRowsIntoResponseShape(t *testing.T) {
 			Status: models.SubscriptionStatusProActive},
 	}
 
+	// tenant-1 activa 2 capacidades opcionales → ActiveModulesCount=2.
+	tenants[0].EnableRecipes = true
+	tenants[0].EnableQuotes = true
+
+	productStats := map[string]handlers.ProductStats{
+		"tenant-1": {Count: 12, ByMethod: map[string]int{"manual": 8, "import": 4}},
+	}
+	salesStats := map[string]handlers.SalesStats{
+		"tenant-1": {Count: 5, Total: 150000},
+	}
+
 	rows := handlers.BuildGodModeTenants(
 		tenants, subs,
 		map[string]int{"tenant-1": 1, "tenant-2": 3},
 		map[string]int{"tenant-1": 2, "tenant-2": 7},
+		productStats, salesStats,
 		now,
 	)
 
@@ -64,6 +76,16 @@ func TestBuildGodModeTenants_TransformsRawRowsIntoResponseShape(t *testing.T) {
 	assert.Equal(t, models.SubscriptionStatusTrial, t1.SubscriptionStatus)
 	assert.Equal(t, 3, t1.TrialDaysRemaining)
 	assert.True(t, t1.IsPremium, "active trial must count as premium")
+	// Actividad nueva (god-mode móvil).
+	assert.Equal(t, 12, t1.ProductCount)
+	assert.Equal(t, 2, t1.ActiveModulesCount)
+	assert.Equal(t, int64(5), t1.SalesCount)
+	assert.Equal(t, 150000.0, t1.SalesTotal)
+	assert.Equal(t, 8, t1.IngestionBreakdown["manual"])
+	assert.Equal(t, 4, t1.IngestionBreakdown["import"])
+	// tenant-2 sin stats → ceros y breakdown vacío (no nil).
+	assert.Equal(t, 0, rows[1].ProductCount)
+	assert.NotNil(t, rows[1].IngestionBreakdown)
 
 	t2 := rows[1]
 	assert.Equal(t, "Taller Ana", t2.BusinessName)
@@ -87,7 +109,8 @@ func TestBuildGodModeTenants_FallsBackToFreeWhenSubscriptionMissing(t *testing.T
 	rows := handlers.BuildGodModeTenants(
 		tenants,
 		map[string]models.TenantSubscription{}, // no row
-		map[string]int{}, map[string]int{}, now,
+		map[string]int{}, map[string]int{},
+		map[string]handlers.ProductStats{}, map[string]handlers.SalesStats{}, now,
 	)
 
 	require.Len(t, rows, 1)
@@ -101,7 +124,8 @@ func TestBuildGodModeTenants_EmptyInput(t *testing.T) {
 	now := time.Date(2026, 4, 21, 12, 0, 0, 0, time.UTC)
 	rows := handlers.BuildGodModeTenants(
 		nil, map[string]models.TenantSubscription{},
-		map[string]int{}, map[string]int{}, now,
+		map[string]int{}, map[string]int{},
+		map[string]handlers.ProductStats{}, map[string]handlers.SalesStats{}, now,
 	)
 	assert.Empty(t, rows)
 }
@@ -123,7 +147,8 @@ func TestBuildGodModeTenants_ExpiredTrialReportsZeroDaysAndNotPremium(t *testing
 	}
 
 	rows := handlers.BuildGodModeTenants(
-		tenants, subs, map[string]int{}, map[string]int{}, now,
+		tenants, subs, map[string]int{}, map[string]int{},
+		map[string]handlers.ProductStats{}, map[string]handlers.SalesStats{}, now,
 	)
 
 	require.Len(t, rows, 1)
@@ -159,7 +184,38 @@ func setupAdminTenantsSQLite(t *testing.T) *gorm.DB {
 			subscription_status TEXT DEFAULT 'trial',
 			subscription_ends_at DATETIME,
 			last_sync_at DATETIME,
-			pending_sync_ops INTEGER DEFAULT 0
+			pending_sync_ops INTEGER DEFAULT 0,
+			feature_flags TEXT DEFAULT '{}',
+			enable_price_tiers INTEGER DEFAULT 0,
+			enable_customer_management INTEGER DEFAULT 0,
+			enable_quotes INTEGER DEFAULT 0,
+			enable_promotions INTEGER DEFAULT 0,
+			enable_marketing_hub INTEGER DEFAULT 0,
+			enable_recipes INTEGER DEFAULT 0,
+			enable_supplies INTEGER DEFAULT 0,
+			enable_furniture_jobs INTEGER DEFAULT 0,
+			enable_purchase_orders INTEGER DEFAULT 0
+		);
+	`).Error)
+	require.NoError(t, db.Exec(`
+		CREATE TABLE products (
+			id TEXT PRIMARY KEY,
+			tenant_id TEXT NOT NULL,
+			created_at DATETIME,
+			updated_at DATETIME,
+			deleted_at DATETIME,
+			name TEXT,
+			ingestion_method TEXT DEFAULT 'manual'
+		);
+	`).Error)
+	require.NoError(t, db.Exec(`
+		CREATE TABLE sales (
+			id TEXT PRIMARY KEY,
+			tenant_id TEXT NOT NULL,
+			created_at DATETIME,
+			updated_at DATETIME,
+			deleted_at DATETIME,
+			total REAL DEFAULT 0
 		);
 	`).Error)
 	require.NoError(t, db.Exec(`
@@ -228,6 +284,21 @@ func TestAdminListTenants_E2E_GodModeShapeFromSQLite(t *testing.T) {
 		INSERT INTO employees (id, tenant_id, name, role) VALUES
 			('em1','tenant-pro','Empleada 1','cashier')`).Error)
 
+	// Actividad de tenant-pro: 3 productos (2 manual, 1 ia_factura),
+	// 2 capacidades activas (recetas + cotizaciones) y 2 ventas ($30.000).
+	require.NoError(t, db.Exec(`
+		UPDATE tenants SET enable_recipes = 1, enable_quotes = 1
+		WHERE id = 'tenant-pro'`).Error)
+	require.NoError(t, db.Exec(`
+		INSERT INTO products (id, tenant_id, name, ingestion_method) VALUES
+			('p1','tenant-pro','Arroz','manual'),
+			('p2','tenant-pro','Aceite','manual'),
+			('p3','tenant-pro','Atún','ia_factura')`).Error)
+	require.NoError(t, db.Exec(`
+		INSERT INTO sales (id, tenant_id, total) VALUES
+			('s1','tenant-pro',10000),
+			('s2','tenant-pro',20000)`).Error)
+
 	r := gin.New()
 	r.GET("/api/v1/admin/tenants", handlers.AdminListTenants(db))
 
@@ -258,6 +329,13 @@ func TestAdminListTenants_E2E_GodModeShapeFromSQLite(t *testing.T) {
 	assert.Equal(t, 2, pro.BranchesCount)
 	assert.Equal(t, 1, pro.EmployeesCount)
 	assert.True(t, pro.IsPremium)
+	// Actividad agregada por el handler (queries reales sobre SQLite).
+	assert.Equal(t, 3, pro.ProductCount)
+	assert.Equal(t, 2, pro.IngestionBreakdown["manual"])
+	assert.Equal(t, 1, pro.IngestionBreakdown["ia_factura"])
+	assert.Equal(t, 2, pro.ActiveModulesCount, "recetas + cotizaciones")
+	assert.Equal(t, int64(2), pro.SalesCount)
+	assert.Equal(t, 30000.0, pro.SalesTotal)
 
 	legacy := byName["Legacy Biz"]
 	assert.Equal(t, models.SubscriptionStatusFree, legacy.SubscriptionStatus,
@@ -298,7 +376,8 @@ func TestBuildGodModeTenants_DoesNotExposeLegacySubscriptionFields(t *testing.T)
 	}
 
 	rows := handlers.BuildGodModeTenants(
-		tenants, subs, map[string]int{}, map[string]int{}, now,
+		tenants, subs, map[string]int{}, map[string]int{},
+		map[string]handlers.ProductStats{}, map[string]handlers.SalesStats{}, now,
 	)
 	require.Len(t, rows, 1)
 

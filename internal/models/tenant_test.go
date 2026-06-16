@@ -42,3 +42,25 @@ func TestTenant_ChargeModes(t *testing.T) {
 	assert.Equal(t, "pre_payment", pre.ChargeMode)
 	assert.Equal(t, "post_payment", post.ChargeMode)
 }
+
+func TestCountActiveModules(t *testing.T) {
+	// Sin nada activo → 0.
+	empty := Tenant{}
+	if empty.CountActiveModules() != 0 {
+		t.Fatalf("esperaba 0, got %d", empty.CountActiveModules())
+	}
+
+	// 3 capacidades opcionales + 2 feature flags = 5.
+	tn := Tenant{
+		EnableRecipes:            true,
+		EnableQuotes:             true,
+		EnableCustomerManagement: true,
+		FeatureFlags: FeatureFlags{
+			EnableTables: true,
+			EnableEvents: true,
+		},
+	}
+	if got := tn.CountActiveModules(); got != 5 {
+		t.Fatalf("esperaba 5 módulos activos, got %d", got)
+	}
+}

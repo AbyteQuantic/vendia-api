@@ -316,3 +316,35 @@ type Tenant struct {
 // que el tendero típico considera "casi se acaba" — ajustable tras
 // observar producción.
 const StockLowThresholdDefault = 3
+
+// CountActiveModules cuenta cuántos módulos/capacidades tiene activos el
+// tenant: las capacidades opcionales que el dueño prendió (columnas
+// enable_*) más los feature flags type-derivados en ON (mesas, KDS,
+// servicios, eventos…). Lo usa el god-mode para mostrar "cuántos módulos
+// activos" por tenant. No incluye EnableFiados (base, default ON).
+func (t *Tenant) CountActiveModules() int {
+	n := 0
+	for _, on := range []bool{
+		t.EnablePriceTiers,
+		t.EnableCustomerManagement,
+		t.EnableQuotes,
+		t.EnablePromotions,
+		t.EnableMarketingHub,
+		t.EnableRecipes,
+		t.EnableSupplies,
+		t.EnableFurnitureJobs,
+		t.EnablePurchaseOrders,
+		t.FeatureFlags.EnableTables,
+		t.FeatureFlags.EnableKDS,
+		t.FeatureFlags.EnableTips,
+		t.FeatureFlags.EnableServices,
+		t.FeatureFlags.EnableCustomBilling,
+		t.FeatureFlags.EnableFractionalUnits,
+		t.FeatureFlags.EnableEvents,
+	} {
+		if on {
+			n++
+		}
+	}
+	return n
+}
