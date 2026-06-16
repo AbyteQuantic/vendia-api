@@ -243,6 +243,9 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 			// F044 — servicio publicable. El front lo trata como "oferta"
 			// (sin stock, pedible) junto a los platos en el catálogo unificado.
 			IsService bool `json:"is_service"`
+			// Spec 063 — producto de venta solo para mayores de 18. El
+			// catálogo público exige confirmar mayoría de edad y lo etiqueta "+18".
+			IsAgeRestricted bool `json:"is_age_restricted"`
 		}
 
 		var catalog []CatalogProduct
@@ -261,9 +264,10 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 				Stock:         p.Stock,
 				Description:   p.Description,
 				Portion:       p.Portion,
-				IsMenuItem:    p.IsMenuItem,
-				PhotoIsSample: p.PhotoIsSample,
-				IsService:     p.IsService,
+				IsMenuItem:      p.IsMenuItem,
+				PhotoIsSample:   p.PhotoIsSample,
+				IsService:       p.IsService,
+				IsAgeRestricted: p.IsAgeRestricted,
 			})
 		}
 

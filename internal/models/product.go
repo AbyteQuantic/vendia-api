@@ -65,6 +65,12 @@ type Product struct {
 	// reusa para el detalle del servicio.
 	IsService bool `gorm:"default:false;index" json:"is_service"`
 
+	// ── Spec 063 — venta restringida a mayores de edad ──────────────────
+	// IsAgeRestricted marca productos de venta SOLO para mayores de 18
+	// (licor, cigarrillos, vapeadores…). El catálogo público exige
+	// confirmar mayoría de edad antes de mostrarlos y los etiqueta "+18".
+	IsAgeRestricted bool `gorm:"default:false" json:"is_age_restricted"`
+
 	// ── Spec F029 — precios multi-tier por tipo de cliente ──────────────
 	// PriceTier1 / PriceTier2 / PriceTier3 are optional per-tier prices
 	// applied when Tenant.EnablePriceTiers is ON. Nullable (pointer)

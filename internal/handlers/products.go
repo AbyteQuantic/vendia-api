@@ -156,6 +156,8 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		PhotoIsSample bool `json:"photo_is_sample"`
 		// Spec F044 — servicio publicable (catálogo unificado).
 		IsService bool `json:"is_service"`
+		// Spec 063 — venta solo para mayores de 18 (licor, cigarrillos…).
+		IsAgeRestricted bool `json:"is_age_restricted"`
 
 		// Spec F029 — optional tier prices. Nullable pointer so we
 		// can distinguish "not sent" from "explicit 0" (invalid). When
@@ -285,6 +287,7 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			IsMenuItem:        req.IsMenuItem,
 			PhotoIsSample:     req.PhotoIsSample,
 			IsService:         req.IsService,
+			IsAgeRestricted:   req.IsAgeRestricted,
 			PriceTier1:        req.PriceTier1,
 			PriceTier2:        req.PriceTier2,
 			PriceTier3:        req.PriceTier3,
@@ -351,6 +354,8 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		Presentation      *string `json:"presentation"`
 		Content           *string `json:"content"`
 		ExpiryDate        *string `json:"expiry_date"`
+		// Spec 063 — alternar "solo mayores de 18" al editar.
+		IsAgeRestricted *bool `json:"is_age_restricted"`
 
 		// Spec F029 — optional tier prices on PATCH. Same nullable
 		// semantics as CreateProduct.
@@ -424,6 +429,9 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			}
 			// nil means "clear the expiry" — store NULL.
 			updates["expiry_date"] = expiry
+		}
+		if req.IsAgeRestricted != nil {
+			updates["is_age_restricted"] = *req.IsAgeRestricted
 		}
 
 		// Spec F029 — tier prices on PATCH. >0 validation matches Create.
