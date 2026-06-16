@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
+	"vendia-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -174,25 +176,90 @@ func TriggerPanic(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 
-		// Respond immediately — dispatch in background
+		// Persist the alert + one delivery row per contact (pending).
+		// This is the histórico the cashier sees in Seguridad, and it
+		// makes the dispatch auditable instead of vanishing into stdout.
+		lat, lng := req.LiveLatitude, req.LiveLongitude
+		if lat == 0 && lng == 0 {
+			lat, lng = tenant.Latitude, tenant.Longitude
+		}
+		alert := models.SosAlert{
+			TenantID:     tenantID,
+			Message:      message,
+			Latitude:     lat,
+			Longitude:    lng,
+			ContactCount: len(contacts),
+			TriggeredAt:  time.Now(),
+		}
+		deliveries := make([]models.SosAlertDelivery, 0, len(contacts))
+		// Alerta + entregas en UNA transacción: si algo falla, no queda
+		// un alert_id huérfano con histórico inconsistente.
+		txErr := db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Create(&alert).Error; err != nil {
+				return err
+			}
+			for _, contact := range contacts {
+				deliveries = append(deliveries, models.SosAlertDelivery{
+					AlertID:     alert.ID,
+					TenantID:    tenantID,
+					ContactName: contact.Name,
+					PhoneNumber: contact.PhoneNumber,
+					Method:      contact.ContactMethod,
+					Status:      "pending",
+				})
+			}
+			if len(deliveries) > 0 {
+				if err := tx.Create(&deliveries).Error; err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if txErr != nil {
+			log.Printf("[PANIC] alert persist failed tenant=%s: %v", tenantID, txErr)
+		}
+
+		// Respond immediately — dispatch in background.
 		c.JSON(http.StatusOK, gin.H{
 			"message":        "alerta enviada",
 			"contacts_count": len(contacts),
+			"alert_id":       alert.ID,
 		})
 
-		// Async dispatch to all contacts
-		go func() {
-			for _, contact := range contacts {
-				switch contact.ContactMethod {
-				case "sms":
-					log.Printf("[PANIC-SMS] → %s (%s): %s", contact.Name, contact.PhoneNumber, message)
-				case "whatsapp":
-					log.Printf("[PANIC-WA] → %s (%s): %s", contact.Name, contact.PhoneNumber, message)
-				default:
-					log.Printf("[PANIC] → %s (%s) [%s]: %s", contact.Name, contact.PhoneNumber, contact.ContactMethod, message)
+		// Async dispatch: send via each contact's channel and record the
+		// outcome. Fail-closed — if a channel has no credentials the
+		// notifier returns "skipped" (no false "sent").
+		go func(deliveries []models.SosAlertDelivery, msg, tid string) {
+			notifier := services.NewEmergencyNotifier()
+			for i := range deliveries {
+				d := &deliveries[i]
+				res := notifier.Dispatch(d.Method, d.PhoneNumber, msg)
+				updates := map[string]any{"status": res.Status}
+				if res.ProviderMsgID != "" {
+					updates["provider_msg_id"] = res.ProviderMsgID
 				}
+				if res.Error != "" {
+					updates["error_detail"] = res.Error
+				}
+				db.Model(&models.SosAlertDelivery{}).
+					Where("id = ?", d.ID).Updates(updates)
 			}
-			log.Printf("[PANIC] Alert dispatched to %d contacts for tenant %s", len(contacts), tenantID)
-		}()
+			log.Printf("[PANIC] dispatched to %d contacts for tenant %s", len(deliveries), tid)
+		}(deliveries, message, tenantID)
+	}
+}
+
+// ListPanicAlerts returns the tenant's SOS alert history (newest first)
+// with per-contact delivery status, for the Seguridad screen.
+func ListPanicAlerts(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		var alerts []models.SosAlert
+		db.Preload("Deliveries").
+			Where("tenant_id = ?", tenantID).
+			Order("triggered_at DESC").
+			Limit(50).
+			Find(&alerts)
+		c.JSON(http.StatusOK, gin.H{"data": alerts})
 	}
 }

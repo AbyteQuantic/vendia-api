@@ -671,6 +671,7 @@ func main() {
 		v1.POST("/store/panic-config/contacts", handlers.CreateEmergencyContact(db))
 		v1.DELETE("/store/panic-config/contacts/:id", handlers.DeleteEmergencyContact(db))
 		v1.POST("/store/panic/trigger", handlers.TriggerPanic(db))
+		v1.GET("/store/panic/alerts", handlers.ListPanicAlerts(db))
 
 		// Tabs (Open accounts — legacy)
 		v1.GET("/tabs", handlers.ListOpenTabs(db))
