@@ -884,6 +884,7 @@ func main() {
 		admin.GET("/analytics/profitability", handlers.AdminProfitability(db, cfg.ProMonthlyPriceUSD))
 		admin.GET("/tenants", handlers.AdminListTenants(db))
 		admin.GET("/tenants/:id", handlers.AdminGetTenant(db))
+		admin.GET("/tenants/:id/activity", handlers.AdminTenantActivity(db))
 		admin.PATCH("/tenants/:id/subscription", handlers.AdminUpdateSubscription(db))
 
 		// Phase 2 — Ecosystem analyzer
