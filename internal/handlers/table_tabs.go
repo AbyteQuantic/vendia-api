@@ -14,10 +14,10 @@ import (
 
 // UpsertTableTab serves PUT /api/v1/tables/tab.
 //
-// Upserts a table tab with stock management:
-//   - CREATE: deducts stock for all items
-//   - UPDATE: computes diff (old vs new) and adjusts stock accordingly
-//     (deduct for increases, restore for decreases/removals)
+// Upsert idempotente del estado COMPLETO de una mesa (por label). El tab es un
+// BORRADOR: persiste/recalcula ítems y total pero NO toca stock (Spec 052 — el
+// stock se descuenta una sola vez al cobrar, vía CloseOrder). Es el endpoint que
+// el cliente offline-first usa para EMPUJAR el estado de la mesa (Spec 053).
 func UpsertTableTab(db *gorm.DB) gin.HandlerFunc {
 	type ItemRequest struct {
 		ProductUUID string  `json:"product_uuid" binding:"required"`
@@ -181,6 +181,8 @@ func UpsertTableTab(db *gorm.DB) gin.HandlerFunc {
 				"total":         result.Total,
 				"type":          result.Type,
 				"items":         result.Items,
+				// Spec 053: updated_at habilita LWW por mesa en el sync offline.
+				"updated_at": result.UpdatedAt,
 			},
 		})
 	}
@@ -326,6 +328,8 @@ func AddItemsToTableTab(db *gorm.DB) gin.HandlerFunc {
 				"total":         result.Total,
 				"type":          result.Type,
 				"items":         result.Items,
+				// Spec 053: updated_at habilita LWW por mesa en el sync offline.
+				"updated_at": result.UpdatedAt,
 			},
 		})
 	}
@@ -372,14 +376,53 @@ func GetTableTab(db *gorm.DB) gin.HandlerFunc {
 				"total":         ticket.Total,
 				"type":          ticket.Type,
 				"items":         ticket.Items,
+				"updated_at":    ticket.UpdatedAt,
 			},
 		})
 	}
 }
 
+// ListOpenTableTabs serves GET /api/v1/tables/open — lista TODAS las mesas
+// abiertas del tenant (OrderTickets nuevo/preparando/listo) con ítems y
+// updated_at. Lo usa el cliente offline-first para "traer" las mesas al
+// arrancar/reconectar (un dispositivo nuevo no conoce los labels, así que
+// GET /tables/tab/:label no alcanza). Spec 053.
+func ListOpenTableTabs(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		var tickets []models.OrderTicket
+		if err := db.Preload("Items").
+			Where("tenant_id = ? AND status IN ?", tenantID, []models.OrderStatus{
+				models.OrderStatusNuevo,
+				models.OrderStatusPreparando,
+				models.OrderStatusListo,
+			}).
+			Order("updated_at DESC").
+			Find(&tickets).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al obtener mesas abiertas"})
+			return
+		}
+		out := make([]gin.H, 0, len(tickets))
+		for _, t := range tickets {
+			out = append(out, gin.H{
+				"order_id":      t.ID,
+				"session_token": t.SessionToken,
+				"label":         t.Label,
+				"status":        t.Status,
+				"total":         t.Total,
+				"type":          t.Type,
+				"items":         t.Items,
+				"opened_at":     t.CreatedAt,
+				"updated_at":    t.UpdatedAt,
+			})
+		}
+		c.JSON(http.StatusOK, gin.H{"data": out})
+	}
+}
+
 // RemoveItemFromTab removes or decrements a single item from an open tab.
 // DELETE /api/v1/orders/:uuid/items/:item_id
-// Restores stock for the removed quantity.
+// Spec 052: el tab no descontó stock al agregar, así que quitar NO lo restaura.
 func RemoveItemFromTab(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)

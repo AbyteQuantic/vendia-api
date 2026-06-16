@@ -538,3 +538,48 @@ func TestRemoveItemFromTab_DoesNotRestoreStock_RecalcTotal(t *testing.T) {
 		t.Fatalf("stock debió quedar 10 (sin movimientos por el tab), got %d", p.Stock)
 	}
 }
+
+// Spec 053: GET /tables/open lista todas las mesas abiertas del tenant (pull del
+// sync), aisladas por tenant, sin las cerradas.
+func TestListOpenTableTabs_ReturnsOpenTabsIsolatedByTenant(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupTableTabsDB(t)
+	tenant := seedTenant(t, db, uuid.NewString(), "brasas")
+	other := seedTenant(t, db, uuid.NewString(), "otra")
+
+	// 2 abiertas (este tenant) + 1 cerrada (este) + 1 abierta (otro tenant)
+	mk := func(tid, label string, status models.OrderStatus) {
+		db.Create(&models.OrderTicket{
+			BaseModel: models.BaseModel{ID: uuid.NewString()},
+			TenantID:  tid, Label: label, Status: status,
+			Type: models.OrderTypeMesa, Total: 5000,
+		})
+	}
+	mk(tenant.ID, "Mesa 1", models.OrderStatusNuevo)
+	mk(tenant.ID, "Mesa 2", models.OrderStatusPreparando)
+	mk(tenant.ID, "Mesa 3", models.OrderStatusCobrado) // cerrada → excluida
+	mk(other.ID, "Mesa X", models.OrderStatusNuevo)    // otro tenant → excluida
+
+	r := gin.New()
+	r.Use(installTenantMiddleware(tenant.ID))
+	r.GET("/api/v1/tables/open", ListOpenTableTabs(db))
+
+	req, _ := http.NewRequest(http.MethodGet, "/api/v1/tables/open", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Data []map[string]any `json:"data"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if len(body.Data) != 2 {
+		t.Fatalf("want 2 mesas abiertas, got %d", len(body.Data))
+	}
+	for _, m := range body.Data {
+		if m["updated_at"] == nil {
+			t.Fatal("falta updated_at (necesario para LWW del sync)")
+		}
+	}
+}

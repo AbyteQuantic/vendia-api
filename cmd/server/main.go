@@ -647,6 +647,8 @@ func main() {
 		v1.PUT("/tables/tab", handlers.UpsertTableTab(db))
 		v1.POST("/tables/tab/add-items", handlers.AddItemsToTableTab(db))
 		v1.GET("/tables/tab/:label", handlers.GetTableTab(db))
+		// Spec 053 — lista todas las mesas abiertas (pull del sync offline).
+		v1.GET("/tables/open", handlers.ListOpenTableTabs(db))
 		v1.DELETE("/orders/:uuid/items/:item_id", handlers.RemoveItemFromTab(db))
 
 		// Notifications
