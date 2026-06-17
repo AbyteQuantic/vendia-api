@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
 	"vendia-backend/internal/services/push"
@@ -44,6 +45,27 @@ func defaultBranchForTenant(db *gorm.DB, tenantID string) *string {
 	return &id
 }
 
+// orderHasAgeRestrictedProduct reports whether any of the given product IDs
+// belongs to a product the tenant marked as age-restricted (Spec 063). It
+// fails OPEN on a query error (returns false) because in production the
+// products table always exists — a transient DB hiccup must not block every
+// order; the only callers that care already gate on the result, and a false
+// here simply means "no extra age check", matching the no-restricted-product
+// path. The product IDs are assumed pre-validated as UUIDs by the caller.
+func orderHasAgeRestrictedProduct(db *gorm.DB, tenantID string, productIDs []string) bool {
+	if len(productIDs) == 0 {
+		return false
+	}
+	var count int64
+	err := db.Model(&models.Product{}).
+		Where("tenant_id = ? AND id IN ? AND is_age_restricted = ?", tenantID, productIDs, true).
+		Count(&count).Error
+	if err != nil {
+		return false
+	}
+	return count > 0
+}
+
 // PublicCreateOnlineOrder creates an order from the public catalog.
 // Two routes hit this handler:
 //
@@ -75,6 +97,13 @@ func PublicCreateOnlineOrder(db *gorm.DB, dispatcher *push.Dispatcher) gin.Handl
 		// `false` keeps the row in its prior state — we never revoke
 		// consent implicitly here.
 		AcceptedTerms bool `json:"accepted_terms"`
+		// CustomerBirthDate is the ISO "yyyy-mm-dd" the buyer declares
+		// in the checkout WHEN the cart includes an age-restricted
+		// product (Spec 063). We verify it server-side (defense in
+		// depth) — the client also blocks, but we never trust the
+		// client. `age_confirmed` from the client is intentionally
+		// ignored; the backend recomputes it.
+		CustomerBirthDate string `json:"customer_birth_date"`
 	}
 
 	return func(c *gin.Context) {
@@ -110,20 +139,47 @@ func PublicCreateOnlineOrder(db *gorm.DB, dispatcher *push.Dispatcher) gin.Handl
 			paymentMethodID = ""
 		}
 
+		// Spec 063 — control de edad (defensa en profundidad).
+		// Si algún producto del pedido es de venta restringida a
+		// mayores de 18, exigimos una fecha de nacimiento válida y que
+		// el comprador sea mayor de edad. El cliente ya lo bloquea, pero
+		// el backend NUNCA confía en el cliente: recalculamos aquí.
+		birthDate := strings.TrimSpace(req.CustomerBirthDate)
+		productIDs := make([]string, 0, len(req.Items))
+		for _, item := range req.Items {
+			if models.IsValidUUID(item.ProductID) {
+				productIDs = append(productIDs, item.ProductID)
+			}
+		}
+		hasAgeRestricted := orderHasAgeRestrictedProduct(db, tenant.ID, productIDs)
+		ageConfirmed := false
+		if hasAgeRestricted {
+			if !isAdultISO(birthDate, time.Now()) {
+				c.JSON(http.StatusUnprocessableEntity, gin.H{
+					"error": "Este pedido incluye productos de venta exclusiva para mayores de 18 años. Confirma una fecha de nacimiento válida; debes ser mayor de edad para comprarlos.",
+					"code":  "age_restricted",
+				})
+				return
+			}
+			ageConfirmed = true
+		}
+
 		itemsJSON, _ := json.Marshal(req.Items)
 
 		order := models.OnlineOrder{
-			TenantID:        tenant.ID,
-			BranchID:        defaultBranchForTenant(db, tenant.ID),
-			CustomerName:    req.CustomerName,
-			CustomerPhone:   req.CustomerPhone,
-			DeliveryType:    delivery,
-			PaymentMethod:   strings.TrimSpace(req.PaymentMethod),
-			PaymentMethodID: paymentMethodID,
-			Status:          "pending",
-			TotalAmount:     total,
-			Items:           string(itemsJSON),
-			Notes:           req.Notes,
+			TenantID:          tenant.ID,
+			BranchID:          defaultBranchForTenant(db, tenant.ID),
+			CustomerName:      req.CustomerName,
+			CustomerPhone:     req.CustomerPhone,
+			DeliveryType:      delivery,
+			PaymentMethod:     strings.TrimSpace(req.PaymentMethod),
+			PaymentMethodID:   paymentMethodID,
+			Status:            "pending",
+			TotalAmount:       total,
+			Items:             string(itemsJSON),
+			Notes:             req.Notes,
+			CustomerBirthDate: birthDate,
+			AgeConfirmed:      ageConfirmed,
 		}
 
 		if err := db.Create(&order).Error; err != nil {

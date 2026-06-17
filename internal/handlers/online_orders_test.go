@@ -61,13 +61,22 @@ func setupOnlineOrdersDB(t *testing.T) *gorm.DB {
 			status TEXT DEFAULT 'pending',
 			total_amount REAL DEFAULT 0,
 			items TEXT DEFAULT '[]',
-			notes TEXT DEFAULT ''
+			notes TEXT DEFAULT '',
+			customer_birth_date TEXT DEFAULT '',
+			age_confirmed INTEGER DEFAULT 0
 		)`,
 		`CREATE TABLE notifications (
 			id TEXT PRIMARY KEY, created_at DATETIME,
 			tenant_id TEXT NOT NULL, title TEXT NOT NULL,
 			body TEXT DEFAULT '', type TEXT DEFAULT 'info',
 			is_read INTEGER DEFAULT 0
+		)`,
+		// Spec 063 — la verificación de edad en el backend consulta la tabla
+		// products para saber si algún ítem es de venta restringida +18.
+		`CREATE TABLE products (
+			id TEXT PRIMARY KEY, created_at DATETIME, updated_at DATETIME,
+			deleted_at DATETIME, tenant_id TEXT NOT NULL,
+			name TEXT DEFAULT '', is_age_restricted INTEGER DEFAULT 0
 		)`,
 	}
 	for _, s := range stmts {
@@ -418,4 +427,88 @@ func TestUpdateOnlineOrderStatus_RejectsUnknownStatus(t *testing.T) {
 	var row models.OnlineOrder
 	require.NoError(t, db.First(&row, "id = ?", orderID).Error)
 	assert.Equal(t, "accepted", row.Status)
+}
+
+// ── Spec 063 — control de edad en el backend (defensa en profundidad) ───────
+
+func seedAgeRestrictedProduct(t *testing.T, db *gorm.DB, tenantID string) string {
+	t.Helper()
+	id := uuid.NewString()
+	require.NoError(t, db.Exec(
+		`INSERT INTO products (id, tenant_id, name, is_age_restricted, created_at)
+		 VALUES (?, ?, 'Aguardiente', 1, datetime('now'))`,
+		id, tenantID,
+	).Error)
+	return id
+}
+
+// E2E del flujo: un pedido con un producto +18 y un menor de edad debe ser
+// rechazado por el backend (422), aunque el cliente lo hubiera dejado pasar.
+func TestPublicCreateOnlineOrder_AgeRestricted_RejectsMinor(t *testing.T) {
+	db := setupOnlineOrdersDB(t)
+	tenantID, _ := seedTenantWithBranch(t, db, "licorera-uno")
+	licorID := seedAgeRestrictedProduct(t, db, tenantID)
+
+	w := postOnlineOrder(t, db, "licorera-uno", map[string]any{
+		"customer_name":       "Menor Edad",
+		"customer_birth_date": "2016-01-01", // ~10 años
+		"items": []map[string]any{{
+			"product_id": licorID, "name": "Aguardiente", "quantity": 1, "price": 30000,
+		}},
+	})
+
+	require.Equal(t, http.StatusUnprocessableEntity, w.Code, w.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "age_restricted", resp["code"])
+
+	// No se persiste el pedido rechazado.
+	var n int64
+	db.Model(&models.OnlineOrder{}).Count(&n)
+	assert.Equal(t, int64(0), n, "no debe crear el pedido de un menor")
+}
+
+// E2E del flujo: el mismo pedido +18 con un mayor de edad se crea y persiste
+// la fecha de nacimiento + age_confirmed=true.
+func TestPublicCreateOnlineOrder_AgeRestricted_AllowsAdultAndPersists(t *testing.T) {
+	db := setupOnlineOrdersDB(t)
+	tenantID, _ := seedTenantWithBranch(t, db, "licorera-dos")
+	licorID := seedAgeRestrictedProduct(t, db, tenantID)
+
+	w := postOnlineOrder(t, db, "licorera-dos", map[string]any{
+		"customer_name":       "Mayor Edad",
+		"customer_birth_date": "1990-05-20",
+		"items": []map[string]any{{
+			"product_id": licorID, "name": "Aguardiente", "quantity": 2, "price": 30000,
+		}},
+	})
+
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var row models.OnlineOrder
+	require.NoError(t, db.First(&row).Error)
+	assert.Equal(t, "1990-05-20", row.CustomerBirthDate)
+	assert.True(t, row.AgeConfirmed, "age_confirmed debe quedar en true")
+}
+
+// E2E del flujo: un pedido SIN productos +18 no pide fecha de nacimiento y se
+// crea normal (cero fricción para el resto).
+func TestPublicCreateOnlineOrder_NoAgeRestriction_NoBirthDateNeeded(t *testing.T) {
+	db := setupOnlineOrdersDB(t)
+	seedTenantWithBranch(t, db, "tienda-normal")
+
+	w := postOnlineOrder(t, db, "tienda-normal", map[string]any{
+		"customer_name": "Cliente Normal",
+		"items": []map[string]any{{
+			"product_id": uuid.NewString(), "name": "Arroz", "quantity": 1, "price": 2000,
+		}},
+	})
+
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var row models.OnlineOrder
+	require.NoError(t, db.First(&row).Error)
+	assert.False(t, row.AgeConfirmed)
+	assert.Equal(t, "", row.CustomerBirthDate)
 }

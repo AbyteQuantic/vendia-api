@@ -26,4 +26,11 @@ type OnlineOrder struct {
 	TotalAmount     float64 `gorm:"default:0" json:"total_amount"`
 	Items           string  `gorm:"type:jsonb;default:'[]'" json:"items"`
 	Notes           string  `gorm:"default:''" json:"notes"`
+	// Spec 063 — control de edad. Cuando el pedido incluye un producto de
+	// venta restringida a mayores de 18 (licor, cigarrillos), el cliente
+	// declara su fecha de nacimiento en el checkout. Se guarda como ISO
+	// "yyyy-mm-dd" y AgeConfirmed queda en true solo si el backend verificó
+	// que es mayor de edad. Vacío/false para pedidos sin productos +18.
+	CustomerBirthDate string `gorm:"default:''" json:"customer_birth_date,omitempty"`
+	AgeConfirmed      bool   `gorm:"default:false" json:"age_confirmed"`
 }
