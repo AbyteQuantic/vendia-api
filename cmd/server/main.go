@@ -262,6 +262,11 @@ func main() {
 	// como defensa en capa (FR-02, AC-04, D4).
 	orderRateLimiter := middleware.NewRateLimiter(5, 15*time.Minute)
 
+	// Spec 064 — Honeypot anti-bot. Reemplaza a Turnstile como capa activa:
+	// SIEMPRE on, sin llamadas externas (no se puede colgar como el captcha).
+	// Se inserta en las mismas rutas que el captcha. Para humanos es invisible.
+	honeypotMiddleware := middleware.HoneypotMiddleware()
+
 	// ── Gin setup ───────────────────────────────────────────────────────────
 	r := gin.New()
 
@@ -286,13 +291,13 @@ func main() {
 	// F024: si el captcha está habilitado, el middleware se inserta entre
 	// el rate-limiter y el handler. En modo deshabilitado captchaMiddleware
 	// es nil y buildHandlers lo omite transparentemente.
-	r.POST("/login", buildHandlers(loginLimiter, captchaMiddleware, handlers.Login(db, cfg.JWTSecret))...)
+	r.POST("/login", buildHandlers(loginLimiter, honeypotMiddleware, captchaMiddleware, handlers.Login(db, cfg.JWTSecret))...)
 	// Admin login lives on its own path so the tenant login rate
 	// limiter, credentials table, and claim shape stay separate.
 	r.POST("/api/v1/admin/login",
 		loginLimiter, handlers.AdminLogin(db, cfg.JWTSecret))
 	r.POST("/api/v1/tenant/register",
-		buildHandlers(captchaMiddleware, handlers.TenantRegister(db, cfg.JWTSecret))...)
+		buildHandlers(honeypotMiddleware, captchaMiddleware, handlers.TenantRegister(db, cfg.JWTSecret))...)
 
 	// Onboarding logo preview — public, rate-limited. Lets the
 	// merchant generate / upload their logo BEFORE registration so
@@ -335,7 +340,7 @@ func main() {
 	// GET /order/:uuid queda libre — solo los POSTs de creación son el vector
 	// de abuso. (spec §2, FR-02, AC-04, FR-08)
 	r.POST("/api/v1/store/:slug/order",
-		buildHandlers(orderRateLimiter, captchaMiddleware, handlers.CreateWebOrder(db))...)
+		buildHandlers(orderRateLimiter, honeypotMiddleware, captchaMiddleware, handlers.CreateWebOrder(db))...)
 	r.GET("/api/v1/store/:slug/order/:uuid", handlers.GetWebOrderStatus(db))
 
 	// Events public storefront (Spec F042). Listing/detail are open reads;
@@ -353,7 +358,7 @@ func main() {
 	// Comprobante de pago manual del asistente (queda pendiente de aprobación).
 	r.POST("/api/v1/store/:slug/carnet/:token/proof", handlers.PublicSubmitPaymentProof(db, storageSvc))
 	r.POST("/api/v1/store/:slug/events/:id/register",
-		buildHandlers(orderRateLimiter, captchaMiddleware, handlers.PublicRegisterEvent(db))...)
+		buildHandlers(orderRateLimiter, honeypotMiddleware, captchaMiddleware, handlers.PublicRegisterEvent(db))...)
 
 	// Public rockola (customer suggests song)
 	r.POST("/api/v1/rockola/:slug/suggest", handlers.SuggestSong(db))
@@ -407,9 +412,9 @@ func main() {
 	// cuando TURNSTILE_ENABLED=true. El orderRateLimiter va primero para
 	// rechazar IPs abusivas antes de llamar a Cloudflare. (FR-02, AC-04, D4)
 	r.POST("/api/v1/store/:slug/online-order",
-		buildHandlers(orderRateLimiter, captchaMiddleware, handlers.PublicCreateOnlineOrder(db, pushDispatcher))...)
+		buildHandlers(orderRateLimiter, honeypotMiddleware, captchaMiddleware, handlers.PublicCreateOnlineOrder(db, pushDispatcher))...)
 	r.POST("/api/v1/public/catalog/:slug/orders",
-		buildHandlers(orderRateLimiter, captchaMiddleware, handlers.PublicCreateOnlineOrder(db, pushDispatcher))...)
+		buildHandlers(orderRateLimiter, honeypotMiddleware, captchaMiddleware, handlers.PublicCreateOnlineOrder(db, pushDispatcher))...)
 
 	// Privacy-safe customer lookup for the checkout UI. Accepts a
 	// phone number and returns ONLY {"needs_consent": bool} — never
