@@ -1034,7 +1034,7 @@ PHOTOGRAPHY STYLE — make it look like a high-end food commercial / advertiseme
 - Mouth-watering, irresistible, freshly served and at its peak. Professional food styling.
 - Appetizing special effects that FIT this dish: subtle rising steam if it is a hot dish; glistening, juicy, fresh textures with soft light highlights; light condensation/droplets if it is a cold dish or a drink; a light drizzle of sauce or a fresh garnish ONLY if it naturally belongs to this dish.
 - Cinematic, warm, appetizing lighting; rich, vibrant, saturated-but-realistic colours; shallow depth of field with a soft creamy background blur (bokeh) so the food pops.
-- The dish is CENTERED, COMPLETE and FULLY VISIBLE — never cropped, never cut off, never touching the edges, with comfortable margin around it. Square 1:1 framing.
+- FRAMING (CRITICAL — must obey): a slightly ZOOMED-OUT wide shot. The ENTIRE plate / bowl / cup / container and ALL the food are fully inside the frame, photographed from a little farther away, leaving GENEROUS empty margin (negative space) on all four sides. The full rim/edge of the plate is completely visible and clearly separated from the borders — it must NEVER touch, reach or cross any edge of the image. Do NOT crop, cut off or zoom into any part of the dish or its container. Square 1:1 framing with the dish small enough to breathe inside it.
 - Clean, tasteful background (neutral, or a subtle wood/stone/table surface) that does not distract from the food.
 - No added text, no logos, no watermarks, no people, no hands, no menus or price tags.
 
