@@ -263,9 +263,18 @@ func main() {
 	orderRateLimiter := middleware.NewRateLimiter(5, 15*time.Minute)
 
 	// Spec 064 — Honeypot anti-bot. Reemplaza a Turnstile como capa activa:
-	// SIEMPRE on, sin llamadas externas (no se puede colgar como el captcha).
-	// Se inserta en las mismas rutas que el captcha. Para humanos es invisible.
-	honeypotMiddleware := middleware.HoneypotMiddleware()
+	// on por defecto, sin llamadas externas (no se puede colgar como el captcha).
+	// Para humanos es invisible. Interruptor de emergencia HONEYPOT_ENABLED:
+	// si alguna vez bloquea a un usuario real (lo veríamos en los logs), se
+	// apaga en segundos con HONEYPOT_ENABLED=false en Render — sin redesplegar.
+	var honeypotMiddleware gin.HandlerFunc
+	honeypotEnabled := !strings.EqualFold(strings.TrimSpace(os.Getenv("HONEYPOT_ENABLED")), "false")
+	if honeypotEnabled {
+		honeypotMiddleware = middleware.HoneypotMiddleware()
+		log.Println("[HONEYPOT] activo en /login, /api/v1/tenant/register y rutas de pedido público (Spec 064)")
+	} else {
+		log.Println("[HONEYPOT] DESHABILITADO (HONEYPOT_ENABLED=false) — endpoints sin capa honeypot")
+	}
 
 	// ── Gin setup ───────────────────────────────────────────────────────────
 	r := gin.New()

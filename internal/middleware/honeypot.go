@@ -24,6 +24,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 
@@ -66,8 +67,13 @@ func HoneypotMiddleware() gin.HandlerFunc {
 		var extract honeypotExtract
 		_ = json.Unmarshal(body, &extract)
 
-		// 3. Campo trampa lleno → bot.
+		// 3. Campo trampa lleno → bot. Logueamos SIEMPRE el bloqueo (señal +
+		//    IP + ruta) para que NUNCA sea silencioso: si esto cazara a un
+		//    humano (p. ej. un gestor de contraseñas que rellenó el campo
+		//    oculto), lo veremos en los logs de Render y podemos apagar la capa
+		//    con HONEYPOT_ENABLED=false. Es la lección del incidente Turnstile.
 		if strings.TrimSpace(extract.Website) != "" {
+			log.Printf("[HONEYPOT] bloqueado: campo trampa lleno — ip=%s path=%s", c.ClientIP(), c.FullPath())
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
 				"error": "No pudimos procesar la solicitud. Intenta de nuevo.",
 			})
@@ -76,6 +82,7 @@ func HoneypotMiddleware() gin.HandlerFunc {
 
 		// 4. Envío instantáneo → bot (solo si el cliente envió la medición).
 		if extract.FormElapsedMs != nil && *extract.FormElapsedMs >= 0 && *extract.FormElapsedMs < minFillMs {
+			log.Printf("[HONEYPOT] bloqueado: envío instantáneo (%dms) — ip=%s path=%s", *extract.FormElapsedMs, c.ClientIP(), c.FullPath())
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
 				"error": "No pudimos procesar la solicitud. Intenta de nuevo.",
 			})
