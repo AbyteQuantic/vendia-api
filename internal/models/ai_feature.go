@@ -15,4 +15,8 @@ const (
 	AIFeatureEventCert  = "EVENT_CERT"
 	// Spec F045 — extracción de campos del onboarding desde texto/voz.
 	AIFeatureOnboarding = "ONBOARDING_PARSE"
+	// Spec 065 — Recipe Studio: dictado de receta por voz y asistente IA
+	// (completar / refinar ingredientes y pasos).
+	AIFeatureVoiceRecipe  = "VOICE_RECIPE"
+	AIFeatureRecipeAssist = "RECIPE_ASSIST"
 )

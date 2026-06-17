@@ -878,6 +878,10 @@ func main() {
 	premium.Use(middleware.PremiumAuth(db))
 	{
 		premium.POST("/ai/voice-inventory", handlers.VoiceInventory(geminiSvc))
+		// Spec 065 — Recipe Studio: dictado de receta por voz y asistente IA
+		// (completar/refinar). Mismo gate PremiumAuth que voice-inventory.
+		premium.POST("/ai/voice-recipe", handlers.VoiceRecipe(geminiSvc))
+		premium.POST("/ai/recipe-assist", handlers.RecipeAssist(geminiSvc))
 		// Creating a second sede is PRO-gated — FREE/PAST_DUE get the
 		// same soft-paywall 403 the Flutter client already handles.
 		premium.POST("/store/branches", handlers.CreateBranch(db))

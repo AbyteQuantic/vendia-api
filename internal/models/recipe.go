@@ -15,6 +15,16 @@ type Recipe struct {
 	// product-receta is wired up.
 	ProductID   *string            `gorm:"type:uuid;index" json:"product_id,omitempty"`
 	Ingredients []RecipeIngredient `gorm:"foreignKey:RecipeUUID;references:ID" json:"ingredients"`
+	// Spec 065 — Recipe Studio. Metadatos de preparación, ADITIVOS y
+	// retrocompatibles (Art. X). NO tocan el costeo (que sigue derivándose
+	// solo de Ingredients). Vacíos en recetas legacy.
+	//   - Yield:    rendimiento, p. ej. "10 porciones".
+	//   - PrepTime: tiempo de preparación, p. ej. "30 min".
+	//   - PrepSteps: pasos como JSON array de [{ "text": "...", "photo_url": "..." }],
+	//     guardado como JSONB string (mismo patrón que OnlineOrder.Items).
+	Yield     string `gorm:"default:''" json:"yield"`
+	PrepTime  string `gorm:"default:''" json:"prep_time"`
+	PrepSteps string `gorm:"type:jsonb;default:'[]'" json:"prep_steps"`
 }
 
 type RecipeIngredient struct {

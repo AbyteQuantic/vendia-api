@@ -1,14 +1,45 @@
 package handlers
 
 import (
+	"encoding/json"
 	"math"
 	"net/http"
+	"strings"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+// StepInput is one preparation step from the Recipe Studio (Spec 065).
+// Ordered as received. Photo is optional (a URL already uploaded).
+type StepInput struct {
+	Text     string `json:"text"`
+	PhotoURL string `json:"photo_url"`
+}
+
+// marshalSteps serializes the ordered steps to a JSON array string for the
+// Recipe.PrepSteps JSONB column. Empty/blank steps are dropped so the stored
+// list stays clean. Always returns valid JSON ("[]" when there are none) so
+// the column never holds NULL/garbage.
+func marshalSteps(steps []StepInput) string {
+	clean := make([]StepInput, 0, len(steps))
+	for _, s := range steps {
+		if strings.TrimSpace(s.Text) == "" && strings.TrimSpace(s.PhotoURL) == "" {
+			continue
+		}
+		clean = append(clean, StepInput{
+			Text:     strings.TrimSpace(s.Text),
+			PhotoURL: strings.TrimSpace(s.PhotoURL),
+		})
+	}
+	b, err := json.Marshal(clean)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
 
 func ListRecipes(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -50,6 +81,12 @@ func CreateRecipe(db *gorm.DB) gin.HandlerFunc {
 		// (que solo modela el costo).
 		Description string `json:"description"`
 		Portion     string `json:"portion"`
+		// Spec 065 — Recipe Studio: metadatos de preparación (aditivos, no
+		// tocan el costeo). PrepSteps es un array de pasos; se serializa a
+		// JSON y se guarda en Recipe.PrepSteps.
+		Yield     string      `json:"yield"`
+		PrepTime  string      `json:"prep_time"`
+		PrepSteps []StepInput `json:"prep_steps"`
 		// `dive` makes the validator descend into each slice element so
 		// the per-field rules on IngredientInput (required ingredient_uuid,
 		// quantity > 0) are actually enforced.
@@ -104,6 +141,9 @@ func CreateRecipe(db *gorm.DB) gin.HandlerFunc {
 			Emoji:       req.Emoji,
 			PhotoURL:    req.PhotoURL,
 			Ingredients: ingredients,
+			Yield:       req.Yield,
+			PrepTime:    req.PrepTime,
+			PrepSteps:   marshalSteps(req.PrepSteps),
 		}
 		if req.ID != "" {
 			recipe.ID = req.ID
@@ -167,6 +207,10 @@ func UpdateRecipe(db *gorm.DB) gin.HandlerFunc {
 		SalePrice   *float64 `json:"sale_price"`
 		Emoji       *string  `json:"emoji"`
 		PhotoURL    *string  `json:"photo_url"`
+		// Spec 065 — metadatos de preparación (aditivos, no tocan el costeo).
+		Yield     *string     `json:"yield"`
+		PrepTime  *string     `json:"prep_time"`
+		PrepSteps []StepInput `json:"prep_steps"`
 	}
 
 	return func(c *gin.Context) {
@@ -201,6 +245,17 @@ func UpdateRecipe(db *gorm.DB) gin.HandlerFunc {
 		}
 		if req.PhotoURL != nil {
 			updates["photo_url"] = *req.PhotoURL
+		}
+		// Spec 065 — metadatos de preparación. PrepSteps != nil ⇒ el cliente
+		// envió la lista (aunque sea vacía) y la persistimos serializada.
+		if req.Yield != nil {
+			updates["yield"] = *req.Yield
+		}
+		if req.PrepTime != nil {
+			updates["prep_time"] = *req.PrepTime
+		}
+		if req.PrepSteps != nil {
+			updates["prep_steps"] = marshalSteps(req.PrepSteps)
 		}
 
 		// FR-02 — keep the linked vendible Product's Name/Price/Category/
