@@ -19,6 +19,14 @@ type StepInput struct {
 	PhotoURL string `json:"photo_url"`
 }
 
+// recipeIngredientInput is the insumo contract for editing a recipe's
+// ingredient set via UpdateRecipe (Spec 065). Same shape as CreateRecipe's
+// inline IngredientInput; name/unit cost are snapshotted server-side.
+type recipeIngredientInput struct {
+	IngredientUUID string  `json:"ingredient_uuid"`
+	Quantity       float64 `json:"quantity"`
+}
+
 // marshalSteps serializes the ordered steps to a JSON array string for the
 // Recipe.PrepSteps JSONB column. Empty/blank steps are dropped so the stored
 // list stays clean. Always returns valid JSON ("[]" when there are none) so
@@ -211,6 +219,11 @@ func UpdateRecipe(db *gorm.DB) gin.HandlerFunc {
 		Yield     *string     `json:"yield"`
 		PrepTime  *string     `json:"prep_time"`
 		PrepSteps []StepInput `json:"prep_steps"`
+		// Spec 065 — editar la receta en el Studio puede cambiar los insumos.
+		// Si `ingredients` viaja (no nil), se REEMPLAZA el set completo. La
+		// resolución/snapshot es idéntica a CreateRecipe — el costeo NO cambia,
+		// solo qué insumos componen la receta. nil ⇒ no se tocan los insumos.
+		Ingredients []recipeIngredientInput `json:"ingredients"`
 	}
 
 	return func(c *gin.Context) {
@@ -258,6 +271,35 @@ func UpdateRecipe(db *gorm.DB) gin.HandlerFunc {
 			updates["prep_steps"] = marshalSteps(req.PrepSteps)
 		}
 
+		// Spec 065 — si llegan insumos, los pre-resolvemos ANTES de la
+		// transacción para poder responder 400 con un mensaje claro si alguno
+		// no existe (igual que CreateRecipe). nil ⇒ no se tocan los insumos.
+		var replacementIngredients []models.RecipeIngredient
+		replaceIngredients := req.Ingredients != nil
+		if replaceIngredients {
+			for _, ing := range req.Ingredients {
+				if strings.TrimSpace(ing.IngredientUUID) == "" || ing.Quantity <= 0 {
+					continue
+				}
+				var insumo models.Ingredient
+				if err := db.Where("id = ? AND tenant_id = ?", ing.IngredientUUID, tenantID).
+					First(&insumo).Error; err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{
+						"error": "el insumo no existe: " + ing.IngredientUUID,
+					})
+					return
+				}
+				iid := insumo.ID
+				replacementIngredients = append(replacementIngredients, models.RecipeIngredient{
+					RecipeUUID:   recipe.ID,
+					IngredientID: &iid,
+					ProductName:  insumo.Name,
+					Quantity:     ing.Quantity,
+					UnitCost:     insumo.UnitCost,
+				})
+			}
+		}
+
 		// FR-02 — keep the linked vendible Product's Name/Price/Category/
 		// Emoji in sync with the recipe so the POS shows the up-to-date
 		// plato. Done in the same transaction as the recipe update so the
@@ -266,6 +308,20 @@ func UpdateRecipe(db *gorm.DB) gin.HandlerFunc {
 			if len(updates) > 0 {
 				if err := tx.Model(&recipe).Updates(updates).Error; err != nil {
 					return err
+				}
+			}
+			// Reemplazo del set de insumos (Spec 065): borra los actuales e
+			// inserta los nuevos resueltos. El costeo se sigue derivando de
+			// estos (unitCost·quantity) — no cambia el cálculo.
+			if replaceIngredients {
+				if err := tx.Where("recipe_uuid = ?", recipe.ID).
+					Delete(&models.RecipeIngredient{}).Error; err != nil {
+					return err
+				}
+				if len(replacementIngredients) > 0 {
+					if err := tx.Create(&replacementIngredients).Error; err != nil {
+						return err
+					}
 				}
 			}
 			if recipe.ProductID == nil || *recipe.ProductID == "" {
@@ -300,6 +356,10 @@ func UpdateRecipe(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// Recargar con los insumos para que la respuesta refleje el estado real
+		// (incluido el set reemplazado).
+		db.Preload("Ingredients").
+			Where("id = ? AND tenant_id = ?", uuid, tenantID).First(&recipe)
 		c.JSON(http.StatusOK, gin.H{"data": recipe})
 	}
 }
