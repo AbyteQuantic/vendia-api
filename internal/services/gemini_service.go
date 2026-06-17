@@ -1026,18 +1026,19 @@ HOW IT IS SERVED:
 - This dish is served like this: "%s" (for example: on a plate, in a takeaway box, in a glass/cup, in a bowl). Compose the photo with the dish presented in that way.`, presentation)
 	}
 
-	return fmt.Sprintf(`You are a professional FOOD photographer for a restaurant menu. Generate ONE realistic, appetizing catalog photo of the dish described below.
+	return fmt.Sprintf(`You are a top-tier COMMERCIAL FOOD photographer shooting an appetizing advertising photo of the dish below for a restaurant menu.
 
 THE DISH: "%s"%s%s
 
-PHOTOGRAPHY STYLE:
-- A real, appetizing photo of the prepared dish, freshly served, top-quality menu photography.
-- The dish is centered, complete and fully visible, never cropped, never touching the edges.
-- Clean, softly lit background (neutral white or a subtle wooden/table surface), natural soft studio lighting, realistic and vibrant colours, square 1:1 framing.
-- One subtle soft shadow so the dish sits naturally on the surface.
+PHOTOGRAPHY STYLE — make it look like a high-end food commercial / advertisement:
+- Mouth-watering, irresistible, freshly served and at its peak. Professional food styling.
+- Appetizing special effects that FIT this dish: subtle rising steam if it is a hot dish; glistening, juicy, fresh textures with soft light highlights; light condensation/droplets if it is a cold dish or a drink; a light drizzle of sauce or a fresh garnish ONLY if it naturally belongs to this dish.
+- Cinematic, warm, appetizing lighting; rich, vibrant, saturated-but-realistic colours; shallow depth of field with a soft creamy background blur (bokeh) so the food pops.
+- The dish is CENTERED, COMPLETE and FULLY VISIBLE — never cropped, never cut off, never touching the edges, with comfortable margin around it. Square 1:1 framing.
+- Clean, tasteful background (neutral, or a subtle wood/stone/table surface) that does not distract from the food.
 - No added text, no logos, no watermarks, no people, no hands, no menus or price tags.
 
-IMPORTANT — this is a SAMPLE illustration to help the merchant: keep it realistic and faithful to the name and description; never invent a different dish or a fancier version than described.
+IMPORTANT — this is a SAMPLE photo to help the merchant sell: it must be the SAME dish as the name and description (do NOT invent a different dish, do NOT add famous garnishes or sides not implied above), but you SHOULD style it as appetizingly as a professional food commercial.
 
 Output ONLY the finished food photo.`, name, descLine, servingLine)
 }
