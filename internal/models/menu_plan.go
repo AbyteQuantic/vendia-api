@@ -14,7 +14,10 @@ type WeeklyMenuPlan struct {
 
 	TenantID string `gorm:"type:uuid;not null;index:idx_wmp_tenant_branch,unique" json:"tenant_id"`
 	// BranchID="" = plan por defecto del comercio (todas las sedes / single-sede).
-	BranchID string `gorm:"type:uuid;not null;default:'';index:idx_wmp_tenant_branch,unique" json:"branch_id"`
+	// NO es `type:uuid`: el centinela "" no es un UUID válido en Postgres y
+	// `DEFAULT ''::uuid` haría fallar AutoMigrate. Se guarda como texto y se
+	// compara como string (el branch real sigue siendo un UUID en su valor).
+	BranchID string `gorm:"type:varchar(36);not null;default:'';index:idx_wmp_tenant_branch,unique" json:"branch_id"`
 	Days     string `gorm:"type:jsonb;default:'{}'" json:"days"`
 }
 
@@ -25,7 +28,8 @@ type MenuPlanOverride struct {
 	BaseModel
 
 	TenantID string `gorm:"type:uuid;not null;index:idx_mpo_tenant_branch_date,unique" json:"tenant_id"`
-	BranchID string `gorm:"type:uuid;not null;default:'';index:idx_mpo_tenant_branch_date,unique" json:"branch_id"`
+	// BranchID texto (no uuid): "" = sede por defecto; ver WeeklyMenuPlan.
+	BranchID string `gorm:"type:varchar(36);not null;default:'';index:idx_mpo_tenant_branch_date,unique" json:"branch_id"`
 	// Date se guarda como TEXTO YYYY-MM-DD (no `date` SQL): se compara
 	// lexicográficamente y ese formato ordena correctamente, evitando el
 	// round-trip a timestamp que hace el tipo `date` en GORM/Postgres.
