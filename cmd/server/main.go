@@ -739,6 +739,15 @@ func main() {
 		// current insumo stock (FR-05).
 		v1.GET("/recipes/:uuid/availability", handlers.RecipeAvailability(db))
 
+		// Spec 066 — planear menú. Plantilla semanal del comercio +
+		// ajustes por fecha (overrides). El menú efectivo alimenta el
+		// link público (ver PublicCatalog).
+		v1.GET("/menu-plan", handlers.GetMenuPlan(db))
+		v1.PUT("/menu-plan", handlers.UpsertMenuPlan(db))
+		v1.GET("/menu-plan/overrides", handlers.ListMenuPlanOverrides(db))
+		v1.PUT("/menu-plan/overrides", handlers.UpsertMenuPlanOverride(db))
+		v1.DELETE("/menu-plan/overrides/:date", handlers.DeleteMenuPlanOverride(db))
+
 		// Insumos (Feature 001) — raw-material inventory CRUD. The
 		// /low-stock route is registered before /:uuid so the literal
 		// path wins over the param match.

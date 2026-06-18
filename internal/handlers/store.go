@@ -1,16 +1,90 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
+	"vendia-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+// publicMenuResolution agrupa el resultado de resolver el menú efectivo del
+// comercio para el link público (Spec 066).
+type publicMenuResolution struct {
+	Active   bool                // el tenant ya guardó un plan (opt-in)
+	Found    bool                // hay un día habilitado con platos en 7 días
+	IsToday  bool                // el menú resuelto es el de hoy
+	DayLabel string              // "" si es hoy; "Menú del jueves" si es futuro
+	Allowed  map[string]struct{} // IDs de producto-plato que SÍ se muestran
+}
+
+// resolvePublicMenu calcula el menú efectivo del comercio para el catálogo
+// público. Si el tenant nunca guardó un plan, devuelve Active=false y el
+// catálogo se comporta como antes (legacy F043, Art. X).
+func resolvePublicMenu(db *gorm.DB, tenantID string) publicMenuResolution {
+	var plan models.WeeklyMenuPlan
+	if err := db.Where("tenant_id = ?", tenantID).First(&plan).Error; err != nil {
+		return publicMenuResolution{Active: false}
+	}
+
+	days := map[string]services.DayPlan{}
+	if strings.TrimSpace(plan.Days) != "" {
+		_ = json.Unmarshal([]byte(plan.Days), &days)
+	}
+
+	today := time.Now().In(services.LoadTimezone())
+	todayKey := today.Format("2006-01-02")
+	until := today.AddDate(0, 0, 6).Format("2006-01-02")
+
+	var ovRows []models.MenuPlanOverride
+	db.Where("tenant_id = ? AND date >= ? AND date <= ?", tenantID, todayKey, until).
+		Find(&ovRows)
+	overrides := make(map[string]services.DayPlan, len(ovRows))
+	for _, r := range ovRows {
+		items := []services.MenuPlanItem{}
+		if strings.TrimSpace(r.Items) != "" {
+			_ = json.Unmarshal([]byte(r.Items), &items)
+		}
+		overrides[r.Date] = services.DayPlan{Enabled: r.Enabled, Items: items}
+	}
+
+	eff := services.ResolveEffectiveMenu(days, overrides, today)
+	res := publicMenuResolution{
+		Active:   true,
+		Found:    eff.Found,
+		IsToday:  eff.IsToday,
+		DayLabel: services.MenuDayLabel(eff),
+		Allowed:  map[string]struct{}{},
+	}
+	if !eff.Found {
+		return res
+	}
+
+	// recipe_uuid → Recipe.ProductID: solo los platos vinculados a las
+	// recetas del día se muestran.
+	recipeSet := services.RecipeUUIDSet(eff)
+	if len(recipeSet) == 0 {
+		return res
+	}
+	ids := make([]string, 0, len(recipeSet))
+	for id := range recipeSet {
+		ids = append(ids, id)
+	}
+	var recipes []models.Recipe
+	db.Where("tenant_id = ? AND id IN ?", tenantID, ids).Find(&recipes)
+	for _, rc := range recipes {
+		if rc.ProductID != nil && *rc.ProductID != "" {
+			res.Allowed[*rc.ProductID] = struct{}{}
+		}
+	}
+	return res
+}
 
 func GetStoreConfig(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -434,6 +508,26 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 			businessType = tenant.BusinessTypes[0]
 		}
 
+		// Spec 066 — menú dinámico. Si el comercio ya planeó su menú, los
+		// platos (is_menu_item) se filtran al menú efectivo del día. Sin
+		// plan, el catálogo queda intacto (legacy F043).
+		menu := resolvePublicMenu(db, tenant.ID)
+		if menu.Active {
+			kept := make([]CatalogProduct, 0, len(catalog))
+			for _, cp := range catalog {
+				if cp.IsMenuItem {
+					if !menu.Found {
+						continue // 7 días sin menú → sección de platos oculta
+					}
+					if _, ok := menu.Allowed[cp.UUID]; !ok {
+						continue // el plato no está en el menú de hoy
+					}
+				}
+				kept = append(kept, cp)
+			}
+			catalog = kept
+		}
+
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{
 				"business_name":    tenant.BusinessName,
@@ -447,6 +541,10 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 				"promotions":       promosOut,
 				"payment_methods":  paymentMethodsOut,
 				"theme":            themeOut,
+				// Spec 066 — metadatos del menú dinámico para el link público.
+				"menu_plan_active": menu.Active,
+				"menu_is_today":    menu.IsToday,
+				"menu_day_label":   menu.DayLabel,
 			},
 		})
 	}

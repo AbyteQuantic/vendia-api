@@ -204,6 +204,12 @@ func Migrate(db *gorm.DB) error {
 		// F042 — pagos/comprobantes manuales (sin pasarela): el invitado sube
 		// el comprobante y el organizador lo aprueba para activar el carné.
 		&models.EventPayment{},
+		// Spec 066 — planear menú. Dos tablas nuevas (WeeklyMenuPlan por
+		// tenant + MenuPlanOverride por fecha) que alimentan el menú
+		// dinámico del link público. Aditivo y retrocompatible: sin plan,
+		// el catálogo público se comporta como antes (Art. X).
+		&models.WeeklyMenuPlan{},
+		&models.MenuPlanOverride{},
 	)
 	if err != nil {
 		return err
