@@ -142,3 +142,20 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;`).Error
 }
+
+// ensureMenuPlanIndexes — Spec 066. Suelta los índices únicos de una sola
+// dimensión que existían cuando el menú era por-tenant, para que el nuevo
+// ámbito por-(tenant, sede) pueda tener una fila por sede. Los índices únicos
+// compuestos ya los crea AutoMigrate desde los tags. Idempotente.
+func ensureMenuPlanIndexes(db *gorm.DB) error {
+	stmts := []string{
+		`DROP INDEX IF EXISTS idx_weekly_menu_plans_tenant_id`,
+		`DROP INDEX IF EXISTS idx_mpo_tenant_date`,
+	}
+	for _, s := range stmts {
+		if err := db.Exec(s).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}

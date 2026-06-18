@@ -233,6 +233,13 @@ func Migrate(db *gorm.DB) error {
 		if err := ensureBusinessTypesWhitelist(db); err != nil {
 			log.Printf("[bootstrap] business_types whitelist: %v", err)
 		}
+		// Spec 066 — el menú pasó de por-tenant a por-(tenant, sede). Los
+		// índices únicos viejos de una sola columna bloquearían múltiples
+		// sedes; AutoMigrate ya creó los compuestos, aquí soltamos los
+		// viejos (idempotente). Render solo corre AutoMigrate, no .sql.
+		if err := ensureMenuPlanIndexes(db); err != nil {
+			log.Printf("[bootstrap] menu-plan indexes: %v", err)
+		}
 	}
 
 	log.Println("[DB] auto-migrations completed")

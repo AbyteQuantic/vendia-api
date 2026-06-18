@@ -26,20 +26,22 @@ type menuPlanRequest struct {
 	Days map[string]services.DayPlan `json:"days"`
 }
 
-// GetMenuPlan — GET /api/v1/menu-plan. Devuelve la plantilla semanal del
-// comercio (AC-07). Si no existe aún, devuelve un plan vacío (no es error):
-// el front lo trata como "sin planear" y muestra los 7 días apagados.
+// GetMenuPlan — GET /api/v1/menu-plan[?branch=<id>]. Devuelve la plantilla
+// semanal de la sede indicada (AC-07). `branch` vacío = plan por defecto del
+// comercio (single-sede / retrocompatibilidad). Si no existe aún, devuelve un
+// plan vacío (no es error): el front muestra los 7 días apagados.
 func GetMenuPlan(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+		branchID := c.Query("branch")
 
 		var plan models.WeeklyMenuPlan
-		err := db.Where("tenant_id = ?", tenantID).First(&plan).Error
+		err := db.Where("tenant_id = ? AND branch_id = ?", tenantID, branchID).First(&plan).Error
 		days := map[string]services.DayPlan{}
 		if err == nil && strings.TrimSpace(plan.Days) != "" {
 			_ = json.Unmarshal([]byte(plan.Days), &days)
 		}
-		c.JSON(http.StatusOK, gin.H{"data": gin.H{"days": days}})
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{"days": days, "branch_id": branchID}})
 	}
 }
 
@@ -49,6 +51,7 @@ func GetMenuPlan(db *gorm.DB) gin.HandlerFunc {
 func UpsertMenuPlan(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+		branchID := c.Query("branch")
 
 		var req menuPlanRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -77,9 +80,9 @@ func UpsertMenuPlan(db *gorm.DB) gin.HandlerFunc {
 
 		raw, _ := json.Marshal(clean)
 		var plan models.WeeklyMenuPlan
-		err := db.Where("tenant_id = ?", tenantID).First(&plan).Error
+		err := db.Where("tenant_id = ? AND branch_id = ?", tenantID, branchID).First(&plan).Error
 		if err == gorm.ErrRecordNotFound {
-			plan = models.WeeklyMenuPlan{TenantID: tenantID, Days: string(raw)}
+			plan = models.WeeklyMenuPlan{TenantID: tenantID, BranchID: branchID, Days: string(raw)}
 			if err := db.Create(&plan).Error; err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo guardar el menú"})
 				return
@@ -91,7 +94,7 @@ func UpsertMenuPlan(db *gorm.DB) gin.HandlerFunc {
 				return
 			}
 		}
-		c.JSON(http.StatusOK, gin.H{"data": gin.H{"days": clean}})
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{"days": clean, "branch_id": branchID}})
 	}
 }
 
@@ -107,10 +110,11 @@ type overrideRequest struct {
 func ListMenuPlanOverrides(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+		branchID := c.Query("branch")
 		today := time.Now().In(services.LoadTimezone()).Format("2006-01-02")
 
 		var rows []models.MenuPlanOverride
-		db.Where("tenant_id = ? AND date >= ?", tenantID, today).
+		db.Where("tenant_id = ? AND branch_id = ? AND date >= ?", tenantID, branchID, today).
 			Order("date ASC").Find(&rows)
 
 		type overrideOut struct {
@@ -135,6 +139,7 @@ func ListMenuPlanOverrides(db *gorm.DB) gin.HandlerFunc {
 func UpsertMenuPlanOverride(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+		branchID := c.Query("branch")
 
 		var req overrideRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -159,9 +164,9 @@ func UpsertMenuPlanOverride(db *gorm.DB) gin.HandlerFunc {
 		raw, _ := json.Marshal(items)
 
 		var ov models.MenuPlanOverride
-		err := db.Where("tenant_id = ? AND date = ?", tenantID, req.Date).First(&ov).Error
+		err := db.Where("tenant_id = ? AND branch_id = ? AND date = ?", tenantID, branchID, req.Date).First(&ov).Error
 		if err == gorm.ErrRecordNotFound {
-			ov = models.MenuPlanOverride{TenantID: tenantID, Date: req.Date, Enabled: req.Enabled, Items: string(raw)}
+			ov = models.MenuPlanOverride{TenantID: tenantID, BranchID: branchID, Date: req.Date, Enabled: req.Enabled, Items: string(raw)}
 			if err := db.Create(&ov).Error; err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo guardar el ajuste"})
 				return
@@ -183,9 +188,10 @@ func UpsertMenuPlanOverride(db *gorm.DB) gin.HandlerFunc {
 func DeleteMenuPlanOverride(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+		branchID := c.Query("branch")
 		date := c.Param("date")
 
-		db.Where("tenant_id = ? AND date = ?", tenantID, date).
+		db.Where("tenant_id = ? AND branch_id = ? AND date = ?", tenantID, branchID, date).
 			Delete(&models.MenuPlanOverride{})
 		c.JSON(http.StatusOK, gin.H{"message": "ajuste eliminado"})
 	}

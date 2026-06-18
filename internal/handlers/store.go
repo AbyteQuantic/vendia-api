@@ -24,12 +24,21 @@ type publicMenuResolution struct {
 	Allowed  map[string]struct{} // IDs de producto-plato que SÍ se muestran
 }
 
-// resolvePublicMenu calcula el menú efectivo del comercio para el catálogo
-// público. Si el tenant nunca guardó un plan, devuelve Active=false y el
-// catálogo se comporta como antes (legacy F043, Art. X).
-func resolvePublicMenu(db *gorm.DB, tenantID string) publicMenuResolution {
+// resolvePublicMenu calcula el menú efectivo del comercio (o de una sede) para
+// el catálogo público. branchID="" usa el plan por defecto del comercio. Para
+// una sede concreta sin plan propio, hace fallback al plan por defecto del
+// comercio. Si no hay ningún plan, devuelve Active=false y el catálogo se
+// comporta como antes (legacy F043, Art. X).
+func resolvePublicMenu(db *gorm.DB, tenantID, branchID string) publicMenuResolution {
 	var plan models.WeeklyMenuPlan
-	if err := db.Where("tenant_id = ?", tenantID).First(&plan).Error; err != nil {
+	effectiveBranch := branchID
+	err := db.Where("tenant_id = ? AND branch_id = ?", tenantID, branchID).First(&plan).Error
+	if err != nil && branchID != "" {
+		// La sede no tiene plan propio → usa el plan por defecto del comercio.
+		err = db.Where("tenant_id = ? AND branch_id = ?", tenantID, "").First(&plan).Error
+		effectiveBranch = ""
+	}
+	if err != nil {
 		return publicMenuResolution{Active: false}
 	}
 
@@ -43,7 +52,7 @@ func resolvePublicMenu(db *gorm.DB, tenantID string) publicMenuResolution {
 	until := today.AddDate(0, 0, 6).Format("2006-01-02")
 
 	var ovRows []models.MenuPlanOverride
-	db.Where("tenant_id = ? AND date >= ? AND date <= ?", tenantID, todayKey, until).
+	db.Where("tenant_id = ? AND branch_id = ? AND date >= ? AND date <= ?", tenantID, effectiveBranch, todayKey, until).
 		Find(&ovRows)
 	overrides := make(map[string]services.DayPlan, len(ovRows))
 	for _, r := range ovRows {
@@ -508,10 +517,26 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 			businessType = tenant.BusinessTypes[0]
 		}
 
-		// Spec 066 — menú dinámico. Si el comercio ya planeó su menú, los
-		// platos (is_menu_item) se filtran al menú efectivo del día. Sin
-		// plan, el catálogo queda intacto (legacy F043).
-		menu := resolvePublicMenu(db, tenant.ID)
+		// Spec 066 — menú dinámico por sede. `?branch=<id>` selecciona la
+		// sede; vacío = comercio (single-sede). Si la sede existe, se exponen
+		// su nombre y dirección para que el pedido a domicilio no se confunda
+		// de sucursal (AC-10/11). Una sede ajena al tenant se ignora.
+		branchID := c.Query("branch")
+		branchName, branchAddress := "", ""
+		if branchID != "" {
+			var branch models.Branch
+			if err := db.Where("id = ? AND tenant_id = ?", branchID, tenant.ID).First(&branch).Error; err == nil {
+				branchName = branch.Name
+				branchAddress = branch.Address
+			} else {
+				branchID = "" // sede inválida → cae al plan por defecto
+			}
+		}
+
+		// Si el comercio ya planeó su menú, los platos (is_menu_item) se
+		// filtran al menú efectivo del día de esa sede. Sin plan, el catálogo
+		// queda intacto (legacy F043).
+		menu := resolvePublicMenu(db, tenant.ID, branchID)
 		if menu.Active {
 			kept := make([]CatalogProduct, 0, len(catalog))
 			for _, cp := range catalog {
@@ -545,6 +570,10 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 				"menu_plan_active": menu.Active,
 				"menu_is_today":    menu.IsToday,
 				"menu_day_label":   menu.DayLabel,
+				// Sede del link (AC-10/11): vacío para el link por-comercio.
+				"branch_id":      branchID,
+				"branch_name":    branchName,
+				"branch_address": branchAddress,
 			},
 		})
 	}

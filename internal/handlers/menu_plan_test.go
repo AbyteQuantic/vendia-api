@@ -28,8 +28,17 @@ func setupMenuPlanTestDB() *gorm.DB {
 		&models.Recipe{},
 		&models.WeeklyMenuPlan{},
 		&models.MenuPlanOverride{},
+		&models.Branch{},
 	)
 	return db
+}
+
+// allDaysWith arma un JSON de plantilla con los 7 días habilitados con una
+// sola receta, para que el resolvedor encuentre "hoy" sin depender de la fecha.
+func allDaysWith(recipeUUID string) string {
+	day := `{"enabled":true,"items":[{"recipe_uuid":"` + recipeUUID + `","planned_qty":5}]}`
+	return `{"mon":` + day + `,"tue":` + day + `,"wed":` + day + `,"thu":` + day +
+		`,"fri":` + day + `,"sat":` + day + `,"sun":` + day + `}`
 }
 
 // fakeTenant inyecta el tenant_id en el contexto como lo haría el middleware
@@ -214,6 +223,104 @@ func TestPublicCatalog_PlanFiltersDishesToToday(t *testing.T) {
 	assert.Equal(t, "", label) // es hoy
 	assert.ElementsMatch(t, []string{"p-normal", "p-dish1"}, ids)
 	assert.NotContains(t, ids, "p-dish2")
+}
+
+// catalogWithBranch decodifica productos + metadatos de sede del catálogo.
+func catalogWithBranch(t *testing.T, body []byte) (ids []string, branchName string) {
+	var res struct {
+		Data struct {
+			Products   []struct{ UUID string `json:"uuid"` } `json:"products"`
+			BranchName string                                 `json:"branch_name"`
+		} `json:"data"`
+	}
+	assert.NoError(t, json.Unmarshal(body, &res))
+	for _, p := range res.Data.Products {
+		ids = append(ids, p.UUID)
+	}
+	return ids, res.Data.BranchName
+}
+
+func TestPublicCatalog_PerBranchPlanOverridesDefault(t *testing.T) {
+	db := setupMenuPlanTestDB()
+	gin.SetMode(gin.TestMode)
+	seedMenuCatalog(db)
+	db.Create(&models.Branch{BaseModel: models.BaseModel{ID: "b1"}, TenantID: "t1", Name: "Sede Norte", Address: "Cra 1 #2-3"})
+	// Plan por defecto del comercio → solo r1 (p-dish1).
+	db.Create(&models.WeeklyMenuPlan{BaseModel: models.BaseModel{ID: "wp0"}, TenantID: "t1", BranchID: "", Days: allDaysWith("r1")})
+	// Plan de la sede b1 → solo r2 (p-dish2).
+	db.Create(&models.WeeklyMenuPlan{BaseModel: models.BaseModel{ID: "wp1"}, TenantID: "t1", BranchID: "b1", Days: allDaysWith("r2")})
+
+	r := gin.New()
+	r.GET("/catalog/:slug", PublicCatalog(db))
+
+	// Link de la sede b1 → su propio menú (p-dish2) + nombre/dirección.
+	reqB, _ := http.NewRequest(http.MethodGet, "/catalog/resto?branch=b1", nil)
+	wB := httptest.NewRecorder()
+	r.ServeHTTP(wB, reqB)
+	idsB, nameB := catalogWithBranch(t, wB.Body.Bytes())
+	assert.Equal(t, "Sede Norte", nameB)
+	assert.ElementsMatch(t, []string{"p-normal", "p-dish2"}, idsB)
+
+	// Link por-comercio (sin branch) → plan por defecto (p-dish1), sin sede.
+	req0, _ := http.NewRequest(http.MethodGet, "/catalog/resto", nil)
+	w0 := httptest.NewRecorder()
+	r.ServeHTTP(w0, req0)
+	ids0, name0 := catalogWithBranch(t, w0.Body.Bytes())
+	assert.Equal(t, "", name0)
+	assert.ElementsMatch(t, []string{"p-normal", "p-dish1"}, ids0)
+}
+
+func TestPublicCatalog_BranchWithoutPlanFallsBackToDefault(t *testing.T) {
+	db := setupMenuPlanTestDB()
+	gin.SetMode(gin.TestMode)
+	seedMenuCatalog(db)
+	db.Create(&models.Branch{BaseModel: models.BaseModel{ID: "b1"}, TenantID: "t1", Name: "Sede Sur", Address: "Calle 9"})
+	// Solo plan por defecto (r1); la sede b1 no tiene plan propio.
+	db.Create(&models.WeeklyMenuPlan{BaseModel: models.BaseModel{ID: "wp0"}, TenantID: "t1", BranchID: "", Days: allDaysWith("r1")})
+
+	r := gin.New()
+	r.GET("/catalog/:slug", PublicCatalog(db))
+	reqB, _ := http.NewRequest(http.MethodGet, "/catalog/resto?branch=b1", nil)
+	wB := httptest.NewRecorder()
+	r.ServeHTTP(wB, reqB)
+
+	ids, name := catalogWithBranch(t, wB.Body.Bytes())
+	assert.Equal(t, "Sede Sur", name)             // expone la sede
+	assert.ElementsMatch(t, []string{"p-normal", "p-dish1"}, ids) // cae al plan por defecto
+}
+
+func TestMenuPlan_PerBranchIsolation(t *testing.T) {
+	db := setupMenuPlanTestDB()
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(fakeTenant("t1"))
+	r.PUT("/menu-plan", UpsertMenuPlan(db))
+	r.GET("/menu-plan", GetMenuPlan(db))
+
+	// Guardar plan de la sede b1.
+	body := `{"days":{"thu":{"enabled":true,"items":[{"recipe_uuid":"rb","planned_qty":2}]}}}`
+	reqP, _ := http.NewRequest(http.MethodPut, "/menu-plan?branch=b1", strings.NewReader(body))
+	wP := httptest.NewRecorder()
+	r.ServeHTTP(wP, reqP)
+	assert.Equal(t, http.StatusOK, wP.Code)
+
+	// El plan por defecto (sin branch) sigue vacío — aislamiento por sede.
+	req0, _ := http.NewRequest(http.MethodGet, "/menu-plan", nil)
+	w0 := httptest.NewRecorder()
+	r.ServeHTTP(w0, req0)
+	var res struct {
+		Data struct {
+			Days map[string]json.RawMessage `json:"days"`
+		} `json:"data"`
+	}
+	assert.NoError(t, json.Unmarshal(w0.Body.Bytes(), &res))
+	assert.Empty(t, res.Data.Days)
+
+	// La sede b1 sí trae su plan.
+	reqB, _ := http.NewRequest(http.MethodGet, "/menu-plan?branch=b1", nil)
+	wB := httptest.NewRecorder()
+	r.ServeHTTP(wB, reqB)
+	assert.Contains(t, wB.Body.String(), "rb")
 }
 
 func TestPublicCatalog_EmptyPlanHidesAllDishes(t *testing.T) {
