@@ -748,6 +748,9 @@ func main() {
 		// las recetas reales del tenant (stateless, no persiste; el cliente
 		// revisa y luego hace PUT). Junto a las rutas IA del módulo menú.
 		v1.POST("/menu-plan/suggest", handlers.SuggestMenuPlan(db, geminiSvc))
+		// Spec 067 — preview "así se ve hoy su menú en línea": el menú efectivo
+		// del día con la misma resolución que el catálogo público.
+		v1.GET("/menu-plan/today", handlers.GetMenuPlanToday(db))
 		v1.GET("/menu-plan/overrides", handlers.ListMenuPlanOverrides(db))
 		v1.PUT("/menu-plan/overrides", handlers.UpsertMenuPlanOverride(db))
 		v1.DELETE("/menu-plan/overrides/:date", handlers.DeleteMenuPlanOverride(db))
