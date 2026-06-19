@@ -744,6 +744,10 @@ func main() {
 		// link público (ver PublicCatalog).
 		v1.GET("/menu-plan", handlers.GetMenuPlan(db))
 		v1.PUT("/menu-plan", handlers.UpsertMenuPlan(db))
+		// Spec 067 — "Sugerir con IA": propone la plantilla semanal usando solo
+		// las recetas reales del tenant (stateless, no persiste; el cliente
+		// revisa y luego hace PUT). Junto a las rutas IA del módulo menú.
+		v1.POST("/menu-plan/suggest", handlers.SuggestMenuPlan(db, geminiSvc))
 		v1.GET("/menu-plan/overrides", handlers.ListMenuPlanOverrides(db))
 		v1.PUT("/menu-plan/overrides", handlers.UpsertMenuPlanOverride(db))
 		v1.DELETE("/menu-plan/overrides/:date", handlers.DeleteMenuPlanOverride(db))
