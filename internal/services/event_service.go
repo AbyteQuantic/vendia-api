@@ -96,6 +96,13 @@ func (s *EventService) Archive(tenantID, id string) (*models.Event, error) {
 	return s.setStatus(tenantID, id, models.EventStatusArchivado, false)
 }
 
+// Cancel marca el evento como CANCELADO (Spec 069). Espejo de Archive: sale del
+// catálogo público (que solo muestra publicado) sin borrar inscritos ni carné.
+// "cancelado" comunica que el evento NO se realizará (distinto de archivado).
+func (s *EventService) Cancel(tenantID, id string) (*models.Event, error) {
+	return s.setStatus(tenantID, id, models.EventStatusCancelado, false)
+}
+
 func (s *EventService) setStatus(tenantID, id, status string, validate bool) (*models.Event, error) {
 	e, err := s.Get(tenantID, id)
 	if err != nil {

@@ -45,6 +45,7 @@ func eventsRouter(db *gorm.DB, tenantID, role string) *gin.Engine {
 	g.PATCH("/events/:id", UpdateEvent(db))
 	g.DELETE("/events/:id", DeleteEvent(db))
 	g.POST("/events/:id/publish", PublishEvent(db))
+	g.POST("/events/:id/cancel", CancelEvent(db))
 	g.POST("/events/:id/checkin", CheckinEvent(db))
 	g.POST("/events/:id/registrations/:rid/payments", RecordRegistrationPayment(db))
 	g.POST("/events/:id/registrations/:rid/confirm-payment", ConfirmRegistrationPayment(db))
@@ -193,6 +194,39 @@ func TestPublishEvent(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(pub.Body.Bytes(), &pubResp))
 	assert.Equal(t, models.EventStatusPublicado, pubResp.Data.Status)
+}
+
+// Spec 069 — cancelar un evento publicado lo marca cancelado y lo saca del
+// catálogo público (que solo lista publicado).
+func TestCancelEvent(t *testing.T) {
+	db := setupEventsDB(t)
+	r := eventsRouter(db, "tenant-a", "admin")
+
+	create := reqJSON(r, http.MethodPost, "/api/v1/events", validEventBody())
+	require.Equal(t, http.StatusCreated, create.Code)
+	var created struct {
+		Data models.Event `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(create.Body.Bytes(), &created))
+	reqJSON(r, http.MethodPost, "/api/v1/events/"+created.Data.ID+"/publish", nil)
+
+	cancel := reqJSON(r, http.MethodPost, "/api/v1/events/"+created.Data.ID+"/cancel", nil)
+	require.Equal(t, http.StatusOK, cancel.Code)
+	var resp struct {
+		Data models.Event `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(cancel.Body.Bytes(), &resp))
+	assert.Equal(t, models.EventStatusCancelado, resp.Data.Status)
+
+	// Ya no aparece en la lista de publicados (lo que ve el catálogo público).
+	pubList := reqJSON(r, http.MethodGet, "/api/v1/events?status=publicado", nil)
+	var listResp struct {
+		Data []models.Event `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(pubList.Body.Bytes(), &listResp))
+	for _, e := range listResp.Data {
+		assert.NotEqual(t, created.Data.ID, e.ID, "el evento cancelado no debe estar en publicados")
+	}
 }
 
 func TestCheckinEvent_Idempotent(t *testing.T) {

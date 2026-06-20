@@ -588,6 +588,8 @@ func main() {
 		v1.PATCH("/events/:id", handlers.UpdateEvent(db))
 		v1.DELETE("/events/:id", handlers.DeleteEvent(db))
 		v1.POST("/events/:id/publish", handlers.PublishEvent(db))
+		// Spec 069 — cancelar evento: sale del catálogo (status=cancelado).
+		v1.POST("/events/:id/cancel", handlers.CancelEvent(db))
 		v1.POST("/events/:id/checkin", handlers.CheckinEvent(db))
 		v1.GET("/events/:id/registrations", handlers.ListEventRegistrations(db))
 		v1.GET("/events/:id/registrations/export", handlers.ExportEventRegistrations(db))

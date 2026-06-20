@@ -214,6 +214,23 @@ func PublishEvent(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// CancelEvent — POST /api/v1/events/:id/cancel (admin). Marca el evento como
+// cancelado (Spec 069): sale del catálogo público sin borrar inscritos ni
+// carné. Espejo de PublishEvent. "Finalizar" usa DELETE /events/:id (archivado).
+func CancelEvent(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !requireEventAdmin(c) {
+			return
+		}
+		e, err := services.NewEventService(db).Cancel(middleware.GetTenantID(c), c.Param("id"))
+		if err != nil {
+			writeEventError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": e})
+	}
+}
+
 // CheckinEvent — POST /api/v1/events/:id/checkin (admin). Records an entrada
 // or salida scan of an attendee's badge QR. Idempotent: a repeated scan
 // returns 200 with already_registered=true (spec FR-15, AC-08, AC-11).
