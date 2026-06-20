@@ -85,8 +85,11 @@ func SupplierHarvestAlerts(db *gorm.DB) gin.HandlerFunc {
 			Stock      float64
 			ExpiryDate *string
 		}
+		// OJO: NO usar `expiry_date <> ''` — en Postgres la columna es date y el
+		// cast de '' a date lanza (en sqlite es texto y pasa). IS NOT NULL basta;
+		// el parseo en Go descarta vacíos/ inválidos.
 		db.Model(&models.Product{}).
-			Where("tenant_id = ? AND deleted_at IS NULL AND expiry_date IS NOT NULL AND expiry_date <> ''", me).
+			Where("tenant_id = ? AND deleted_at IS NULL AND expiry_date IS NOT NULL", me).
 			Select("id, name, stock, expiry_date").Scan(&rows)
 
 		today := time.Now()
