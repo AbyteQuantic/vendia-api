@@ -31,6 +31,7 @@ func mountMediaRouter(db *gorm.DB, tenantID string) *gin.Engine {
 	r.Use(func(c *gin.Context) { c.Set(middleware.TenantIDKey, tenantID); c.Next() })
 	r.GET("/products/:id/media", handlers.ListProductMedia(db))
 	r.POST("/products/:id/media/youtube", handlers.AddProductMediaYouTube(db))
+	r.PATCH("/products/:id/media/:mediaId/primary", handlers.SetProductMediaPrimary(db))
 	r.DELETE("/products/:id/media/:mediaId", handlers.DeleteProductMedia(db, nil))
 	return r
 }
@@ -65,6 +66,32 @@ func TestAddYouTubeMedia(t *testing.T) {
 	bad := doJSON(t, r, http.MethodPost, "/products/p1/media/youtube",
 		map[string]any{"url": "https://vimeo.com/123"})
 	assert.Equal(t, http.StatusBadRequest, bad.Code)
+}
+
+// Marcar un elemento como principal limpia el flag en los demás (un solo principal).
+func TestSetMediaPrimary(t *testing.T) {
+	db := setupMediaDB(t)
+	seedMediaProduct(t, db, "p1", "t1")
+	a := models.ProductMedia{BaseModel: models.BaseModel{ID: "a"}, TenantID: "t1", ProductID: "p1", Type: "youtube", URL: "u", IsPrimary: true}
+	b := models.ProductMedia{BaseModel: models.BaseModel{ID: "b"}, TenantID: "t1", ProductID: "p1", Type: "video", URL: "v"}
+	require.NoError(t, db.Create(&a).Error)
+	require.NoError(t, db.Create(&b).Error)
+	r := mountMediaRouter(db, "t1")
+
+	// Marcar b como principal → a deja de serlo.
+	w := doJSON(t, r, http.MethodPatch, "/products/p1/media/b/primary", map[string]any{"primary": true})
+	require.Equal(t, http.StatusOK, w.Code)
+	var ga, gb models.ProductMedia
+	db.First(&ga, "id = ?", "a")
+	db.First(&gb, "id = ?", "b")
+	assert.False(t, ga.IsPrimary)
+	assert.True(t, gb.IsPrimary)
+
+	// Quitar principal a b → nadie es principal (default: la foto).
+	w2 := doJSON(t, r, http.MethodPatch, "/products/p1/media/b/primary", map[string]any{"primary": false})
+	require.Equal(t, http.StatusOK, w2.Code)
+	db.First(&gb, "id = ?", "b")
+	assert.False(t, gb.IsPrimary)
 }
 
 // El tope MaxMediaPerProduct se aplica en el server.

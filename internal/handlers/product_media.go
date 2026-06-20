@@ -250,6 +250,38 @@ func ReorderProductMedia(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// SetProductMediaPrimary — PATCH /api/v1/products/:id/media/:mediaId/primary
+// {primary: bool}. Marca este elemento como el PRINCIPAL del carrusel (Spec 070)
+// y limpia el flag en los demás (invariante: máximo uno). Con primary=false el
+// producto vuelve al default (la foto principal va primero).
+func SetProductMediaPrimary(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		product, tenantID, ok := ownedProduct(db, c)
+		if !ok {
+			return
+		}
+		var row models.ProductMedia
+		if err := db.Where("id = ? AND tenant_id = ? AND product_id = ?",
+			c.Param("mediaId"), tenantID, product.ID).First(&row).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "elemento no encontrado"})
+			return
+		}
+		var req struct {
+			Primary bool `json:"primary"`
+		}
+		_ = c.ShouldBindJSON(&req)
+		// Siempre limpia el flag en toda la media del producto (un solo principal).
+		db.Model(&models.ProductMedia{}).
+			Where("tenant_id = ? AND product_id = ?", tenantID, product.ID).
+			Update("is_primary", false)
+		if req.Primary {
+			db.Model(&models.ProductMedia{}).Where("id = ?", row.ID).
+				Update("is_primary", true)
+		}
+		c.JSON(http.StatusOK, gin.H{"message": "principal actualizado"})
+	}
+}
+
 // DeleteProductMedia — DELETE /api/v1/products/:id/media/:mediaId. Borra el
 // objeto R2 (si lo hay) ANTES del soft-delete de la fila.
 func DeleteProductMedia(db *gorm.DB, storageSvc services.FileStorage) gin.HandlerFunc {

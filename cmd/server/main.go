@@ -523,6 +523,7 @@ func main() {
 		v1.POST("/products/:id/media/video", handlers.AddProductMediaVideo(db, storageSvc))
 		v1.POST("/products/:id/media/youtube", handlers.AddProductMediaYouTube(db))
 		v1.PATCH("/products/:id/media/reorder", handlers.ReorderProductMedia(db))
+		v1.PATCH("/products/:id/media/:mediaId/primary", handlers.SetProductMediaPrimary(db))
 		v1.DELETE("/products/:id/media/:mediaId", handlers.DeleteProductMedia(db, storageSvc))
 		v1.POST("/products/:id/enhance", handlers.EnhanceProductPhoto(db, geminiSvc, storageSvc, catalogSvc))
 		v1.POST("/products/:id/generate-image", handlers.GenerateProductImage(db, geminiSvc, storageSvc, catalogSvc))

@@ -366,23 +366,34 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 			if photo == "" {
 				photo = p.ImageURL
 			}
-			// Carrusel: la foto principal es siempre el item 0 (si existe),
-			// seguida de la media extra ordenada por position.
+			// Carrusel (Spec 070): orden = [media principal marcada por el tenant]
+			// + [foto principal del producto] + [resto de la media extra por
+			// position]. Por defecto (nadie marcado) → la FOTO es la principal.
 			var media []MediaItem
 			extra := mediaByProduct[p.ID]
-			if photo != "" || len(extra) > 0 {
-				if photo != "" {
-					media = append(media, MediaItem{Type: "image", URL: photo, Position: 0})
+			toItem := func(m models.ProductMedia) MediaItem {
+				thumb := ""
+				if m.Thumbnail != nil {
+					thumb = *m.Thumbnail
 				}
-				for _, m := range extra {
-					thumb := ""
-					if m.Thumbnail != nil {
-						thumb = *m.Thumbnail
-					}
-					media = append(media, MediaItem{
-						Type: m.Type, URL: m.URL, Thumbnail: thumb, Position: m.Position,
-					})
+				return MediaItem{Type: m.Type, URL: m.URL, Thumbnail: thumb, Position: m.Position}
+			}
+			var primaryID string
+			for _, m := range extra {
+				if m.IsPrimary {
+					primaryID = m.ID
+					media = append(media, toItem(m))
+					break
 				}
+			}
+			if photo != "" {
+				media = append(media, MediaItem{Type: "image", URL: photo, Position: 0})
+			}
+			for _, m := range extra {
+				if m.ID == primaryID {
+					continue
+				}
+				media = append(media, toItem(m))
 			}
 			catalog = append(catalog, CatalogProduct{
 				UUID:            p.ID,

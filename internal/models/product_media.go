@@ -29,6 +29,11 @@ type ProductMedia struct {
 	// StorageKey: key del objeto en R2 (para poder borrarlo); null para youtube.
 	StorageKey *string `gorm:"type:varchar(512)" json:"storage_key,omitempty"`
 	SizeBytes  *int64  `json:"size_bytes,omitempty"`
+	// IsPrimary — el tenant marcó este elemento como el PRINCIPAL del carrusel
+	// (se muestra primero). Por defecto false → la foto principal del producto
+	// (Product.PhotoURL) es la principal (Spec 070). Invariante: como mucho uno
+	// por producto (el endpoint limpia los demás al marcar).
+	IsPrimary bool `gorm:"default:false" json:"is_primary"`
 }
 
 // Tipos de media admitidos.
