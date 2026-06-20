@@ -64,7 +64,8 @@ func Migrate(db *gorm.DB) error {
 		&models.Tenant{},
 		&models.Employee{},
 		&models.Product{},
-		&models.ProductMedia{}, // Spec 070 — galería multimedia
+		&models.ProductMedia{},  // Spec 070 — galería multimedia
+		&models.SupplierOrder{}, // Spec 075 — pedido cross-tenant a proveedores
 
 		&models.Sale{},
 		&models.SaleItem{},
