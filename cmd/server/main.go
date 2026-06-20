@@ -723,6 +723,7 @@ func main() {
 		v1.POST("/orders/payments/:payment_id/confirm", handlers.ConfirmPartialPayment(db))
 
 		// Suppliers
+		v1.GET("/suppliers/nearby", handlers.SuppliersNearby(db)) // Spec 075 — descubrimiento por cercanía
 		v1.GET("/suppliers", handlers.ListSuppliers(db))
 		v1.POST("/suppliers", handlers.CreateSupplier(db))
 		v1.PATCH("/suppliers/:uuid", handlers.UpdateSupplier(db))

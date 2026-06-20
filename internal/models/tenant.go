@@ -19,6 +19,11 @@ const (
 	// F042 — academias / institutos: organizan cursos, conferencias y
 	// hackatones, así que su tipo implica la capacidad de Eventos.
 	BusinessTypeAcademias = "academias_instituciones"
+	// Spec 075 — proveedores B2B: venden a las tiendas cercanas.
+	// Agrícola = agricultor/productor (perecederos por cosecha);
+	// mayorista = comercializa abarrotes/aceite (no perecedero).
+	BusinessTypeProveedorAgricola  = "proveedor_agricola"
+	BusinessTypeProveedorMayorista = "proveedor_mayorista"
 )
 
 // ValidBusinessTypes is the canonical whitelist. The register handler
@@ -36,6 +41,8 @@ var ValidBusinessTypes = map[string]struct{}{
 	BusinessTypeReparacionMuebles:    {},
 	BusinessTypeEmprendimientoGen:    {},
 	BusinessTypeAcademias:            {},
+	BusinessTypeProveedorAgricola:    {},
+	BusinessTypeProveedorMayorista:   {},
 }
 
 // FeatureFlags are per-tenant module toggles derived from business_types.
@@ -53,6 +60,10 @@ type FeatureFlags struct {
 	// the tenant from settings / the "descubre más opciones" reel — never
 	// type-implied, so DefaultFeatureFlags leaves it false (decision #2).
 	EnableEvents bool `json:"enable_events"`
+	// EnableSupplierMode gates el modo "Vendo a tiendas" (Spec 075): catálogo
+	// para tiendas cercanas, perecederos, difusión. Lo prenden los business_type
+	// proveedor_agricola / proveedor_mayorista.
+	EnableSupplierMode bool `json:"enable_supplier_mode"`
 }
 
 // CapabilityToggles carries the three optional capability toggles that a
@@ -88,8 +99,10 @@ func DefaultFeatureFlags(types []string, opts CapabilityToggles) FeatureFlags {
 
 	food := has(BusinessTypeRestaurante, BusinessTypeComidasRapidas, BusinessTypeBar)
 	services := has(BusinessTypeReparacionMuebles, BusinessTypeManufactura, BusinessTypeEmprendimientoGen)
+	supplier := has(BusinessTypeProveedorAgricola, BusinessTypeProveedorMayorista)
 
 	return FeatureFlags{
+		EnableSupplierMode: supplier,
 		EnableTables:          food || opts.Tables,
 		EnableKDS:             food, // KDS stays exclusive to food — D3
 		EnableTips:            food, // Tips stays exclusive to food — D3

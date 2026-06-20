@@ -134,7 +134,9 @@ BEGIN
                 'manufactura',
                 'reparacion_muebles',
                 'emprendimiento_general',
-                'academias_instituciones'
+                'academias_instituciones',
+                'proveedor_agricola',
+                'proveedor_mayorista'
             )
         )
         FROM jsonb_array_elements_text(val::jsonb) AS v
