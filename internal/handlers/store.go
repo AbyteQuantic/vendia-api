@@ -302,6 +302,29 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 			Order("name ASC").
 			Find(&products)
 
+		// Spec 070 — media EXTRA por producto, en UN solo Find (sin N+1).
+		productIDs := make([]string, 0, len(products))
+		for _, p := range products {
+			productIDs = append(productIDs, p.ID)
+		}
+		mediaByProduct := map[string][]models.ProductMedia{}
+		if len(productIDs) > 0 {
+			var allMedia []models.ProductMedia
+			db.Where("tenant_id = ? AND product_id IN ?", tenant.ID, productIDs).
+				Order("position ASC").Find(&allMedia)
+			for _, m := range allMedia {
+				mediaByProduct[m.ProductID] = append(mediaByProduct[m.ProductID], m)
+			}
+		}
+
+		// MediaItem — item del carrusel del catálogo público.
+		type MediaItem struct {
+			Type      string `json:"type"`
+			URL       string `json:"url"`
+			Thumbnail string `json:"thumbnail,omitempty"`
+			Position  int    `json:"position"`
+		}
+
 		type CatalogProduct struct {
 			UUID     string  `json:"uuid"`
 			Name     string  `json:"name"`
@@ -332,6 +355,9 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 			// Spec 063 — producto de venta solo para mayores de 18. El
 			// catálogo público exige confirmar mayoría de edad y lo etiqueta "+18".
 			IsAgeRestricted bool `json:"is_age_restricted"`
+			// Spec 070 — carrusel: foto principal (pos 0) + media extra. Vacío/1
+			// item → el front usa el <img> estático actual (cero regresión).
+			Media []MediaItem `json:"media,omitempty"`
 		}
 
 		var catalog []CatalogProduct
@@ -339,6 +365,24 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 			photo := p.PhotoURL
 			if photo == "" {
 				photo = p.ImageURL
+			}
+			// Carrusel: la foto principal es siempre el item 0 (si existe),
+			// seguida de la media extra ordenada por position.
+			var media []MediaItem
+			extra := mediaByProduct[p.ID]
+			if photo != "" || len(extra) > 0 {
+				if photo != "" {
+					media = append(media, MediaItem{Type: "image", URL: photo, Position: 0})
+				}
+				for _, m := range extra {
+					thumb := ""
+					if m.Thumbnail != nil {
+						thumb = *m.Thumbnail
+					}
+					media = append(media, MediaItem{
+						Type: m.Type, URL: m.URL, Thumbnail: thumb, Position: m.Position,
+					})
+				}
 			}
 			catalog = append(catalog, CatalogProduct{
 				UUID:            p.ID,
@@ -355,6 +399,7 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 				PhotoIsSample:   p.PhotoIsSample,
 				IsService:       p.IsService,
 				IsAgeRestricted: p.IsAgeRestricted,
+				Media:           media,
 			})
 		}
 

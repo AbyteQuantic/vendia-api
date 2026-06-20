@@ -517,6 +517,13 @@ func main() {
 		v1.GET("/products/pending-prices", handlers.PendingPrices(db))
 		v1.PATCH("/products/:id/price", handlers.SetProductPrice(db))
 		v1.POST("/products/:id/photo", handlers.UploadProductPhoto(db, storageSvc))
+		// Spec 070 — galería multimedia (imágenes extra + YouTube + video ≤25s).
+		v1.GET("/products/:id/media", handlers.ListProductMedia(db))
+		v1.POST("/products/:id/media/image", handlers.AddProductMediaImage(db, storageSvc))
+		v1.POST("/products/:id/media/video", handlers.AddProductMediaVideo(db, storageSvc))
+		v1.POST("/products/:id/media/youtube", handlers.AddProductMediaYouTube(db))
+		v1.PATCH("/products/:id/media/reorder", handlers.ReorderProductMedia(db))
+		v1.DELETE("/products/:id/media/:mediaId", handlers.DeleteProductMedia(db, storageSvc))
 		v1.POST("/products/:id/enhance", handlers.EnhanceProductPhoto(db, geminiSvc, storageSvc, catalogSvc))
 		v1.POST("/products/:id/generate-image", handlers.GenerateProductImage(db, geminiSvc, storageSvc, catalogSvc))
 		// Feature 016 — async AI photo polling. The enhance/generate

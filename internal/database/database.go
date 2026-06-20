@@ -64,6 +64,8 @@ func Migrate(db *gorm.DB) error {
 		&models.Tenant{},
 		&models.Employee{},
 		&models.Product{},
+		&models.ProductMedia{}, // Spec 070 — galería multimedia
+
 		&models.Sale{},
 		&models.SaleItem{},
 		&models.RefreshToken{},
