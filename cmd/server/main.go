@@ -723,10 +723,11 @@ func main() {
 		v1.POST("/orders/payments/:payment_id/confirm", handlers.ConfirmPartialPayment(db))
 
 		// Suppliers
-		v1.GET("/suppliers/nearby", handlers.SuppliersNearby(db))           // Spec 075 — descubrimiento por cercanía
-		v1.GET("/suppliers/:uuid/catalog", handlers.SupplierCatalog(db))    // Spec 075 — catálogo del proveedor (cross-tenant)
-		v1.POST("/suppliers/:uuid/orders", handlers.PlaceSupplierOrder(db)) // Spec 075 — pedido a proveedor
-		v1.GET("/supplier/inbox", handlers.SupplierInbox(db))               // Spec 075 — buzón del proveedor
+		v1.GET("/suppliers/nearby", handlers.SuppliersNearby(db))              // Spec 075 — descubrimiento por cercanía
+		v1.GET("/suppliers/:uuid/catalog", handlers.SupplierCatalog(db))       // Spec 075 — catálogo del proveedor (cross-tenant)
+		v1.POST("/suppliers/:uuid/orders", handlers.PlaceSupplierOrder(db))    // Spec 075 — pedido a proveedor
+		v1.GET("/supplier/inbox", handlers.SupplierInbox(db))                  // Spec 075 — buzón del proveedor
+		v1.GET("/supplier/harvest-alerts", handlers.SupplierHarvestAlerts(db)) // Spec 075 F4 — anti-merma
 		v1.PATCH("/supplier/orders/:orderId", handlers.UpdateSupplierOrderStatus(db))
 		v1.GET("/suppliers", handlers.ListSuppliers(db))
 		v1.POST("/suppliers", handlers.CreateSupplier(db))
