@@ -319,6 +319,9 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 			Description string `json:"description,omitempty"`
 			Portion     string `json:"portion,omitempty"`
 			IsMenuItem  bool   `json:"is_menu_item"`
+			// Spec 068 — características del producto (texto libre): el catálogo
+			// las muestra en el detalle ("card interna").
+			Characteristics string `json:"characteristics,omitempty"`
 			// PhotoIsSample — la foto es una MUESTRA generada por IA (ilustración),
 			// no la foto real del plato. El front la etiqueta para no engañar al
 			// comensal (F043).
@@ -338,15 +341,16 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 				photo = p.ImageURL
 			}
 			catalog = append(catalog, CatalogProduct{
-				UUID:          p.ID,
-				Name:          p.Name,
-				Price:         p.Price,
-				PhotoURL:      photo,
-				Emoji:         p.Emoji,
-				Category:      p.Category,
-				Stock:         p.Stock,
-				Description:   p.Description,
-				Portion:       p.Portion,
+				UUID:            p.ID,
+				Name:            p.Name,
+				Price:           p.Price,
+				PhotoURL:        photo,
+				Emoji:           p.Emoji,
+				Category:        p.Category,
+				Stock:           p.Stock,
+				Description:     p.Description,
+				Portion:         p.Portion,
+				Characteristics: p.Characteristics,
 				IsMenuItem:      p.IsMenuItem,
 				PhotoIsSample:   p.PhotoIsSample,
 				IsService:       p.IsService,

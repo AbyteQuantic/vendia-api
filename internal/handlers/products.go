@@ -150,6 +150,8 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		Description string `json:"description"`
 		Portion     string `json:"portion"`
 		IsMenuItem  bool   `json:"is_menu_item"`
+		// Spec 068 — características del producto (texto libre, retail).
+		Characteristics string `json:"characteristics"`
 		// PhotoIsSample: la foto es una MUESTRA generada por IA desde el
 		// nombre (ilustración), no la foto real del plato. El catálogo la
 		// etiqueta para no engañar al comensal (F043).
@@ -284,6 +286,7 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			Category:          req.Category,
 			Description:       req.Description,
 			Portion:           req.Portion,
+			Characteristics:   req.Characteristics,
 			IsMenuItem:        req.IsMenuItem,
 			PhotoIsSample:     req.PhotoIsSample,
 			IsService:         req.IsService,
@@ -331,6 +334,26 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 	}
 }
 
+// ListProductCategories — GET /api/v1/products/categories. Devuelve las
+// categorías DISTINTAS que el tenant ya usó, ordenadas por frecuencia (las más
+// usadas primero), para sugerirlas al crear/editar y NO perder las existentes
+// (Spec 068). Aislado por tenant; excluye vacíos. GORM ya filtra soft-deleted.
+func ListProductCategories(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		var cats []string
+		db.Model(&models.Product{}).
+			Where("tenant_id = ? AND category <> ''", tenantID).
+			Group("category").
+			Order("COUNT(*) DESC").
+			Pluck("category", &cats)
+		if cats == nil {
+			cats = []string{}
+		}
+		c.JSON(http.StatusOK, gin.H{"data": cats})
+	}
+}
+
 func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.HandlerFunc {
 	type Request struct {
 		Name  *string  `json:"name"`
@@ -354,6 +377,12 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		Presentation      *string `json:"presentation"`
 		Content           *string `json:"content"`
 		ExpiryDate        *string `json:"expiry_date"`
+		// Spec 068 — categoría, descripción y características editables (parcial).
+		// Punteros: solo se escriben si el cliente los envía → NO se pierde la
+		// categoría existente cuando el PATCH no la incluye.
+		Category        *string `json:"category"`
+		Description     *string `json:"description"`
+		Characteristics *string `json:"characteristics"`
 		// Spec 063 — alternar "solo mayores de 18" al editar.
 		IsAgeRestricted *bool `json:"is_age_restricted"`
 
@@ -420,6 +449,17 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		}
 		if req.Content != nil {
 			updates["content"] = *req.Content
+		}
+		// Spec 068 — categoría/descripción/características (parcial). Trim de la
+		// categoría para normalizar (sin lowercasing: respeta lo que ve el tendero).
+		if req.Category != nil {
+			updates["category"] = strings.TrimSpace(*req.Category)
+		}
+		if req.Description != nil {
+			updates["description"] = *req.Description
+		}
+		if req.Characteristics != nil {
+			updates["characteristics"] = *req.Characteristics
 		}
 		if req.ExpiryDate != nil {
 			expiry, err := normaliseExpiryDate(*req.ExpiryDate)

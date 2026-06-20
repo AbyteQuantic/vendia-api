@@ -43,6 +43,11 @@ type Product struct {
 	Description string `json:"description,omitempty"`
 	// Portion: tamaño/porción libre ("Personal", "Para compartir", "300g").
 	Portion string `json:"portion,omitempty"`
+	// Spec 068 — Características del producto (texto libre multilínea, p. ej.
+	// "Sin azúcar · Marca Nacional · Picante medio"). Aditivo, default vacío
+	// (string, NUNCA uuid/date): el catálogo público lo muestra en el detalle.
+	// Distinto de Description, que es el texto del PLATO de menú (F043).
+	Characteristics string `json:"characteristics,omitempty"`
 	// IsMenuItem marca un PLATO de menú de restaurante: alimenta la sección
 	// "Menú restaurante" del catálogo público. Aditivo + default false: los
 	// productos existentes no se ven afectados. Lo activan los 3 caminos del

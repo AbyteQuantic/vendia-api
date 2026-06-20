@@ -499,6 +499,8 @@ func main() {
 
 		// Products
 		v1.GET("/products", handlers.ListProducts(db))
+		// Spec 068 — categorías ya usadas por el tenant (sugerencias antitypo).
+		v1.GET("/products/categories", handlers.ListProductCategories(db))
 		v1.GET("/products/by-barcode", handlers.LookupProductByBarcode(db))
 		v1.POST("/products", handlers.CreateProduct(db, catalogSvc))
 		v1.PATCH("/products/:id", handlers.UpdateProduct(db, catalogSvc))
