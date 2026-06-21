@@ -44,6 +44,8 @@ var nonFoodCat = []string{
 	"mascota", "aseo", "hogar", "belleza", "tecnolog", "ferreter", "papeler",
 	"deporte", "ropa", "calzado", "electrodom", "triturad", "organizad",
 	"vaporera", "hervidor", "arrocera", "facial", "maquilla", "perfum",
+	"labial", "balsamo", "locion", "shampoo", "acondicionador", "desodorante",
+	"cuidado", "manos y cuerpo", "pañal", "panal de bebe", "higiene",
 }
 
 // IsFoodCategory reporta si una categoría parece comestible (no está en la lista
