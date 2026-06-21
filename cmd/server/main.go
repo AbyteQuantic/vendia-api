@@ -413,6 +413,10 @@ func main() {
 	// F042: recordatorios de eventos (cuotas + evento próximo). Diario.
 	r.POST("/api/v1/internal/jobs/event-reminders", handlers.EventRemindersJob(db, pushDispatcher, emailSvc))
 
+	// Spec 077 F4 — scraping semanal de cadenas (Éxito/Olímpica) → chain_price +
+	// purga >4 meses. Mismo modelo de auth: sin JWT, gated por CRON_TOKEN.
+	r.POST("/api/v1/internal/jobs/scrape-chains", handlers.ScrapeChainsJob(db))
+
 	// Public online orders (customer places order from catalog).
 	// Two paths hit the same handler: the legacy shape and the
 	// brief's KDS-Phase-1 naming. Keeping both means older admin-web
@@ -784,6 +788,7 @@ func main() {
 		v1.POST("/supplies/prices", handlers.AddSupplyPrice(db))                          // Spec 077 F2 — precio manual
 		v1.POST("/supplies/prices/from-invoice", handlers.AddSupplyPricesFromInvoice(db)) // Spec 077 F3 — precios de factura OCR
 		v1.GET("/supplies/prices/:ingredientId", handlers.ListSupplyPrices(db))           // Spec 077 — historial de precios
+		v1.GET("/supplies/chain-prices", handlers.GetChainPrices(db))                     // Spec 077 F4 — precios de referencia de cadenas
 		v1.POST("/ingredients", handlers.CreateIngredient(db))
 		v1.PATCH("/ingredients/:uuid", handlers.UpdateIngredient(db))
 		v1.DELETE("/ingredients/:uuid", handlers.DeleteIngredient(db))
