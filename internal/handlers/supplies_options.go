@@ -107,12 +107,14 @@ func SupplyOptions(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 
-		// 3) ÚLTIMA COMPRA (per-unidad, sin empaque) — solo si hay insumo real.
+		// 3) TU COSTO (el unit_cost del insumo) — per-unidad, sin empaque. NO se
+		// llama "última compra": para una tienda sin compras es solo el valor que
+		// el tendero puso al crear el insumo (un estimado), no una compra real.
 		if ingredientID != "" {
 			var ing models.Ingredient
 			if err := db.Select("unit_cost").Where("tenant_id = ? AND id = ?", tenantID, ingredientID).First(&ing).Error; err == nil && ing.UnitCost > 0 {
 				o := PriceOption{
-					ID: "last", Label: "Última compra", Supplier: "Última compra",
+					ID: "last", Label: "Tu costo estimado", Supplier: "Tu costo estimado",
 					Source: "ultima_compra", PricePerBaseUnit: ing.UnitCost,
 					IsEstimate: true, PackUnknown: true,
 				}
@@ -158,8 +160,13 @@ func applyPackaging(o *PriceOption, shortfall float64, ingredientUnit string) {
 	}
 }
 
-// markRecommended marca la opción de menor precio por unidad base entre las NO
-// estimadas; si todas son estimadas, la de menor costo.
+// markRecommended elige la opción a recomendar. NUNCA recomienda "tu costo
+// estimado" (ultima_compra) si hay un precio REAL de mercado (proveedor/cadena):
+// ese es solo el valor que el tendero puso al crear el insumo, no una compra.
+//  1. Entre las NO estimadas (catálogo VendIA / precio manual): menor precio por
+//     unidad base.
+//  2. Si no hay, entre las de MERCADO (proveedor/cadena, excluye tu-costo): menor costo.
+//  3. Solo si "tu costo" es la ÚNICA opción, se recomienda (no hay nada mejor).
 func markRecommended(opts []PriceOption) {
 	best := -1
 	for i := range opts {
@@ -170,7 +177,17 @@ func markRecommended(opts []PriceOption) {
 			best = i
 		}
 	}
-	if best == -1 { // todas estimadas → menor costo
+	if best == -1 { // sin garantizadas → mejor opción de MERCADO (no tu-costo)
+		for i := range opts {
+			if opts[i].Source == "ultima_compra" {
+				continue
+			}
+			if best == -1 || opts[i].Cost < opts[best].Cost {
+				best = i
+			}
+		}
+	}
+	if best == -1 { // tu-costo es lo único que hay
 		for i := range opts {
 			if best == -1 || opts[i].Cost < opts[best].Cost {
 				best = i

@@ -107,3 +107,31 @@ func TestSupplyOptions_LastPurchase_CostNotZero(t *testing.T) {
 	require.Len(t, resp.Data.Options, 1)
 	assert.InDelta(t, 6000, resp.Data.Options[0].Cost, 0.001) // 2 kg × $3000
 }
+
+// Spec 077 — "tu costo estimado" NO se recomienda si hay un precio real de
+// proveedor/cadena; ni se llama "última compra".
+func TestSupplyOptions_TuCosto_NotRecommendedOverMarket(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&models.IngredientPrice{}, &models.Tenant{}, &models.Ingredient{}, &models.ChainPrice{}))
+	require.NoError(t, db.Create(&models.Ingredient{BaseModel: models.BaseModel{ID: "arroz"}, TenantID: "t1", Name: "Arroz", Unit: "kg", UnitCost: 3000}).Error)
+	// un precio de proveedor (factura = estimado, pero es de MERCADO) en g.
+	require.NoError(t, db.Create(&models.IngredientPrice{BaseModel: models.BaseModel{ID: "ip"}, TenantID: "t1", IngredientID: sp("arroz"), Source: models.PriceSourceInvoiceOCR, UnitPrice: 5000, PackUnit: "g", PackQty: 1000, RawName: "Arroz x 1kg", SupplierName: "Don Pepe"}).Error)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set(middleware.TenantIDKey, "t1"); c.Next() })
+	r.GET("/supplies/options", handlers.SupplyOptions(db))
+	w := doJSON(t, r, http.MethodGet, "/supplies/options?ingredient_id=arroz&name=Arroz&unit=kg&shortfall=2", nil)
+	var resp struct {
+		Data struct {
+			Options []handlers.PriceOption `json:"options"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	for _, o := range resp.Data.Options {
+		if o.Source == "ultima_compra" {
+			assert.False(t, o.Recommended, "tu-costo NO debe recomendarse sobre mercado")
+			assert.Equal(t, "Tu costo estimado", o.Supplier)
+		}
+	}
+}
