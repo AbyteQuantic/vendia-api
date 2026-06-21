@@ -4,6 +4,7 @@ package handlers
 import (
 	"math"
 	"net/http"
+	"strings"
 
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
@@ -31,6 +32,22 @@ type ShoppingItem struct {
 	EstimatedCost float64 `json:"estimated_cost"`
 	PriceSource   string  `json:"price_source"`
 	IsEstimate    bool    `json:"is_estimate"`
+
+	// Empaque-completo (Spec 077): nadie vende fracciones; se compra el/los
+	// empaque(s) entero(s) y queda un sobrante reservado.
+	Packs       *int    `json:"packs,omitempty"`      // nº de empaques (nil si no se conoce el empaque)
+	PackLabel   string  `json:"pack_label,omitempty"` // presentación (ej "Crema de leche x 1L")
+	PackUnit    string  `json:"pack_unit,omitempty"`  // unidad del empaque
+	Leftover    float64 `json:"leftover"`             // sobrante reservado (estimado)
+	PackUnknown bool    `json:"pack_unknown"`         // true → costo aproximado per-unidad
+}
+
+// packUnitCompatible — el ceil de empaques solo es válido si el empaque está en
+// la misma unidad base del insumo. Vacío = best-effort (asumir compatible).
+func packUnitCompatible(packUnit, ingredientUnit string) bool {
+	p := strings.ToLower(strings.TrimSpace(packUnit))
+	u := strings.ToLower(strings.TrimSpace(ingredientUnit))
+	return p == "" || u == "" || p == u
 }
 
 // SuppliesShoppingList — POST /api/v1/supplies/shopping-list
@@ -92,8 +109,29 @@ func SuppliesShoppingList(db *gorm.DB) gin.HandlerFunc {
 				continue // ya tiene suficiente
 			}
 			sp := services.SuggestIngredientPrice(db, tenantID, req.BranchID, n.IngredientID, g.UnitCost)
-			cost := math.Round(shortfall*sp.PricePerUnit*100) / 100
+
+			// COSTO EMPAQUE-COMPLETO: si se conoce el empaque (precio + tamaño en
+			// la unidad del insumo), se compra el/los empaque(s) entero(s) y queda
+			// un sobrante reservado. Si no, cae a per-unidad (aproximado).
+			var cost, leftover float64
+			var packsPtr *int
+			packUnknown := true
+			if !sp.PackUnknown && packUnitCompatible(sp.PackUnit, g.Unit) {
+				pc := services.ComputePackagingCost(shortfall, sp.PackQty, sp.PackPrice)
+				if pc.PackagingKnown {
+					cost = pc.Cost
+					leftover = pc.Leftover
+					p := pc.Packs
+					packsPtr = &p
+					packUnknown = false
+				}
+			}
+			if packUnknown {
+				cost = math.Round(shortfall*sp.PricePerUnit*100) / 100
+			}
 			total += cost
+			// "Estimado" = confianza del PRECIO (origen). El empaque desconocido
+			// es una señal aparte (PackUnknown) que la fila rotula "aproximado".
 			if sp.IsEstimate {
 				hasEstimate = true
 			}
@@ -108,6 +146,11 @@ func SuppliesShoppingList(db *gorm.DB) gin.HandlerFunc {
 				EstimatedCost: cost,
 				PriceSource:   sp.Source,
 				IsEstimate:    sp.IsEstimate,
+				Packs:         packsPtr,
+				PackLabel:     sp.PackLabel,
+				PackUnit:      sp.PackUnit,
+				Leftover:      leftover,
+				PackUnknown:   packUnknown,
 			})
 		}
 

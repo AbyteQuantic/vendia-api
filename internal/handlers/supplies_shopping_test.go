@@ -120,3 +120,34 @@ func TestShoppingList_DedupesNeeds(t *testing.T) {
 	assert.InDelta(t, 4, resp.Data.Items[0].Shortfall, 0.001)      // 2+2 sumado
 	assert.InDelta(t, 40, resp.Data.Items[0].EstimatedCost, 0.001) // 4×10, no 80
 }
+
+func TestShoppingList_PackagingWholeUnits(t *testing.T) {
+	db := setupShopDB(t)
+	// Crema: necesita 2 ml, stock 0. Proveedor (manual) vende bolsa de 1000 ml a $4200.
+	require.NoError(t, db.Create(&models.Ingredient{BaseModel: models.BaseModel{ID: "crema2"}, TenantID: "t1", Name: "Crema", Unit: "ml", Stock: 0, UnitCost: 5}).Error)
+	require.NoError(t, db.Create(&models.IngredientPrice{
+		BaseModel: models.BaseModel{ID: "ip1"}, TenantID: "t1", IngredientID: strPtr("crema2"),
+		Source: models.PriceSourceManual, UnitPrice: 4200, PackUnit: "ml", PackQty: 1000,
+		PricePerBaseUnit: 4.2, RawName: "Crema de leche x 1L",
+	}).Error)
+	r := mountShop(db)
+	w := doJSON(t, r, http.MethodPost, "/supplies/shopping-list", map[string]any{
+		"needs": []map[string]any{{"ingredient_id": "crema2", "name": "Crema", "unit": "ml", "qty": 2}},
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Data struct {
+			Items []handlers.ShoppingItem `json:"items"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data.Items, 1)
+	it := resp.Data.Items[0]
+	require.NotNil(t, it.Packs)
+	assert.Equal(t, 1, *it.Packs)                    // 1 bolsa
+	assert.InDelta(t, 4200, it.EstimatedCost, 0.001) // empaque entero, NO 2×4.2=8.4
+	assert.InDelta(t, 998, it.Leftover, 0.001)       // sobra ~998 ml
+	assert.False(t, it.PackUnknown)
+	assert.Equal(t, "Crema de leche x 1L", it.PackLabel)
+}
+func strPtr(s string) *string { return &s }

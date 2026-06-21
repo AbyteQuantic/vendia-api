@@ -15,6 +15,14 @@ type SuggestedPrice struct {
 	Confidence   float64 `json:"confidence"`  // 0-1
 	IsEstimate   bool    `json:"is_estimate"` // true → mostrar badge "Estimado"
 	SupplierName string  `json:"supplier_name,omitempty"`
+
+	// Datos del EMPAQUE para el costo empaque-completo (Spec 077). PackUnknown
+	// true → no se conoce el empaque; el costo cae a per-unidad (aproximado).
+	PackPrice   float64 `json:"pack_price"`   // precio del empaque completo
+	PackQty     float64 `json:"pack_qty"`     // tamaño del empaque en unidad base
+	PackUnit    string  `json:"pack_unit"`    // unidad del empaque
+	PackLabel   string  `json:"pack_label"`   // presentación (ej "Crema de leche x 1L")
+	PackUnknown bool    `json:"pack_unknown"` // true → sin empaque conocido
 }
 
 // sourceRank — prioridad descendente (mayor = más confiable). El sugerido toma
@@ -66,16 +74,23 @@ func SuggestIngredientPrice(db *gorm.DB, tenantID, branchID, ingredientID string
 			Confidence:   best.Confidence,
 			IsEstimate:   isEstimateSource(best.Source),
 			SupplierName: best.SupplierName,
+			PackPrice:    best.UnitPrice,
+			PackQty:      best.PackQty,
+			PackUnit:     best.PackUnit,
+			PackLabel:    best.RawName,
+			PackUnknown:  best.PackQty <= 0 || best.UnitPrice <= 0,
 		}
 	}
 
+	// Última compra: solo un costo per-unidad, SIN empaque conocido (aproximado).
 	if lastPurchaseCost > 0 {
 		return SuggestedPrice{
 			PricePerUnit: lastPurchaseCost,
 			Source:       "ultima_compra",
 			Confidence:   0.5,
 			IsEstimate:   true,
+			PackUnknown:  true,
 		}
 	}
-	return SuggestedPrice{Source: "ninguno", IsEstimate: true}
+	return SuggestedPrice{Source: "ninguno", IsEstimate: true, PackUnknown: true}
 }
