@@ -24,57 +24,79 @@ type ChainPriceMatch struct {
 
 const priceDropThreshold = 0.10 // 10%
 
-// MatchChainPrices — para un insumo (nombre ya NORMALIZADO) en una ciudad,
-// devuelve el último precio por cadena + si bajó de precio en el mes. Lee del
-// histórico append-only (chain_price). Consulta rápida (índices), no scrapea.
+// comparable — el precio para comparar: por unidad base si hay paquete, si no el
+// precio crudo (evita meter peras con manzanas).
+func comparable(r models.ChainPrice) float64 {
+	if r.PricePerBaseUnit > 0 {
+		return r.PricePerBaseUnit
+	}
+	return r.Price
+}
+
+// dayKey trunca a día (para agrupar el histórico por fecha de scraping).
+func dayKey(t time.Time) string { return t.Format("2006-01-02") }
+
+// MatchChainPrices — para un insumo (nombre NORMALIZADO) en una ciudad, devuelve
+// el MEJOR precio representativo por cadena (el más barato por unidad base, lo
+// que evita bultos/atípicos) y si BAJÓ de precio respecto a fechas anteriores.
+// Lee del histórico append-only; consulta rápida, no scrapea.
 func MatchChainPrices(db *gorm.DB, normalizedName, city string) []ChainPriceMatch {
 	var rows []models.ChainPrice
 	q := db.Where("normalized_name LIKE ?", "%"+normalizedName+"%")
 	if city != "" {
 		q = q.Where("city = ? OR city = ''", city)
 	}
-	q.Order("scraped_at DESC").Limit(400).Find(&rows)
+	q.Order("scraped_at DESC").Limit(800).Find(&rows)
 
-	// Agrupa por cadena: el más reciente + base de 30 días.
-	type agg struct {
-		latest  *models.ChainPrice
-		sum30   float64
-		count30 int
-	}
-	byChain := map[string]*agg{}
-	cutoff := time.Now().AddDate(0, 0, -30)
-	for i := range rows {
-		r := rows[i]
-		a := byChain[r.Chain]
-		if a == nil {
-			a = &agg{}
-			byChain[r.Chain] = a
-		}
-		if a.latest == nil || r.ScrapedAt.After(a.latest.ScrapedAt) {
-			a.latest = &rows[i]
-		}
-		if r.ScrapedAt.After(cutoff) {
-			a.sum30 += r.Price
-			a.count30++
-		}
+	byChain := map[string][]models.ChainPrice{}
+	for _, r := range rows {
+		byChain[r.Chain] = append(byChain[r.Chain], r)
 	}
 
 	out := make([]ChainPriceMatch, 0, len(byChain))
-	for chain, a := range byChain {
-		if a.latest == nil {
+	for chain, list := range byChain {
+		// Mejor representante (más barato por unidad base) en la fecha más reciente.
+		latestDay := ""
+		for _, r := range list {
+			if k := dayKey(r.ScrapedAt); k > latestDay {
+				latestDay = k
+			}
+		}
+		var best *models.ChainPrice
+		for i := range list {
+			if dayKey(list[i].ScrapedAt) != latestDay {
+				continue
+			}
+			if best == nil || comparable(list[i]) < comparable(*best) {
+				best = &list[i]
+			}
+		}
+		if best == nil {
 			continue
 		}
-		m := ChainPriceMatch{
-			Chain: chain, RawName: a.latest.RawName, Price: a.latest.Price,
-			Unit: a.latest.Unit, ScrapedAt: a.latest.ScrapedAt,
+
+		// Base: el mejor representante en fechas ANTERIORES (≥1 día previo).
+		var prevBest *models.ChainPrice
+		for i := range list {
+			if dayKey(list[i].ScrapedAt) >= latestDay {
+				continue
+			}
+			if prevBest == nil || comparable(list[i]) < comparable(*prevBest) {
+				prevBest = &list[i]
+			}
 		}
-		// Base 30d excluyendo el último dato (necesita ≥2 puntos).
-		if a.count30 >= 2 {
-			base := (a.sum30 - a.latest.Price) / float64(a.count30-1)
-			m.BaselinePrice = base
-			if base > 0 && a.latest.Price < base*(1-priceDropThreshold) {
+
+		m := ChainPriceMatch{
+			Chain: chain, RawName: best.RawName, Price: best.Price,
+			Unit: best.Unit, ScrapedAt: best.ScrapedAt,
+		}
+		if prevBest != nil {
+			base := comparable(*prevBest)
+			now := comparable(*best)
+			m.BaselinePrice = prevBest.Price
+			if base > 0 && now < base*(1-priceDropThreshold) {
 				m.Dropped = true
-				m.DropPct = (base - a.latest.Price) / base * 100
+				m.DropPct = (base - now) / base * 100
 			}
 		}
 		out = append(out, m)
