@@ -257,3 +257,20 @@ func TestCreateProduct_FreshID_StillCreates201(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, productID, resp.Data.ID)
 }
+
+// Spec 077 — un plato de menú o servicio es de TODA la tienda → branch NULL
+// (global), aunque el cajero tenga una sede activa. Así aparece en el POS de
+// cualquier sede.
+func TestCreateProduct_MenuItemAndService_AreGlobal(t *testing.T) {
+	db := setupProductBranchDB(t)
+	r := mountCreateProductWithBranch(db, "t-branch", "br-1")
+	for _, tc := range []struct{ name, flag string }{{"Bandeja Paisa", "is_menu_item"}, {"Corte de cabello", "is_service"}} {
+		w := doJSON(t, r, http.MethodPost, "/products", map[string]any{
+			"name": tc.name, "price": 12000, tc.flag: true, "stock": 0,
+		})
+		require.Equal(t, http.StatusCreated, w.Code)
+		var p models.Product
+		require.NoError(t, db.Where("name = ?", tc.name).First(&p).Error)
+		require.Nil(t, p.BranchID, "%s debe ser global (branch NULL)", tc.name)
+	}
+}

@@ -19,6 +19,11 @@ import (
 type branchBackfillTable struct {
 	name          string
 	hasSoftDelete bool
+	// extraWhere — condición adicional fija (no entrada del usuario). Para
+	// products excluye menús/recetas/servicios: un PLATO de menú es de TODA la
+	// tienda (branch NULL = global), no de una sede; pinearlo a una sede lo
+	// oculta del POS de las otras sedes (Spec 077). Las demás filas siguen su sede.
+	extraWhere string
 }
 
 // branchBackfillTables lists every operational table that carries a
@@ -36,7 +41,8 @@ type branchBackfillTable struct {
 //   - credit_accounts     — fiado scoped to a sede.
 //   - order_tickets       — KDS tickets scoped to a sede.
 var branchBackfillTables = []branchBackfillTable{
-	{name: "products", hasSoftDelete: true},
+	{name: "products", hasSoftDelete: true,
+		extraWhere: " AND is_menu_item = false AND is_recipe = false AND is_service = false"},
 	{name: "sales", hasSoftDelete: true},
 	{name: "inventory_movements", hasSoftDelete: false},
 	{name: "credit_accounts", hasSoftDelete: true},
@@ -126,6 +132,7 @@ func BackfillBranchIDs(db *gorm.DB) (int, error) {
 		if table.hasSoftDelete {
 			whereClause += " AND deleted_at IS NULL"
 		}
+		whereClause += table.extraWhere // menús/recetas/servicios quedan globales
 		for tenantID, branchID := range defaults {
 			// Per-tenant, per-table UPDATE. Parameterised (Art. VI):
 			// the table name is from a fixed allow-list, never user

@@ -237,6 +237,12 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		if branchID == "" {
 			branchID = resolveDefaultBranchID(db, tenantID)
 		}
+		// Un PLATO de menú o un SERVICIO es de TODA la tienda, no de una sede:
+		// se crea GLOBAL (branch_id NULL) para que aparezca en el POS de
+		// cualquier sede (Spec 077). Solo el inventario físico va por sede.
+		if req.IsMenuItem || req.IsService {
+			branchID = ""
+		}
 
 		expiry, err := normaliseExpiryDate(req.ExpiryDate)
 		if err != nil {
