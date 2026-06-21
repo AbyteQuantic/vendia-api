@@ -145,10 +145,17 @@ func applyPackaging(o *PriceOption, shortfall float64, ingredientUnit string) {
 			return
 		}
 	}
-	// Fallback aproximado: no se conoce empaque comparable. Usa el precio del
-	// empaque entero (no el per-base, para no mezclar unidades).
+	// Fallback aproximado: no se conoce un empaque comparable.
 	o.PackUnknown = true
-	o.Cost = roundCents(o.PackPrice)
+	if o.PackPrice > 0 {
+		// Hay precio de empaque (cadena/proveedor) pero su unidad no convierte a
+		// la del insumo → mostramos el empaque entero (no mezclamos unidades).
+		o.Cost = roundCents(o.PackPrice)
+	} else {
+		// Última compra: PricePerBaseUnit está en la unidad DEL INSUMO (mismo que
+		// el faltante) → costo = faltante × costo unitario.
+		o.Cost = roundCents(shortfall * o.PricePerBaseUnit)
+	}
 }
 
 // markRecommended marca la opción de menor precio por unidad base entre las NO

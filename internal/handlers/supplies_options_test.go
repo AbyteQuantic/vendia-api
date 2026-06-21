@@ -84,3 +84,26 @@ func TestSupplyOptions_UnitConversion_KgVsG(t *testing.T) {
 	assert.InDelta(t, 10000, o.Cost, 0.001) // 2 × $5000
 	assert.False(t, o.PackUnknown)
 }
+
+// Spec 077 — la opción "última compra" (sin empaque) cuesta faltante × costo
+// unitario, NO $0 (regresión del fallback).
+func TestSupplyOptions_LastPurchase_CostNotZero(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&models.IngredientPrice{}, &models.Tenant{}, &models.Ingredient{}, &models.ChainPrice{}))
+	require.NoError(t, db.Create(&models.Ingredient{BaseModel: models.BaseModel{ID: "arroz"}, TenantID: "t1", Name: "Arroz", Unit: "kg", UnitCost: 3000}).Error)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set(middleware.TenantIDKey, "t1"); c.Next() })
+	r.GET("/supplies/options", handlers.SupplyOptions(db))
+	w := doJSON(t, r, http.MethodGet, "/supplies/options?ingredient_id=arroz&name=Arroz&unit=kg&shortfall=2", nil)
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Data struct {
+			Options []handlers.PriceOption `json:"options"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data.Options, 1)
+	assert.InDelta(t, 6000, resp.Data.Options[0].Cost, 0.001) // 2 kg × $3000
+}
