@@ -65,6 +65,18 @@ func TestUpdateStoreLocation_SavesCity(t *testing.T) {
 	assert.Equal(t, "Calle 8, Fusagasugá, Cundinamarca", saved.Address) // address vacía → se llena
 }
 
+func TestUpdateStoreLocation_ClientCityWins(t *testing.T) {
+	db := setupLocDB(t)
+	// Geocoder de servidor devuelve otra cosa; debe ganar la ciudad del cliente.
+	r := mountLoc(db, &fakeGeocoder{city: "OtraCiudad"})
+	w := doJSON(t, r, http.MethodPatch, "/store/location",
+		map[string]any{"latitude": 4.34, "longitude": -74.36, "city": "Fusagasugá"})
+	require.Equal(t, http.StatusOK, w.Code)
+	var saved models.Tenant
+	db.First(&saved, "id = ?", "t1")
+	assert.Equal(t, "Fusagasugá", saved.City)
+}
+
 func TestUpdateStoreLocation_RejectsZeroZero(t *testing.T) {
 	db := setupLocDB(t)
 	r := mountLoc(db, &fakeGeocoder{})

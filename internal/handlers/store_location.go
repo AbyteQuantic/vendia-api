@@ -27,6 +27,10 @@ func UpdateStoreLocation(db *gorm.DB, geo services.Geocoder) gin.HandlerFunc {
 			Longitude  float64 `json:"longitude"`
 			Accuracy   float64 `json:"accuracy"`
 			References string  `json:"references"`
+			// City la manda el cliente cuando ya la resolvió con el geocoder
+			// NATIVO del móvil (placemarkFromCoordinates). Es la ruta primaria y
+			// evita depender de un geocoder de servidor. Opcional.
+			City string `json:"city"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "datos inválidos"})
@@ -46,21 +50,24 @@ func UpdateStoreLocation(db *gorm.DB, geo services.Geocoder) gin.HandlerFunc {
 			"location_references": strings.TrimSpace(req.References),
 		}
 
-		// Reverse-geocode best-effort para ciudad + etiqueta legible.
-		var city, label string
-		if geo != nil {
+		// Ciudad: 1) la del cliente (geocoder nativo del móvil) si vino;
+		// 2) fallback al geocoder de servidor (Photon, cloud-friendly).
+		city := strings.TrimSpace(req.City)
+		var label string
+		if city == "" && geo != nil {
 			if l, ct, err := geo.Reverse(req.Latitude, req.Longitude); err == nil {
 				label, city = l, ct
-				if city != "" {
-					updates["city"] = city
-				}
-				// Solo rellena la dirección si está vacía (no pisa lo que el
-				// tenant escribió a mano).
-				var current models.Tenant
-				if e := db.Select("address").Where("id = ?", tenantID).First(&current).Error; e == nil {
-					if strings.TrimSpace(current.Address) == "" && label != "" {
-						updates["address"] = label
-					}
+			}
+		}
+		if city != "" {
+			updates["city"] = city
+		}
+		// Solo rellena la dirección si está vacía (no pisa lo escrito a mano).
+		if label != "" {
+			var current models.Tenant
+			if e := db.Select("address").Where("id = ?", tenantID).First(&current).Error; e == nil {
+				if strings.TrimSpace(current.Address) == "" {
+					updates["address"] = label
 				}
 			}
 		}
