@@ -56,3 +56,31 @@ func TestSupplyOptions_PackagingAndRecommended(t *testing.T) {
 }
 
 func sp(s string) *string { return &s }
+
+// Spec 077 — el insumo en kg y el empaque en g deben CUADRAR (conversión).
+func TestSupplyOptions_UnitConversion_KgVsG(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&models.IngredientPrice{}, &models.Tenant{}, &models.Ingredient{}, &models.ChainPrice{}))
+	// Proveedor vende arroz en bolsa de 1000 g (=1kg) a $5000.
+	require.NoError(t, db.Create(&models.IngredientPrice{BaseModel: models.BaseModel{ID: "a"}, TenantID: "t1", IngredientID: sp("arroz"), Source: models.PriceSourceManual, UnitPrice: 5000, PackUnit: "g", PackQty: 1000, RawName: "Arroz x 1kg", SupplierName: "Don Pepe"}).Error)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set(middleware.TenantIDKey, "t1"); c.Next() })
+	r.GET("/supplies/options", handlers.SupplyOptions(db))
+	// Faltan 2 KG → debe comprar 2 bolsas de 1kg = $10000 (no descuadrar por 1000x).
+	w := doJSON(t, r, http.MethodGet, "/supplies/options?ingredient_id=arroz&name=Arroz&unit=kg&shortfall=2", nil)
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Data struct {
+			Options []handlers.PriceOption `json:"options"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.GreaterOrEqual(t, len(resp.Data.Options), 1)
+	o := resp.Data.Options[0]
+	require.NotNil(t, o.Packs)
+	assert.Equal(t, 2, *o.Packs)            // 2 kg / 1000 g = 2 bolsas
+	assert.InDelta(t, 10000, o.Cost, 0.001) // 2 × $5000
+	assert.False(t, o.PackUnknown)
+}

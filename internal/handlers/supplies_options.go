@@ -127,27 +127,28 @@ func SupplyOptions(db *gorm.DB) gin.HandlerFunc {
 }
 
 // applyPackaging resuelve packs/cost/leftover de una opción contra el faltante.
+// Convierte faltante y empaque a la MISMA unidad base (kg↔g, l↔ml) para que el
+// costo cuadre aunque el insumo esté en kg y la cadena en g (Spec 077).
 func applyPackaging(o *PriceOption, shortfall float64, ingredientUnit string) {
-	if o.PackQty > 0 && o.PackPrice > 0 && packUnitCompatible(o.PackUnit, ingredientUnit) {
-		pc := services.ComputePackagingCost(shortfall, o.PackQty, o.PackPrice)
+	sBase, sDim := services.ToBaseQty(shortfall, ingredientUnit)
+	pBase, pDim := services.ToBaseQty(o.PackQty, o.PackUnit)
+	if pBase > 0 && o.PackPrice > 0 && sDim == pDim && sDim != "other" {
+		pc := services.ComputePackagingCost(sBase, pBase, o.PackPrice)
 		if pc.PackagingKnown {
 			p := pc.Packs
 			o.Packs = &p
 			o.Cost = pc.Cost
-			o.Leftover = pc.Leftover
+			o.Leftover = pc.Leftover // en unidad base (g/ml)
 			if o.PricePerBaseUnit <= 0 {
-				o.PricePerBaseUnit = o.PackPrice / o.PackQty
+				o.PricePerBaseUnit = o.PackPrice / pBase
 			}
 			return
 		}
 	}
-	// Fallback per-unidad (aproximado).
+	// Fallback aproximado: no se conoce empaque comparable. Usa el precio del
+	// empaque entero (no el per-base, para no mezclar unidades).
 	o.PackUnknown = true
-	ppu := o.PricePerBaseUnit
-	if ppu <= 0 {
-		ppu = o.PackPrice
-	}
-	o.Cost = roundCents(shortfall * ppu)
+	o.Cost = roundCents(o.PackPrice)
 }
 
 // markRecommended marca la opción de menor precio por unidad base entre las NO

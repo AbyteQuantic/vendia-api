@@ -4,7 +4,6 @@ package handlers
 import (
 	"math"
 	"net/http"
-	"strings"
 
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
@@ -40,14 +39,6 @@ type ShoppingItem struct {
 	PackUnit    string  `json:"pack_unit,omitempty"`  // unidad del empaque
 	Leftover    float64 `json:"leftover"`             // sobrante reservado (estimado)
 	PackUnknown bool    `json:"pack_unknown"`         // true → costo aproximado per-unidad
-}
-
-// packUnitCompatible — el ceil de empaques solo es válido si el empaque está en
-// la misma unidad base del insumo. Vacío = best-effort (asumir compatible).
-func packUnitCompatible(packUnit, ingredientUnit string) bool {
-	p := strings.ToLower(strings.TrimSpace(packUnit))
-	u := strings.ToLower(strings.TrimSpace(ingredientUnit))
-	return p == "" || u == "" || p == u
 }
 
 // SuppliesShoppingList — POST /api/v1/supplies/shopping-list
@@ -116,8 +107,12 @@ func SuppliesShoppingList(db *gorm.DB) gin.HandlerFunc {
 			var cost, leftover float64
 			var packsPtr *int
 			packUnknown := true
-			if !sp.PackUnknown && packUnitCompatible(sp.PackUnit, g.Unit) {
-				pc := services.ComputePackagingCost(shortfall, sp.PackQty, sp.PackPrice)
+			// Convierte faltante y empaque a la MISMA base (kg↔g, l↔ml) — un
+			// insumo en kg con un empaque en g debe cuadrar (Spec 077).
+			sBase, sDim := services.ToBaseQty(shortfall, g.Unit)
+			pBase, pDim := services.ToBaseQty(sp.PackQty, sp.PackUnit)
+			if !sp.PackUnknown && pBase > 0 && sDim == pDim && sDim != "other" {
+				pc := services.ComputePackagingCost(sBase, pBase, sp.PackPrice)
 				if pc.PackagingKnown {
 					cost = pc.Cost
 					leftover = pc.Leftover
@@ -127,6 +122,7 @@ func SuppliesShoppingList(db *gorm.DB) gin.HandlerFunc {
 				}
 			}
 			if packUnknown {
+				// per-unidad en la unidad del insumo (sp.PricePerUnit es por esa unidad).
 				cost = math.Round(shortfall*sp.PricePerUnit*100) / 100
 			}
 			total += cost
