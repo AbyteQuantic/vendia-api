@@ -76,6 +76,62 @@ func AddSupplyPrice(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// AddSupplyPricesFromInvoice — POST /api/v1/supplies/prices/from-invoice
+// Fase 3 (Spec 077): persiste las líneas de una factura YA escaneada (reusa
+// ScanInvoice) que el tenant CONFIRMÓ mapeadas a sus insumos, como precios
+// source=invoice_ocr (estimado, confianza 0.6, etiquetado "de factura"). El
+// match no es automático-silencioso: el cliente confirma cada renglón.
+func AddSupplyPricesFromInvoice(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		var req struct {
+			InvoiceRef   string `json:"invoice_ref"`
+			SupplierName string `json:"supplier_name"`
+			BranchID     string `json:"branch_id"`
+			Items        []struct {
+				IngredientID string  `json:"ingredient_id"`
+				RawName      string  `json:"raw_name"`
+				UnitPrice    float64 `json:"unit_price"`
+				PackUnit     string  `json:"pack_unit"`
+				PackQty      float64 `json:"pack_qty"`
+			} `json:"items"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "datos inválidos"})
+			return
+		}
+		ref := req.InvoiceRef
+		if strings.TrimSpace(ref) == "" {
+			ref = "factura " + time.Now().Format("2006-01-02")
+		}
+		rows := make([]models.IngredientPrice, 0, len(req.Items))
+		for _, it := range req.Items {
+			if strings.TrimSpace(it.IngredientID) == "" || it.UnitPrice <= 0 {
+				continue // solo renglones confirmados con precio
+			}
+			perBase := it.UnitPrice
+			if it.PackQty > 0 {
+				perBase = it.UnitPrice / it.PackQty
+			}
+			ingID := it.IngredientID
+			rows = append(rows, models.IngredientPrice{
+				TenantID: tenantID, BranchID: req.BranchID, IngredientID: &ingID,
+				RawName: it.RawName, Source: models.PriceSourceInvoiceOCR,
+				SupplierName: req.SupplierName, UnitPrice: it.UnitPrice,
+				PackUnit: it.PackUnit, PackQty: it.PackQty, PricePerBaseUnit: perBase,
+				Currency: "COP", Confidence: 0.6, CapturedAt: time.Now(), SourceRef: ref,
+			})
+		}
+		if len(rows) > 0 {
+			if err := db.Create(&rows).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudieron guardar los precios"})
+				return
+			}
+		}
+		c.JSON(http.StatusCreated, gin.H{"data": gin.H{"saved": len(rows)}})
+	}
+}
+
 // ListSupplyPrices — GET /api/v1/supplies/prices/:ingredientId
 // Historial/fuentes de precio conocidas de un insumo (para el comparador y para
 // ver "bajó de precio"). Más reciente primero.
