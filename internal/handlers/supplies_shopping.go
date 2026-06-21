@@ -51,6 +51,21 @@ func SuppliesShoppingList(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// DEDUP por insumo: una receta con líneas duplicadas (o un insumo en
+		// varios platos) llega como varios needs del MISMO ingredient_id → suma
+		// las cantidades una sola vez (evita el costo doble). Spec 077 fix.
+		dedup := make([]shoppingNeed, 0, len(req.Needs))
+		idx := map[string]int{}
+		for _, n := range req.Needs {
+			if i, ok := idx[n.IngredientID]; ok {
+				dedup[i].Qty += n.Qty
+				continue
+			}
+			idx[n.IngredientID] = len(dedup)
+			dedup = append(dedup, n)
+		}
+		req.Needs = dedup
+
 		// Carga los insumos referenciados (stock + costo) en una query.
 		ids := make([]string, 0, len(req.Needs))
 		for _, n := range req.Needs {

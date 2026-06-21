@@ -97,3 +97,26 @@ func TestShoppingList_PrefersVendiaCatalogPrice(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+func TestShoppingList_DedupesNeeds(t *testing.T) {
+	db := setupShopDB(t)
+	require.NoError(t, db.Create(&models.Ingredient{BaseModel: models.BaseModel{ID: "crema"}, TenantID: "t1", Name: "Crema", Unit: "ml", Stock: 0, UnitCost: 10}).Error)
+	r := mountShop(db)
+	// MISMO insumo dos veces (receta duplicada) → debe sumar, no doblar el costo.
+	w := doJSON(t, r, http.MethodPost, "/supplies/shopping-list", map[string]any{
+		"needs": []map[string]any{
+			{"ingredient_id": "crema", "name": "Crema", "unit": "ml", "qty": 2},
+			{"ingredient_id": "crema", "name": "Crema", "unit": "ml", "qty": 2},
+		},
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Data struct {
+			Items []handlers.ShoppingItem `json:"items"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data.Items, 1)                             // una sola fila
+	assert.InDelta(t, 4, resp.Data.Items[0].Shortfall, 0.001)      // 2+2 sumado
+	assert.InDelta(t, 40, resp.Data.Items[0].EstimatedCost, 0.001) // 4×10, no 80
+}
