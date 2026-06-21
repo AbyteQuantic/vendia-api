@@ -20,6 +20,11 @@ type ChainPriceMatch struct {
 	Dropped       bool      `json:"dropped"`        // bajó ≥10% vs base 30d
 	BaselinePrice float64   `json:"baseline_price"` // promedio 30d (excl. el último)
 	DropPct       float64   `json:"drop_pct"`       // % de baja (positivo)
+
+	// Datos del empaque para el costo empaque-completo + recomendado (Spec 077).
+	PackQty          float64 `json:"pack_qty"`
+	PricePerBaseUnit float64 `json:"price_per_base_unit"`
+	Brand            string  `json:"brand,omitempty"`
 }
 
 const priceDropThreshold = 0.10 // 10%
@@ -92,6 +97,7 @@ func MatchChainPrices(db *gorm.DB, normalizedName, city string) []ChainPriceMatc
 		m := ChainPriceMatch{
 			Chain: chain, RawName: best.RawName, Price: best.Price,
 			Unit: best.Unit, ScrapedAt: best.ScrapedAt,
+			PackQty: best.PackQty, PricePerBaseUnit: best.PricePerBaseUnit, Brand: best.Brand,
 		}
 		if prevBest != nil {
 			base := comparable(*prevBest)
