@@ -50,6 +50,9 @@ func MatchChainPrices(db *gorm.DB, normalizedName, city string) []ChainPriceMatc
 
 	byChain := map[string][]models.ChainPrice{}
 	for _, r := range rows {
+		if !IsFoodCategory(r.Category) {
+			continue // defensa: ignora ruido no-comestible aún almacenado
+		}
 		byChain[r.Chain] = append(byChain[r.Chain], r)
 	}
 

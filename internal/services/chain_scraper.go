@@ -33,6 +33,30 @@ var ScrapeTerms = []string{
 	"harina", "platano", "yuca", "zanahoria", "ajo", "queso", "mantequilla",
 }
 
+// nonFoodCat — subcadenas de CATEGORÍA que delatan productos NO comestibles que
+// el full-text VTEX trae como homónimos (aceite capilar, vaporera de huevos,
+// olla arrocera, etc.). Se filtran al scrapear y al consultar.
+var nonFoodCat = []string{
+	"corporal", "capilar", "utensilio", "accesorio", "procesador", "superficie",
+	"sexual", "gel", "jabon", "sarten", "caja", "canasta", "olla", "crispetera",
+	"fuente", "bicicleta", "molde", "refract", "juguet", "moto", "herramient",
+	"mascota", "aseo", "hogar", "belleza", "tecnolog", "ferreter", "papeler",
+	"deporte", "ropa", "calzado", "electrodom", "triturad", "organizad",
+	"vaporera", "hervidor", "arrocera", "facial", "maquilla", "perfum",
+}
+
+// IsFoodCategory reporta si una categoría parece comestible (no está en la lista
+// negra). Vacío = se acepta (mejor incluir que excluir un alimento).
+func IsFoodCategory(category string) bool {
+	c := NormalizeText(category)
+	for _, bad := range nonFoodCat {
+		if strings.Contains(c, bad) {
+			return false
+		}
+	}
+	return true
+}
+
 // vtexProduct — shape mínimo de la API de catálogo VTEX.
 type vtexProduct struct {
 	ProductName string   `json:"productName"`
@@ -99,6 +123,9 @@ func ScrapeChainsForCity(db *gorm.DB, city string, sources []ChainSource) int {
 				cat := ""
 				if len(p.Categories) > 0 {
 					cat = p.Categories[0]
+				}
+				if !IsFoodCategory(cat) || price < 300 || price > 300000 {
+					continue // descarta no-comestibles y precios atípicos
 				}
 				rows = append(rows, models.ChainPrice{
 					Chain: src.Chain, City: city,
