@@ -789,6 +789,10 @@ func main() {
 		v1.POST("/supplies/prices/from-invoice", handlers.AddSupplyPricesFromInvoice(db)) // Spec 077 F3 — precios de factura OCR
 		v1.GET("/supplies/prices/:ingredientId", handlers.ListSupplyPrices(db))           // Spec 077 — historial de precios
 		v1.GET("/supplies/chain-prices", handlers.GetChainPrices(db))                     // Spec 077 F4 — precios de referencia de cadenas
+		v1.POST("/errands", handlers.CreateErrand(db))                                    // Spec 077 — crear mandado
+		v1.GET("/errands", handlers.ListErrands(db))                                      // Spec 077 — listar mandados
+		v1.PATCH("/errands/:id", handlers.UpdateErrandStatus(db))                         // Spec 077 — estado del mandado
+		v1.POST("/errands/match-today", handlers.MatchTodayErrand(db))                    // Spec 077 — reenviar pedido del día
 		v1.POST("/ingredients", handlers.CreateIngredient(db))
 		v1.PATCH("/ingredients/:uuid", handlers.UpdateIngredient(db))
 		v1.DELETE("/ingredients/:uuid", handlers.DeleteIngredient(db))
