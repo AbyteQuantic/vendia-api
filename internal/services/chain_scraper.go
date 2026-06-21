@@ -61,6 +61,9 @@ var nonFoodName = []string{
 	"corporal", "capilar", "anti estria", "antiestria", "estria", "bronceador",
 	"cannabis", "cbd", "drogam", "exomega", "ducha", "dispensador", "humectacion",
 	"masaje", "facial", "piel de oro", "a derma", "para piel", "bebe",
+	// Aceites automotrices/industriales (no de cocina) que caen en "Aceites".
+	"lubricante", "aditivo", "probador", "aerosol", "qualitor", "autool",
+	"motor", "anticorrosiv", "penetrante", "gotero",
 }
 
 // IsFoodCategory reporta si una categoría parece comestible (no está en la lista
