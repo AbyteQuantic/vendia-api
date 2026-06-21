@@ -35,6 +35,7 @@ func SearchCatalog(catalogSvc *services.CatalogService, cacheSvc *services.Catal
 			Brand        string      `json:"brand,omitempty"`
 			ImageURL     string      `json:"image_url,omitempty"`
 			Barcode      string      `json:"barcode,omitempty"`
+			SKU          string      `json:"sku,omitempty"` // referencia normalizada (Spec 077/068)
 			Presentation string      `json:"presentation,omitempty"`
 			Content      string      `json:"content,omitempty"`
 			Source       string      `json:"source"`
@@ -49,6 +50,7 @@ func SearchCatalog(catalogSvc *services.CatalogService, cacheSvc *services.Catal
 				Brand:        r.Brand,
 				ImageURL:     r.ImageURL,
 				Barcode:      r.Barcode,
+				SKU:          r.SKU,
 				Presentation: r.Presentation,
 				Content:      r.Content,
 				Source:       r.Source,
