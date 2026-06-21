@@ -65,7 +65,8 @@ jobs:
           [ "$code" = "200" ] || { echo "::error::event-reminders HTTP $code"; exit 1; }
 
       - name: scrape-chains (Spec 077 — semanal)
-        if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 9 * * 1'
+        # always(): no lo bloquea un fallo de un job anterior en pruebas manuales.
+        if: always() && (github.event_name == 'workflow_dispatch' || github.event.schedule == '0 9 * * 1')
         run: |
           code=$(curl -sS -o /tmp/out.json -w '%{http_code}' --max-time 300 --retry 2 --retry-delay 15 \
             -X POST "$API/api/v1/internal/jobs/scrape-chains" \
