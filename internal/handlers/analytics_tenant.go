@@ -49,12 +49,12 @@ func AnalyticsDashboard(db *gorm.DB) gin.HandlerFunc {
 
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{
-				"total_sales_today":   totalSales,
-				"transaction_count":   transactionCount,
+				"total_sales_today":    totalSales,
+				"transaction_count":    transactionCount,
 				"total_credit_pending": totalCredit,
-				"product_count":       productCount,
-				"low_stock_count":     lowStockCount,
-				"pending_orders":      pendingOrders,
+				"product_count":        productCount,
+				"low_stock_count":      lowStockCount,
+				"pending_orders":       pendingOrders,
 			},
 		})
 	}
@@ -70,11 +70,12 @@ func AnalyticsDashboard(db *gorm.DB) gin.HandlerFunc {
 //   - best_day / worst_day for week/month windows
 //
 // Filters (query params, all optional):
-//   period=today|week|month       — coarse window (default today)
-//   since=ISO8601 & until=ISO8601 — overrides period for custom range
-//   employee=<name>               — narrow to a single employee
-//   source=POS|WEB|TABLE          — narrow to a single channel
-//   payment_method=cash|transfer  — narrow to a single method
+//
+//	period=today|week|month       — coarse window (default today)
+//	since=ISO8601 & until=ISO8601 — overrides period for custom range
+//	employee=<name>               — narrow to a single employee
+//	source=POS|WEB|TABLE          — narrow to a single channel
+//	payment_method=cash|transfer  — narrow to a single method
 //
 // GET /api/v1/analytics/financial-summary
 func FinancialSummary(db *gorm.DB) gin.HandlerFunc {
@@ -237,10 +238,10 @@ func FinancialSummary(db *gorm.DB) gin.HandlerFunc {
 		// LEFT JOIN sale_items + products so the cost is per-line and
 		// services / non-product items don't break the aggregation.
 		type EmployeeRow struct {
-			Name        string  `json:"name"`
-			SalesTotal  float64 `json:"sales_total"`
-			TxCount     int64   `json:"tx_count"`
-			Profit      float64 `json:"profit"`
+			Name       string  `json:"name"`
+			SalesTotal float64 `json:"sales_total"`
+			TxCount    int64   `json:"tx_count"`
+			Profit     float64 `json:"profit"`
 		}
 		var topEmployees []EmployeeRow
 		empQuery := db.Table("sales s").
@@ -273,17 +274,25 @@ func FinancialSummary(db *gorm.DB) gin.HandlerFunc {
 				empQuery = empQuery.Where("s.created_at <= ?", t)
 			}
 		}
+		// Multi-sede: el ranking debe ser de la SEDE filtrada, no de todas.
+		if scope.BranchID != "" {
+			empQuery = empQuery.Where("s.branch_id = ? OR s.branch_id IS NULL", scope.BranchID)
+		}
 		empQuery.Scan(&topEmployees)
 
 		// ── total profit (window-wide) ──
 		var totalCost float64
-		db.Model(&models.SaleItem{}).
+		qCost := db.Model(&models.SaleItem{}).
 			Select("COALESCE(SUM(sale_items.quantity * p.purchase_price), 0)").
 			Joins("JOIN sales ON sales.id = sale_items.sale_id").
 			Joins("JOIN products p ON p.id = sale_items.product_id").
 			Where("sales.tenant_id = ? AND sales.deleted_at IS NULL", tenantID).
-			Where("sales.created_at >= ?", since).
-			Scan(&totalCost)
+			Where("sales.created_at >= ?", since)
+		// Multi-sede: el costo (y la ganancia) debe ser de la SEDE filtrada.
+		if scope.BranchID != "" {
+			qCost = qCost.Where("sales.branch_id = ? OR sales.branch_id IS NULL", scope.BranchID)
+		}
+		qCost.Scan(&totalCost)
 		// Non-product costs booked directly on the sale (event per-attendee cost,
 		// Source="EVENT"). Mirrors baseSales so scope/filters apply consistently.
 		var totalCostAmount float64
@@ -308,7 +317,8 @@ func FinancialSummary(db *gorm.DB) gin.HandlerFunc {
 
 		// ── vs previous period (% change) ──
 		var prevTotal float64
-		db.Model(&models.Sale{}).
+		// Multi-sede: comparar la MISMA sede contra su propio período anterior.
+		ApplyBranchScope(db.Model(&models.Sale{}), scope).
 			Where("tenant_id = ? AND deleted_at IS NULL", tenantID).
 			Where("created_at >= ? AND created_at < ?", prevSince, prevEnd).
 			Select("COALESCE(SUM(total), 0)").
@@ -321,7 +331,8 @@ func FinancialSummary(db *gorm.DB) gin.HandlerFunc {
 
 		// ── available employees + sources for the filter UI ──
 		var employees []string
-		db.Model(&models.Sale{}).
+		// Multi-sede: el desplegable muestra empleados de la SEDE filtrada.
+		ApplyBranchScope(db.Model(&models.Sale{}), scope).
 			Where("tenant_id = ? AND employee_name <> ''", tenantID).
 			Distinct("employee_name").
 			Order("employee_name").
@@ -536,7 +547,7 @@ func ProductInsights(db *gorm.DB) gin.HandlerFunc {
 			Where("p.tenant_id = ? AND p.is_available = true AND p.deleted_at IS NULL AND p.stock > 0",
 				tenantID)
 		if scope.BranchID != "" {
-			qSlow = qSlow.Where("p.branch_id = ?", scope.BranchID)
+			qSlow = qSlow.Where("p.branch_id = ? OR p.branch_id IS NULL", scope.BranchID)
 		}
 		qSlow.Group("p.id, p.name, p.stock, p.price, p.image_url").
 			Having("COALESCE(SUM(si.quantity), 0) < 3").
@@ -547,14 +558,14 @@ func ProductInsights(db *gorm.DB) gin.HandlerFunc {
 		// ── expiring_soon — items with expiry_date in the next
 		// 30 days (or already past, so the merchant can pull them).
 		type Expiring struct {
-			ProductID    string  `json:"product_id"`
-			Name         string  `json:"name"`
-			Stock        int     `json:"stock"`
-			Price        float64 `json:"price"`
+			ProductID     string  `json:"product_id"`
+			Name          string  `json:"name"`
+			Stock         int     `json:"stock"`
+			Price         float64 `json:"price"`
 			PurchasePrice float64 `json:"purchase_price"`
-			ImageURL     string  `json:"image_url"`
-			ExpiryDate   string  `json:"expiry_date"`
-			DaysLeft     int     `json:"days_left"`
+			ImageURL      string  `json:"image_url"`
+			ExpiryDate    string  `json:"expiry_date"`
+			DaysLeft      int     `json:"days_left"`
 		}
 		var expiring []Expiring
 		thirtyDaysAhead := time.Now().AddDate(0, 0, 30).Format("2006-01-02")
@@ -568,7 +579,7 @@ func ProductInsights(db *gorm.DB) gin.HandlerFunc {
 				tenantID).
 			Where("p.expiry_date IS NOT NULL AND p.expiry_date <= ?", thirtyDaysAhead)
 		if scope.BranchID != "" {
-			qExp = qExp.Where("p.branch_id = ?", scope.BranchID)
+			qExp = qExp.Where("p.branch_id = ? OR p.branch_id IS NULL", scope.BranchID)
 		}
 		qExp.Order("p.expiry_date ASC").
 			Limit(20).
