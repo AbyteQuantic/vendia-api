@@ -11,6 +11,7 @@
 #   */30 * * * *  promotions-push   recordatorios de promos programadas (F033)
 #   10 5  * * *   expire-quotes     vence cotizaciones enviadas (F031) — 00:10 COT
 #   0  13 * * *   event-reminders   recordatorios de eventos (F042) — 08:00 COT
+#   0  9  * * 1   scrape-chains     precios de cadenas (Spec 077) — lunes 04:00 COT
 #
 # workflow_dispatch corre los TRES (útil para probar de una).
 name: cron-jobs
@@ -20,6 +21,7 @@ on:
     - cron: '*/30 * * * *'
     - cron: '10 5 * * *'
     - cron: '0 13 * * *'
+    - cron: '0 9 * * 1' # scrape-chains semanal (lunes 04:00 COT) — Spec 077
   workflow_dispatch:
 
 permissions: {}
@@ -61,3 +63,12 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.CRON_TOKEN }}")
           cat /tmp/out.json; echo
           [ "$code" = "200" ] || { echo "::error::event-reminders HTTP $code"; exit 1; }
+
+      - name: scrape-chains (Spec 077 — semanal)
+        if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 9 * * 1'
+        run: |
+          code=$(curl -sS -o /tmp/out.json -w '%{http_code}' --max-time 300 --retry 2 --retry-delay 15 \
+            -X POST "$API/api/v1/internal/jobs/scrape-chains" \
+            -H "Authorization: Bearer ${{ secrets.CRON_TOKEN }}")
+          cat /tmp/out.json; echo
+          [ "$code" = "200" ] || { echo "::error::scrape-chains HTTP $code"; exit 1; }
