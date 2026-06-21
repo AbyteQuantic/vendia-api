@@ -107,14 +107,13 @@ func SupplyOptions(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 
-		// 3) TU COSTO (el unit_cost del insumo) — per-unidad, sin empaque. NO se
-		// llama "última compra": para una tienda sin compras es solo el valor que
-		// el tendero puso al crear el insumo (un estimado), no una compra real.
-		if ingredientID != "" {
+		// 3) ÚLTIMA COMPRA — SOLO si hubo una compra REAL (kardex). Sin compra, el
+		// unit_cost es solo el valor de costeo de receta, no un precio: no se muestra.
+		if ingredientID != "" && services.HasRealPurchase(db, tenantID, ingredientID) {
 			var ing models.Ingredient
 			if err := db.Select("unit_cost").Where("tenant_id = ? AND id = ?", tenantID, ingredientID).First(&ing).Error; err == nil && ing.UnitCost > 0 {
 				o := PriceOption{
-					ID: "last", Label: "Tu costo estimado", Supplier: "Tu costo estimado",
+					ID: "last", Label: "Última compra", Supplier: "Última compra",
 					Source: "ultima_compra", PricePerBaseUnit: ing.UnitCost,
 					IsEstimate: true, PackUnknown: true,
 				}

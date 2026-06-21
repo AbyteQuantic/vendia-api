@@ -82,8 +82,10 @@ func SuggestIngredientPrice(db *gorm.DB, tenantID, branchID, ingredientID string
 		}
 	}
 
-	// Última compra: solo un costo per-unidad, SIN empaque conocido (aproximado).
-	if lastPurchaseCost > 0 {
+	// Última compra: SOLO si hubo una COMPRA REAL registrada (kardex). El
+	// unit_cost del insumo sin compra es solo el valor que se puso al costear la
+	// receta — no un precio de compra, así que NO se presenta como "tu costo".
+	if lastPurchaseCost > 0 && HasRealPurchase(db, tenantID, ingredientID) {
 		return SuggestedPrice{
 			PricePerUnit: lastPurchaseCost,
 			Source:       "ultima_compra",
@@ -93,4 +95,19 @@ func SuggestIngredientPrice(db *gorm.DB, tenantID, branchID, ingredientID string
 		}
 	}
 	return SuggestedPrice{Source: "ninguno", IsEstimate: true, PackUnknown: true}
+}
+
+// HasRealPurchase indica si el insumo tuvo una COMPRA registrada de verdad
+// (movimiento de kardex 'purchase_receipt'). Distingue una compra real del
+// unit_cost que el tendero/IA puso al costear la receta (Spec 077).
+func HasRealPurchase(db *gorm.DB, tenantID, ingredientID string) bool {
+	if ingredientID == "" {
+		return false
+	}
+	var n int64
+	db.Model(&models.InventoryMovement{}).
+		Where("tenant_id = ? AND product_id = ? AND movement_type = ?",
+			tenantID, ingredientID, models.MovementPurchaseReceipt).
+		Count(&n)
+	return n > 0
 }
