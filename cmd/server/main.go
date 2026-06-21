@@ -687,6 +687,7 @@ func main() {
 
 		// Store & Catalog Management
 		v1.GET("/store/config", handlers.GetStoreConfig(db))
+		v1.PATCH("/store/location", handlers.UpdateStoreLocation(db, services.NewNominatimGeocoder())) // Spec 072
 		v1.PATCH("/store/status", handlers.UpdateStoreStatus(db))
 		v1.PATCH("/store/payment-config", handlers.UpdatePaymentConfig(db))
 		v1.PATCH("/store/slug", handlers.UpdateStoreSlug(db))

@@ -135,6 +135,13 @@ type Tenant struct {
 	RazonSocial  string       `gorm:"not null;default:''" json:"razon_social"`
 	NIT          string       `gorm:"not null;default:''" json:"nit"`
 	Address      string       `gorm:"not null;default:''" json:"address"`
+	// Spec 072 — normalización de ubicación. City se deriva del reverse-geocode
+	// (Nominatim) y alimenta el cron de scraping por ciudad. LocationReferences =
+	// "última milla" ("portón verde, frente a la cancha"). LocationAccuracy en m.
+	// Aditivo (Art. X). (0,0) en Latitude/Longitude = sin ubicación.
+	City               string  `gorm:"type:varchar(120);default:''" json:"city"`
+	LocationReferences string  `gorm:"type:text;default:''" json:"location_references"`
+	LocationAccuracy   float64 `gorm:"default:0" json:"location_accuracy"`
 
 	SaleTypes    []string `gorm:"serializer:json;not null" json:"sale_types"`
 	HasShowcases bool     `gorm:"not null;default:false" json:"has_showcases"`
