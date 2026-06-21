@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,6 +48,19 @@ var nonFoodCat = []string{
 	"vaporera", "hervidor", "arrocera", "facial", "maquilla", "perfum",
 	"labial", "balsamo", "locion", "shampoo", "acondicionador", "desodorante",
 	"cuidado", "manos y cuerpo", "pañal", "panal de bebe", "higiene",
+	// Reforzado (Spec 077, 2026-06-21): cosméticos/no-comestibles que se colaban
+	// (aceite de coco corporal, anti-estrías, CBD, bronceador, dispensadores…).
+	"humectante", "bronceador", "exfoliante", "dolor", "droga", "consola",
+	"videojuego", "cannabis", "estria", "ducha", "exomega", "dispensador",
+	"medicament", "vitamina", "suplemento", "bebe", "infantil", "mama",
+}
+
+// nonFoodName — palabras en el NOMBRE que delatan no-comestible aunque la
+// categoría diga "Aceites" (Olímpica mete cosméticos ahí). Spec 077.
+var nonFoodName = []string{
+	"corporal", "capilar", "anti estria", "antiestria", "estria", "bronceador",
+	"cannabis", "cbd", "drogam", "exomega", "ducha", "dispensador", "humectacion",
+	"masaje", "facial", "piel de oro", "a derma", "para piel", "bebe",
 }
 
 // IsFoodCategory reporta si una categoría parece comestible (no está en la lista
@@ -58,6 +73,57 @@ func IsFoodCategory(category string) bool {
 		}
 	}
 	return true
+}
+
+// isFoodProduct combina la categoría Y el nombre: descarta un cosmético aunque
+// caiga en una categoría comestible (homónimos de aceite/crema).
+func isFoodProduct(rawName, category string) bool {
+	if !IsFoodCategory(category) {
+		return false
+	}
+	n := NormalizeText(rawName)
+	for _, bad := range nonFoodName {
+		if strings.Contains(n, bad) {
+			return false
+		}
+	}
+	return true
+}
+
+// packRe — número + unidad de volumen/peso en el nombre (ej "1 Lt", "900ml",
+// "500 g", "2 kg"). El \b evita capturar dentro de otra palabra.
+var packRe = regexp.MustCompile(`(?i)(\d+(?:[.,]\d+)?)\s*(ml|cc|lt|litros?|l|kg|kilos?|gr?|g)\b`)
+
+// parsePackaging extrae cantidad+unidad del nombre y la NORMALIZA a una unidad
+// base común (ml para volumen, g para peso) para que el precio por unidad base
+// sea comparable entre productos (1 L y 900 ml comparables). El precio por base
+// = precio del empaque / cantidad en base. Devuelve unit="" si no se reconoce.
+func parsePackaging(rawName string, price float64) (unit string, packQty, pricePerBase float64) {
+	ms := packRe.FindAllStringSubmatch(strings.ToLower(rawName), -1)
+	if len(ms) == 0 {
+		return "", 0, 0
+	}
+	m := ms[len(ms)-1] // la última suele ser el tamaño del empaque
+	qty, err := strconv.ParseFloat(strings.Replace(m[1], ",", ".", 1), 64)
+	if err != nil || qty <= 0 {
+		return "", 0, 0
+	}
+	switch strings.ToLower(m[2]) {
+	case "ml", "cc":
+		unit, packQty = "ml", qty
+	case "l", "lt", "litro", "litros":
+		unit, packQty = "ml", qty*1000
+	case "g", "gr":
+		unit, packQty = "g", qty
+	case "kg", "kilo", "kilos":
+		unit, packQty = "g", qty*1000
+	default:
+		return "", 0, 0
+	}
+	if packQty > 0 {
+		pricePerBase = price / packQty
+	}
+	return unit, packQty, pricePerBase
 }
 
 // vtexProduct — shape mínimo de la API de catálogo VTEX.
@@ -127,13 +193,15 @@ func ScrapeChainsForCity(db *gorm.DB, city string, sources []ChainSource) int {
 				if len(p.Categories) > 0 {
 					cat = p.Categories[0]
 				}
-				if !IsFoodCategory(cat) || price < 300 || price > 300000 {
-					continue // descarta no-comestibles y precios atípicos
+				if !isFoodProduct(p.ProductName, cat) || price < 300 || price > 300000 {
+					continue // descarta no-comestibles (categoría/nombre) y atípicos
 				}
+				unit, packQty, perBase := parsePackaging(p.ProductName, price)
 				rows = append(rows, models.ChainPrice{
 					Chain: src.Chain, City: city,
 					RawName: p.ProductName, NormalizedName: NormalizeText(p.ProductName),
 					Brand: p.Brand, Price: price, ListPrice: vtexListPrice(p),
+					Unit: unit, PackQty: packQty, PricePerBaseUnit: perBase,
 					Category: cat, SKU: vtexSKU(p), URL: src.BaseURL + "/" + p.LinkText + "/p",
 					ScrapedAt: now,
 				})
