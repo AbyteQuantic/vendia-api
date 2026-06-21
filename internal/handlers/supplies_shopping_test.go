@@ -18,11 +18,16 @@ import (
 	"gorm.io/gorm"
 )
 
+func shopPurchase(t *testing.T, db *gorm.DB, ingredientID string) {
+	t.Helper()
+	require.NoError(t, db.Create(&models.InventoryMovement{ID: "pm-" + ingredientID, TenantID: "t1", ProductID: ingredientID, MovementType: models.MovementPurchaseReceipt}).Error)
+}
+
 func setupShopDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&models.Ingredient{}, &models.IngredientPrice{}))
+	require.NoError(t, db.AutoMigrate(&models.Ingredient{}, &models.IngredientPrice{}, &models.InventoryMovement{}))
 	return db
 }
 
@@ -38,6 +43,7 @@ func TestShoppingList_ShortfallAndPrice(t *testing.T) {
 	db := setupShopDB(t)
 	// Arroz: necesita 5 kg, tiene 2 → falta 3. Última compra $2.800/kg.
 	require.NoError(t, db.Create(&models.Ingredient{BaseModel: models.BaseModel{ID: "arroz"}, TenantID: "t1", Name: "Arroz", Unit: "kg", Stock: 2, UnitCost: 2800}).Error)
+	shopPurchase(t, db, "arroz")
 	// Papa: necesita 4, tiene 10 → NO falta (no aparece).
 	require.NoError(t, db.Create(&models.Ingredient{BaseModel: models.BaseModel{ID: "papa"}, TenantID: "t1", Name: "Papa", Unit: "kg", Stock: 10, UnitCost: 1500}).Error)
 
@@ -101,6 +107,7 @@ func ptr(s string) *string { return &s }
 func TestShoppingList_DedupesNeeds(t *testing.T) {
 	db := setupShopDB(t)
 	require.NoError(t, db.Create(&models.Ingredient{BaseModel: models.BaseModel{ID: "crema"}, TenantID: "t1", Name: "Crema", Unit: "ml", Stock: 0, UnitCost: 10}).Error)
+	shopPurchase(t, db, "crema")
 	r := mountShop(db)
 	// MISMO insumo dos veces (receta duplicada) → debe sumar, no doblar el costo.
 	w := doJSON(t, r, http.MethodPost, "/supplies/shopping-list", map[string]any{
