@@ -60,7 +60,10 @@ func CreateErrand(db *gorm.DB) gin.HandlerFunc {
 		for _, l := range req.Lines {
 			total += l.Cost
 			var ingPtr *string
-			if s := strings.TrimSpace(l.IngredientID); s != "" {
+			// La columna es uuid: un id no-UUID (cliente malformado) reventaría
+			// el INSERT en Postgres con 500. Lo dejamos nil — el Name conserva el
+			// producto. En uso real el ingredient_id siempre es UUID válido.
+			if s := strings.TrimSpace(l.IngredientID); s != "" && models.IsValidUUID(s) {
 				ingPtr = &s
 			}
 			lines = append(lines, models.PurchaseErrandLine{
@@ -70,7 +73,7 @@ func CreateErrand(db *gorm.DB) gin.HandlerFunc {
 			})
 		}
 		var assigneePtr *string
-		if s := strings.TrimSpace(req.AssigneeID); s != "" {
+		if s := strings.TrimSpace(req.AssigneeID); s != "" && models.IsValidUUID(s) {
 			assigneePtr = &s
 		}
 		errand := models.PurchaseErrand{

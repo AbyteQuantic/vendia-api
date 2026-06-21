@@ -40,12 +40,15 @@ func TestErrandCreateListAndMatchToday(t *testing.T) {
 	db := setupErrandDB(t)
 	r := mountErrands(db)
 
+	// UUIDs válidos como en uso real (la columna ingredient_id es uuid).
+	const arrozID = "11111111-1111-1111-1111-111111111111"
+	const papaID = "22222222-2222-2222-2222-222222222222"
 	// Crear un mandado a un proveedor con teléfono → devuelve link WhatsApp.
 	w := doJSON(t, r, http.MethodPost, "/errands", map[string]any{
 		"assignee_type": "supplier", "assignee_name": "Mi mayorista", "assignee_phone": "3001112222",
 		"lines": []map[string]any{
-			{"ingredient_id": "arroz", "name": "Arroz", "unit": "kg", "qty": 3, "cost": 8400, "price_source": "manual"},
-			{"ingredient_id": "papa", "name": "Papa", "unit": "kg", "qty": 2, "cost": 3000},
+			{"ingredient_id": arrozID, "name": "Arroz", "unit": "kg", "qty": 3, "cost": 8400, "price_source": "manual"},
+			{"ingredient_id": papaID, "name": "Papa", "unit": "kg", "qty": 2, "cost": 3000},
 		},
 	})
 	require.Equal(t, http.StatusCreated, w.Code)
@@ -72,7 +75,7 @@ func TestErrandCreateListAndMatchToday(t *testing.T) {
 
 	// match-today con los MISMOS insumos → lo encuentra (reenviar).
 	wm := doJSON(t, r, http.MethodPost, "/errands/match-today", map[string]any{
-		"ingredient_ids": []string{"papa", "arroz"}, // distinto orden, mismo conjunto
+		"ingredient_ids": []string{papaID, arrozID}, // distinto orden, mismo conjunto
 	})
 	var match struct {
 		Data *models.PurchaseErrand `json:"data"`
@@ -83,7 +86,7 @@ func TestErrandCreateListAndMatchToday(t *testing.T) {
 
 	// match-today con OTRO conjunto → no encuentra.
 	wm2 := doJSON(t, r, http.MethodPost, "/errands/match-today", map[string]any{
-		"ingredient_ids": []string{"arroz"},
+		"ingredient_ids": []string{arrozID},
 	})
 	var match2 struct {
 		Data *models.PurchaseErrand `json:"data"`
@@ -94,4 +97,26 @@ func TestErrandCreateListAndMatchToday(t *testing.T) {
 	// Marcar comprado → estado cambia + closed_at.
 	wu := doJSON(t, r, http.MethodPatch, "/errands/"+id, map[string]any{"status": "comprado"})
 	assert.Equal(t, http.StatusOK, wu.Code)
+}
+
+func TestErrandCreate_NonUUIDIngredientIsNil(t *testing.T) {
+	db := setupErrandDB(t)
+	r := mountErrands(db)
+	// ingredient_id no-UUID NO debe reventar: se guarda nil, el Name queda.
+	w := doJSON(t, r, http.MethodPost, "/errands", map[string]any{
+		"assignee_type": "self",
+		"lines": []map[string]any{
+			{"ingredient_id": "no-es-uuid", "name": "Arroz", "unit": "kg", "qty": 1, "cost": 100},
+		},
+	})
+	require.Equal(t, http.StatusCreated, w.Code)
+	var resp struct {
+		Data struct {
+			Errand models.PurchaseErrand `json:"errand"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data.Errand.Lines, 1)
+	assert.Nil(t, resp.Data.Errand.Lines[0].IngredientID) // no-UUID → nil
+	assert.Equal(t, "Arroz", resp.Data.Errand.Lines[0].Name)
 }
