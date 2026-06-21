@@ -72,7 +72,10 @@ func (s *SaleInventoryService) ApplyPostSale(tx *gorm.DB, p PostSaleParams) erro
 		var product models.Product
 		q := tx.Where("id = ? AND tenant_id = ?", line.ProductID, p.TenantID)
 		if p.BranchID != nil && *p.BranchID != "" {
-			q = q.Where("branch_id = ?", *p.BranchID)
+			// Incluye GLOBALES (menú/servicio/receta, branch NULL) para descontar
+			// su stock al vender desde cualquier sede (Spec 077). Sin esto, el
+			// post-venta saltaba el producto global y NO descontaba inventario.
+			q = q.Where("branch_id = ? OR branch_id IS NULL", *p.BranchID)
 		}
 		if err := q.First(&product).Error; err != nil {
 			// Not found / foreign / wrong branch — skip, never abort.

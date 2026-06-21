@@ -220,3 +220,32 @@ func TestApplyPostSale_Idempotent_NoDoubleRecipeDiscount(t *testing.T) {
 	require.NoError(t, db.First(&arroz, "id = ?", arrozID).Error)
 	assert.InDelta(t, 4.5, arroz.Stock, 1e-9, "5 - 0.5 — discounted exactly once")
 }
+
+// Spec 077 — un producto GLOBAL (branch NULL: menú/servicio) se vende desde
+// CUALQUIER sede y SÍ descuenta su stock. Antes el lookup filtraba branch_id=?
+// sin incluir NULL → saltaba el producto global y NO descontaba (regresión).
+func TestApplyPostSale_GlobalProduct_DecrementsFromAnySede(t *testing.T) {
+	db := setupSaleInventoryDB(t)
+	tenantID := "tenant-global"
+	productID := "b0000000-0000-4000-8000-000000000099"
+	require.NoError(t, db.Create(&models.Product{
+		BaseModel: models.BaseModel{ID: productID},
+		TenantID:  tenantID, Name: "Almuerzo del día", Price: 14000, Stock: 10,
+		IsAvailable: true, IsMenuItem: true, BranchID: nil, // GLOBAL
+	}).Error)
+
+	svc := NewSaleInventoryService(db)
+	sedeA := "br-a-0000-0000-4000-8000-000000000001"
+	err := db.Transaction(func(tx *gorm.DB) error {
+		return svc.ApplyPostSale(tx, PostSaleParams{
+			TenantID: tenantID, BranchID: &sedeA, // vende desde la sede A
+			SaleUUID: "5a1e0000-0000-4000-8000-000000000099",
+			Lines:    []SaleInventoryLine{{ProductID: productID, Quantity: 4}},
+		})
+	})
+	require.NoError(t, err)
+
+	var product models.Product
+	require.NoError(t, db.First(&product, "id = ?", productID).Error)
+	assert.Equal(t, 6, product.Stock, "global vendido desde sede A: 10 - 4 = 6")
+}

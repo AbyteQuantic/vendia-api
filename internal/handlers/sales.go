@@ -341,7 +341,9 @@ func CreateSale(db *gorm.DB, dispatcher *push.Dispatcher) gin.HandlerFunc {
 					"id = ? AND tenant_id = ? AND is_available = true",
 					item.ProductID, tenantID)
 				if branchID != "" {
-					q = q.Where("branch_id = ?", branchID)
+					// Incluye los GLOBALES (menú/servicio, branch NULL) para que
+					// se puedan vender desde cualquier sede (Spec 077).
+					q = q.Where("branch_id = ? OR branch_id IS NULL", branchID)
 				}
 				if err := q.First(&product).Error; err != nil {
 					return &gin.Error{Err: errProductNotFound(item.ProductID), Type: gin.ErrorTypePublic}
