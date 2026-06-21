@@ -779,8 +779,10 @@ func main() {
 		// path wins over the param match.
 		v1.GET("/ingredients", handlers.ListIngredients(db))
 		v1.GET("/ingredients/low-stock", handlers.LowStockIngredients(db))
-		v1.GET("/supplies/prep-list", handlers.SuppliesPrepList(db))          // Spec 076 — alistar insumos del día
-		v1.POST("/supplies/shopping-list", handlers.SuppliesShoppingList(db)) // Spec 077 — comprar lo que falta
+		v1.GET("/supplies/prep-list", handlers.SuppliesPrepList(db))            // Spec 076 — alistar insumos del día
+		v1.POST("/supplies/shopping-list", handlers.SuppliesShoppingList(db))   // Spec 077 — comprar lo que falta
+		v1.POST("/supplies/prices", handlers.AddSupplyPrice(db))                // Spec 077 F2 — precio manual
+		v1.GET("/supplies/prices/:ingredientId", handlers.ListSupplyPrices(db)) // Spec 077 — historial de precios
 		v1.POST("/ingredients", handlers.CreateIngredient(db))
 		v1.PATCH("/ingredients/:uuid", handlers.UpdateIngredient(db))
 		v1.DELETE("/ingredients/:uuid", handlers.DeleteIngredient(db))
