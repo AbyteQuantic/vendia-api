@@ -515,6 +515,8 @@ func main() {
 		// No captcha — endpoint is authenticated (JWT required, handled by v1 group).
 		// God-mode: super_admin + X-Tenant-Override header → import for any tenant.
 		v1.POST("/products/import", handlers.ImportProducts(db))
+		v1.POST("/products/suggest-categories", handlers.SuggestProductCategories(db, geminiSvc)) // Spec 078 — IA infiere categorías (no aplica)
+		v1.POST("/products/categories/bulk", handlers.BulkUpdateCategories(db))                   // Spec 078 — aplica las que el tenant confirmó
 		v1.GET("/products/lookup", handlers.LookupBarcode(offSvc))
 		v1.GET("/products/search-off", handlers.SearchProductsOFF(catalogCacheSvc))
 		v1.GET("/products/catalog-sync", handlers.CatalogDump(db))
