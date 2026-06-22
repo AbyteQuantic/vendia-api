@@ -70,6 +70,7 @@ func Migrate(db *gorm.DB) error {
 		&models.ChainPrice{},         // Spec 077 — catálogo scrapeado de cadenas
 		&models.PurchaseErrand{},     // Spec 077 — mandados de compra
 		&models.PurchaseErrandLine{}, // Spec 077 — líneas de mandado
+		&models.TaskDismissal{},      // Spec 078 — snooze de tareas agregadas
 
 		&models.Sale{},
 		&models.SaleItem{},

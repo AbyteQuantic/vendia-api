@@ -791,6 +791,8 @@ func main() {
 		v1.GET("/supplies/chain-prices", handlers.GetChainPrices(db))                     // Spec 077 F4 — precios de referencia de cadenas
 		v1.GET("/supplies/options", handlers.SupplyOptions(db))                           // Spec 077 — opciones de compra por insumo
 		v1.GET("/supplies/search", handlers.SupplySearch(db))                             // Spec 077 — buscador en catálogo scrapeado + compras previas
+		v1.GET("/tasks", handlers.ListTasks(db))                                          // Spec 078 — centro de tareas unificado (agregador)
+		v1.POST("/tasks/dismiss", handlers.DismissTask(db))                               // Spec 078 — posponer tarea agregada
 		v1.POST("/errands", handlers.CreateErrand(db))                                    // Spec 077 — crear mandado
 		v1.GET("/errands", handlers.ListErrands(db))                                      // Spec 077 — listar mandados
 		v1.PATCH("/errands/:id", handlers.UpdateErrandStatus(db))                         // Spec 077 — estado del mandado
