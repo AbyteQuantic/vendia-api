@@ -53,7 +53,7 @@ func decodeTasks(t *testing.T, body []byte) []map[string]any {
 func TestListTasks_AggregatesAndOrders(t *testing.T) {
 	db := taskDB(t)
 	// mesa lista (critical), mandado (normal), stock bajo (normal), perecedero (normal).
-	require.NoError(t, db.Create(&models.OrderTicket{BaseModel: models.BaseModel{ID: "ot1"}, TenantID: "t1", Label: "Mesa 3", Status: models.OrderStatusListo, Total: 18000}).Error)
+	require.NoError(t, db.Create(&models.OrderTicket{BaseModel: models.BaseModel{ID: "ot1"}, TenantID: "t1", Label: "Mesa 3", Status: models.OrderStatusListo, Total: 18000, SessionToken: "tok-123"}).Error)
 	require.NoError(t, db.Create(&models.PurchaseErrand{BaseModel: models.BaseModel{ID: "er1"}, TenantID: "t1", Status: "pendiente", Title: "Compra de insumos"}).Error)
 	require.NoError(t, db.Create(&models.Product{BaseModel: models.BaseModel{ID: "p1"}, TenantID: "t1", Name: "Arroz", Stock: 1, MinStock: 5, IsAvailable: true}).Error)
 	exp := time.Now().AddDate(0, 0, 3).Format("2006-01-02")

@@ -173,7 +173,7 @@ func tableAccountTasks(db *gorm.DB, tenantID, branchID string) []models.Task {
 		t := models.Task{
 			ID: models.TaskTableAccount + ":" + o.ID, Kind: models.TaskTableAccount, SourceID: o.ID,
 			Title: label, DeepLink: "/orders/" + o.ID, Amount: o.Total, CreatedAt: o.CreatedAt,
-			ActionLabel: "Cobrar",
+			ActionLabel: "Cobrar", SessionToken: o.SessionToken,
 		}
 		if o.Status == models.OrderStatusListo {
 			t.Subtitle = "Lista para cobrar"

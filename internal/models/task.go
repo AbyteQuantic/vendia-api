@@ -25,17 +25,20 @@ const (
 // lectura a partir de las entidades dueñas (pedidos, órdenes, mandados, productos);
 // una tarea está abierta ⟺ su entidad sigue abierta. Spec 078.
 type Task struct {
-	ID          string    `json:"id"`              // INVARIANTE: "{kind}:{source_id}" (anti-duplicado)
-	Kind        string    `json:"kind"`            // TaskKind
-	SourceID    string    `json:"source_id"`       // id de la entidad real (order/errand/product/tenant)
-	Title       string    `json:"title"`           // copy USTED neutral
-	Subtitle    string    `json:"subtitle"`        // "hace 5 min", "$38.000 por cobrar", "vence en 2 días"
-	Urgency     string    `json:"urgency"`         // critical|high|normal|low
-	Count       int       `json:"count,omitempty"` // tareas agregadas ("5 por reordenar")
-	ActionLabel string    `json:"action_label"`    // verbo exacto: Cobrar/Aceptar/Comprar/Crear promo
-	DeepLink    string    `json:"deep_link"`       // ruta destino (KDS/Cuaderno/Inventario/Pedidos)
-	Amount      float64   `json:"amount,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID          string  `json:"id"`              // INVARIANTE: "{kind}:{source_id}" (anti-duplicado)
+	Kind        string  `json:"kind"`            // TaskKind
+	SourceID    string  `json:"source_id"`       // id de la entidad real (order/errand/product/tenant)
+	Title       string  `json:"title"`           // copy USTED neutral
+	Subtitle    string  `json:"subtitle"`        // "hace 5 min", "$38.000 por cobrar", "vence en 2 días"
+	Urgency     string  `json:"urgency"`         // critical|high|normal|low
+	Count       int     `json:"count,omitempty"` // tareas agregadas ("5 por reordenar")
+	ActionLabel string  `json:"action_label"`    // verbo exacto: Cobrar/Aceptar/Comprar/Crear promo
+	DeepLink    string  `json:"deep_link"`       // ruta destino (KDS/Cuaderno/Inventario/Pedidos)
+	Amount      float64 `json:"amount,omitempty"`
+	// SessionToken: para una cuenta de mesa (table_account), el token del OrderTicket
+	// que la pantalla de cobro (TabReviewScreen) necesita. Vacío en otras tareas. Spec 078.
+	SessionToken string    `json:"session_token,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // urgencyRank — para ordenar (mayor = más arriba).
