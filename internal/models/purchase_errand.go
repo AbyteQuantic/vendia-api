@@ -48,12 +48,21 @@ type PurchaseErrandLine struct {
 
 	ErrandID     string  `gorm:"type:uuid;index;not null" json:"errand_id"`
 	IngredientID *string `gorm:"type:uuid" json:"ingredient_uuid,omitempty"`
-	Name         string  `gorm:"not null" json:"name"`
-	Unit         string  `gorm:"default:''" json:"unit"`
-	Qty          float64 `gorm:"default:0" json:"qty"`
+	// LineKind discrimina QUÉ se compra: 'ingredient' (insumo, default — preserva los
+	// mandados actuales) o 'product' (producto de tienda). varchar(16), NO uuid
+	// default '' (lección AutoMigrate Spec 066). Spec 078 B1.
+	LineKind  string  `gorm:"type:varchar(16);default:'ingredient'" json:"line_kind"`
+	ProductID *string `gorm:"type:uuid" json:"product_uuid,omitempty"` // espejo cuando LineKind='product'
+	Name      string  `gorm:"not null" json:"name"`
+	Unit      string  `gorm:"default:''" json:"unit"`
+	Qty       float64 `gorm:"default:0" json:"qty"`
 
 	EstimatedUnitPrice float64 `gorm:"default:0" json:"estimated_unit_price"`
 	EstimatedCost      float64 `gorm:"default:0" json:"estimated_cost"`
 	PriceSource        string  `gorm:"default:''" json:"price_source"`
 	IsEstimate         bool    `gorm:"default:true" json:"is_estimate"`
+	// ReceivedQty/Fulfilled — compra PARCIAL (Spec 078 B3): cuánto se ingresó de
+	// verdad y si la línea quedó completa. Default 0/false = comportamiento actual.
+	ReceivedQty float64 `gorm:"default:0" json:"received_qty"`
+	Fulfilled   bool    `gorm:"default:false" json:"fulfilled"`
 }

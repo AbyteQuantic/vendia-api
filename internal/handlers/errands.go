@@ -18,6 +18,8 @@ import (
 
 type errandLineReq struct {
 	IngredientID string  `json:"ingredient_id"`
+	ProductID    string  `json:"product_id"` // Spec 078 B2 — producto de tienda
+	LineKind     string  `json:"line_kind"`  // 'ingredient' (default) | 'product'
 	Name         string  `json:"name"`
 	Unit         string  `json:"unit"`
 	Qty          float64 `json:"qty"`
@@ -66,8 +68,17 @@ func CreateErrand(db *gorm.DB) gin.HandlerFunc {
 			if s := strings.TrimSpace(l.IngredientID); s != "" && models.IsValidUUID(s) {
 				ingPtr = &s
 			}
+			var prodPtr *string
+			if s := strings.TrimSpace(l.ProductID); s != "" && models.IsValidUUID(s) {
+				prodPtr = &s
+			}
+			kind := l.LineKind
+			if kind != "product" {
+				kind = "ingredient" // default — preserva los mandados actuales
+			}
 			lines = append(lines, models.PurchaseErrandLine{
-				IngredientID: ingPtr, Name: l.Name, Unit: l.Unit, Qty: l.Qty,
+				IngredientID: ingPtr, ProductID: prodPtr, LineKind: kind,
+				Name: l.Name, Unit: l.Unit, Qty: l.Qty,
 				EstimatedUnitPrice: l.UnitPrice, EstimatedCost: l.Cost,
 				PriceSource: l.PriceSource, IsEstimate: l.IsEstimate,
 			})

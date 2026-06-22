@@ -754,7 +754,8 @@ func main() {
 
 		// Recipes / Insumos
 		v1.GET("/recipes", handlers.ListRecipes(db))
-		v1.GET("/menu/incomplete", handlers.IncompleteMenuItems(db)) // Spec 078 — platos sin receta (Incompleto)
+		v1.GET("/menu/incomplete", handlers.IncompleteMenuItems(db))      // Spec 078 — platos sin receta (Incompleto)
+		v1.GET("/products/reorder-list", handlers.ProductReorderList(db)) // Spec 078 B2 — productos de tienda por reordenar
 		v1.POST("/recipes", handlers.CreateRecipe(db))
 		v1.PATCH("/recipes/:uuid", handlers.UpdateRecipe(db))
 		v1.DELETE("/recipes/:uuid", handlers.DeleteRecipe(db))
