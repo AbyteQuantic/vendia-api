@@ -90,6 +90,10 @@ func SuppliesShoppingList(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 
+		// Ciudad del tenant para el fallback de scraping (precios por ciudad/nacional).
+		var tenant models.Tenant
+		db.Select("city").Where("id = ?", tenantID).First(&tenant)
+
 		items := make([]ShoppingItem, 0, len(req.Needs))
 		var total float64
 		hasEstimate := false
@@ -100,6 +104,23 @@ func SuppliesShoppingList(db *gorm.DB) gin.HandlerFunc {
 				continue // ya tiene suficiente
 			}
 			sp := services.SuggestIngredientPrice(db, tenantID, req.BranchID, n.IngredientID, g.UnitCost)
+
+			// FALLBACK DE SCRAPING (#1): sin compra previa ni precio de proveedor,
+			// en vez de "sin precio" sugiere lo que cuesta en las cadenas.
+			if sp.Source == "ninguno" {
+				if m := services.BestChainPrice(db, services.NormalizeText(n.Name), tenant.City); m != nil {
+					ppu := m.PricePerBaseUnit
+					if ppu <= 0 {
+						ppu = m.Price
+					}
+					sp = services.SuggestedPrice{
+						PricePerUnit: ppu, Source: models.PriceSourceScrapedChain,
+						IsEstimate: true, SupplierName: m.Chain,
+						PackPrice: m.Price, PackQty: m.PackQty, PackUnit: m.Unit,
+						PackLabel: m.RawName, PackUnknown: m.PackQty <= 0,
+					}
+				}
+			}
 
 			// COSTO EMPAQUE-COMPLETO: si se conoce el empaque (precio + tamaño en
 			// la unidad del insumo), se compra el/los empaque(s) entero(s) y queda

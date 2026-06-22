@@ -2,6 +2,8 @@
 package services
 
 import (
+	"sort"
+	"strings"
 	"time"
 
 	"vendia-backend/internal/models"
@@ -29,13 +31,45 @@ type ChainPriceMatch struct {
 
 const priceDropThreshold = 0.10 // 10%
 
-// comparable — el precio para comparar: por unidad base si hay paquete, si no el
-// precio crudo (evita meter peras con manzanas).
+// comparable — el precio para comparar la MISMA presentación (bajó-de-precio):
+// por unidad base si hay paquete, si no el precio crudo.
 func comparable(r models.ChainPrice) float64 {
 	if r.PricePerBaseUnit > 0 {
 		return r.PricePerBaseUnit
 	}
 	return r.Price
+}
+
+// processedSignals — palabras que delatan un DERIVADO/procesado, no el insumo
+// crudo (ej "aceite de aguacate", "pulpa de aguacate", "vinagreta con aguacate").
+var processedSignals = []string{
+	"aceite", "pulpa", "salsa", "vinagreta", "esencia", "extracto", "saborizado",
+	"sabor a", "aroma", "snack", "chips", "dip", "untable", "mermelada", "gelatina",
+	"galleta", "cereal", "yogur", "helado", "bebida", "polvo", "concentrado",
+}
+
+// relevanceScore puntúa qué tan bien un producto REPRESENTA al insumo buscado:
+// el insumo crudo (nombre que empieza por el insumo, sin derivados) gana al
+// derivado y al homónimo. Evita que "aceite/pulpa de aguacate" o un mordedor le
+// ganen al aguacate de verdad por ser "más baratos por gramo" (Spec 077).
+func relevanceScore(productNorm, ingredientNorm string) int {
+	if ingredientNorm == "" || !strings.Contains(productNorm, ingredientNorm) {
+		return -100
+	}
+	score := 0
+	if strings.HasPrefix(productNorm, ingredientNorm) {
+		score += 12 // el insumo es el sustantivo principal
+	}
+	score -= strings.Index(productNorm, ingredientNorm) / 4 // antes = mejor
+	for _, sig := range processedSignals {
+		if strings.Contains(productNorm, sig) && !strings.Contains(ingredientNorm, sig) {
+			score -= 8
+		}
+	}
+	if w := len(strings.Fields(productNorm)); w > 6 {
+		score -= (w - 6) // nombres larguísimos suelen ser compuestos
+	}
+	return score
 }
 
 // dayKey trunca a día (para agrupar el histórico por fecha de scraping).
@@ -55,33 +89,42 @@ func MatchChainPrices(db *gorm.DB, normalizedName, city string) []ChainPriceMatc
 
 	byChain := map[string][]models.ChainPrice{}
 	for _, r := range rows {
-		if !IsFoodCategory(r.Category) {
-			continue // defensa: ignora ruido no-comestible aún almacenado
+		if !isFoodProduct(r.RawName, r.Category) {
+			continue // defensa: ignora ruido no-comestible (categoría Y nombre)
 		}
 		byChain[r.Chain] = append(byChain[r.Chain], r)
 	}
 
 	out := make([]ChainPriceMatch, 0, len(byChain))
 	for chain, list := range byChain {
-		// Mejor representante (más barato por unidad base) en la fecha más reciente.
+		// Mejor representante en la fecha más reciente: PRIMERO el más RELEVANTE
+		// (el insumo crudo, no un derivado/homónimo), y a igual relevancia el más
+		// barato. Esto evita que un mordedor o un "aceite de aguacate" gane por
+		// tener precio-por-gramo chico (Spec 077, fix "sugerencia equivocada").
 		latestDay := ""
 		for _, r := range list {
 			if k := dayKey(r.ScrapedAt); k > latestDay {
 				latestDay = k
 			}
 		}
-		var best *models.ChainPrice
+		today := make([]models.ChainPrice, 0, len(list))
 		for i := range list {
-			if dayKey(list[i].ScrapedAt) != latestDay {
-				continue
-			}
-			if best == nil || comparable(list[i]) < comparable(*best) {
-				best = &list[i]
+			if dayKey(list[i].ScrapedAt) == latestDay {
+				today = append(today, list[i])
 			}
 		}
-		if best == nil {
+		sort.SliceStable(today, func(a, b int) bool {
+			ra := relevanceScore(today[a].NormalizedName, normalizedName)
+			rb := relevanceScore(today[b].NormalizedName, normalizedName)
+			if ra != rb {
+				return ra > rb // más relevante primero
+			}
+			return today[a].Price < today[b].Price // luego el más barato
+		})
+		if len(today) == 0 {
 			continue
 		}
+		best := &today[0]
 
 		// Base: el mejor representante en fechas ANTERIORES (≥1 día previo).
 		var prevBest *models.ChainPrice
@@ -111,6 +154,24 @@ func MatchChainPrices(db *gorm.DB, normalizedName, city string) []ChainPriceMatc
 		out = append(out, m)
 	}
 	return out
+}
+
+// BestChainPrice devuelve la mejor sugerencia de cadena para un insumo (la más
+// relevante y barata entre cadenas), o nil si no hay match. Es el fallback de
+// precio cuando el tenant NO tiene compra previa ni precio de proveedor: en vez
+// de "sin precio", sugiere lo que cuesta en las cadenas (Spec 077, fix #1).
+func BestChainPrice(db *gorm.DB, normalizedName, city string) *ChainPriceMatch {
+	matches := MatchChainPrices(db, normalizedName, city)
+	if len(matches) == 0 {
+		return nil
+	}
+	best := &matches[0]
+	for i := range matches {
+		if matches[i].Price < best.Price { // entrada más baja para el tendero
+			best = &matches[i]
+		}
+	}
+	return best
 }
 
 // PurgeOldChainPrices borra el histórico con más de 4 meses (se corre en el

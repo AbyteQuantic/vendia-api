@@ -53,6 +53,11 @@ var nonFoodCat = []string{
 	"humectante", "bronceador", "exfoliante", "dolor", "droga", "consola",
 	"videojuego", "cannabis", "estria", "ducha", "exomega", "dispensador",
 	"medicament", "vitamina", "suplemento", "bebe", "infantil", "mama",
+	// 2ª ronda (aguacate→mordedor/peluche/pestañina/secador): juguetería,
+	// peluches, mordedores, maquillaje y menaje que el full-text traía.
+	"peluche", "pestanina", "secador", "rasca encia", "mordedor", "llamadiente",
+	"cabello", "pintura", "decoracion", "vela", "manualidad", "fiesta",
+	"menaje", "desechable", "papeleria", "marroquineria",
 }
 
 // nonFoodName — palabras en el NOMBRE que delatan no-comestible aunque la
@@ -64,6 +69,9 @@ var nonFoodName = []string{
 	// Aceites automotrices/industriales (no de cocina) que caen en "Aceites".
 	"lubricante", "aditivo", "probador", "aerosol", "qualitor", "autool",
 	"motor", "anticorrosiv", "penetrante", "gotero",
+	// Juguetes/menaje/maquillaje que comparten nombre con una fruta/insumo.
+	"peluche", "mordedor", "llamadiente", "cortador", "cepillo", "moldeador",
+	"pestanina", "secador", "exprimidor", "rallador", "molde",
 }
 
 // IsFoodCategory reporta si una categoría parece comestible (no está en la lista

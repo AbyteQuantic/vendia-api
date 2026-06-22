@@ -66,3 +66,40 @@ func TestPurgeOldChainPrices(t *testing.T) {
 	db.Model(&models.ChainPrice{}).Count(&remaining)
 	assert.Equal(t, int64(1), remaining)
 }
+
+// Spec 077 — el insumo REAL (aguacate fruta) vence al ruido (mordedor con
+// nombre "aguacate", aceite/pulpa derivados) aunque sean "más baratos por gramo".
+func TestMatchChainPrices_PrefersRealIngredientOverNoise(t *testing.T) {
+	db := setupChainDB(t)
+	mk := func(chain, name, cat string, price, packQty, perBase float64) {
+		require.NoError(t, db.Create(&models.ChainPrice{
+			Chain: chain, RawName: name, NormalizedName: services.NormalizeText(name),
+			Category: cat, Price: price, PackQty: packQty, PricePerBaseUnit: perBase,
+			ScrapedAt: time.Now(),
+		}).Error)
+	}
+	mk("exito", "3 x Aguacate Hass", "Verduras y hortalizas", 4080, 0, 0)
+	mk("exito", "Set Llamadientes Aguacate Y Tostada", "Rasca encías", 50910, 2000, 25.4) // mordedor
+	mk("exito", "Aceite de aguacate Hey Chef 250 ml", "Aceites y vinagres", 27600, 250, 110)
+	mk("exito", "Pulpa de aguacate Paisamole 500 gr", "Untables", 14900, 500, 29.8)
+
+	got := services.MatchChainPrices(db, "aguacate", "")
+	require.Len(t, got, 1)
+	assert.Equal(t, "3 x Aguacate Hass", got[0].RawName, "debe ganar el aguacate real")
+}
+
+func TestBestChainPrice_CheapestRelevant(t *testing.T) {
+	db := setupChainDB(t)
+	mk := func(chain, name string, price float64) {
+		require.NoError(t, db.Create(&models.ChainPrice{
+			Chain: chain, RawName: name, NormalizedName: services.NormalizeText(name),
+			Category: "Verduras", Price: price, ScrapedAt: time.Now(),
+		}).Error)
+	}
+	mk("exito", "Aguacate Hass", 4080)
+	mk("olimpica", "Aguacate Económico", 6890)
+	m := services.BestChainPrice(db, "aguacate", "")
+	require.NotNil(t, m)
+	assert.Equal(t, 4080.0, m.Price)
+	assert.Equal(t, "exito", m.Chain)
+}
