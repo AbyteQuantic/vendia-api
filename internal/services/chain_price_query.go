@@ -156,6 +156,59 @@ func MatchChainPrices(db *gorm.DB, normalizedName, city string) []ChainPriceMatc
 	return out
 }
 
+// SearchChainProducts busca en el catálogo scrapeado MÚLTIPLES productos que
+// matcheen un texto libre, ordenados por relevancia y precio, deduplicados por
+// nombre (el más reciente/barato por producto). Para el BUSCADOR con que el
+// tendero cambia una sugerencia o arma su lista a mano (Spec 077, #3).
+func SearchChainProducts(db *gorm.DB, normalizedQuery, city string, limit int) []ChainPriceMatch {
+	if normalizedQuery == "" {
+		return nil
+	}
+	var rows []models.ChainPrice
+	q := db.Where("normalized_name LIKE ?", "%"+normalizedQuery+"%")
+	if city != "" {
+		q = q.Where("city = ? OR city = ''", city)
+	}
+	q.Order("scraped_at DESC").Limit(1200).Find(&rows)
+
+	// dedup por nombre normalizado: conserva el más barato (representante).
+	byName := map[string]*models.ChainPrice{}
+	for i := range rows {
+		r := &rows[i]
+		if !isFoodProduct(r.RawName, r.Category) {
+			continue
+		}
+		key := r.Chain + "|" + r.NormalizedName
+		if cur, ok := byName[key]; !ok || r.Price < cur.Price {
+			byName[key] = r
+		}
+	}
+	uniq := make([]models.ChainPrice, 0, len(byName))
+	for _, r := range byName {
+		uniq = append(uniq, *r)
+	}
+	sort.SliceStable(uniq, func(a, b int) bool {
+		ra := relevanceScore(uniq[a].NormalizedName, normalizedQuery)
+		rb := relevanceScore(uniq[b].NormalizedName, normalizedQuery)
+		if ra != rb {
+			return ra > rb
+		}
+		return uniq[a].Price < uniq[b].Price
+	})
+	if limit > 0 && len(uniq) > limit {
+		uniq = uniq[:limit]
+	}
+	out := make([]ChainPriceMatch, 0, len(uniq))
+	for i := range uniq {
+		out = append(out, ChainPriceMatch{
+			Chain: uniq[i].Chain, RawName: uniq[i].RawName, Price: uniq[i].Price,
+			Unit: uniq[i].Unit, ScrapedAt: uniq[i].ScrapedAt, PackQty: uniq[i].PackQty,
+			PricePerBaseUnit: uniq[i].PricePerBaseUnit, Brand: uniq[i].Brand,
+		})
+	}
+	return out
+}
+
 // BestChainPrice devuelve la mejor sugerencia de cadena para un insumo (la más
 // relevante y barata entre cadenas), o nil si no hay match. Es el fallback de
 // precio cuando el tenant NO tiene compra previa ni precio de proveedor: en vez
