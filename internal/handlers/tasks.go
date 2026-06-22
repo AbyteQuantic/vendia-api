@@ -262,7 +262,10 @@ func DismissTask(db *gorm.DB) gin.HandlerFunc {
 			CreatedAt:      time.Now(),
 		}
 		// upsert por PK (re-posponer renueva el plazo).
-		db.Save(&d)
+		if err := db.Save(&d).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo posponer la tarea"})
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{"data": gin.H{"dismissed_until": d.DismissedUntil}})
 	}
 }
