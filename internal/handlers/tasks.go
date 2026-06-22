@@ -74,6 +74,9 @@ func ListTasks(db *gorm.DB, gen services.GenerateFunc) gin.HandlerFunc {
 		if t, ok := perishableTask(db, tenantID, branchID); ok {
 			tasks = append(tasks, t)
 		}
+		if t, ok := incompleteMenuTask(db, tenantID, branchID); ok {
+			tasks = append(tasks, t)
+		}
 
 		tasks = filterDismissed(db, tenantID, tasks)
 		tasks = dedupeAndSort(tasks)
@@ -235,6 +238,34 @@ func perishableTask(db *gorm.DB, tenantID, branchID string) (models.Task, bool) 
 		Title: "Productos por vencer", Subtitle: fmt.Sprintf("%d vencen esta semana", n),
 		Urgency: models.TaskUrgencyNormal, Count: int(n), ActionLabel: "Crear promoción",
 		DeepLink: "/promotions/suggestions", CreatedAt: time.Now(),
+	}, true
+}
+
+// T13 — platos de menú INCOMPLETOS (agregada): importados/creados sin una receta
+// con ingredientes → no se pueden costear. Tarea persistente para completarlos.
+// DERIVADO (sin flag): is_menu_item sin una receta que tenga ingredientes.
+func incompleteMenuTask(db *gorm.DB, tenantID, branchID string) (models.Task, bool) {
+	var completeIDs []string
+	db.Table("recipe_ingredients ri").
+		Joins("JOIN recipes r ON r.id = ri.recipe_uuid").
+		Where("r.tenant_id = ? AND r.product_id IS NOT NULL AND r.deleted_at IS NULL", tenantID).
+		Distinct().Pluck("r.product_id", &completeIDs)
+
+	var n int64
+	q := scopeBranch(db.Model(&models.Product{}).
+		Where("tenant_id = ? AND is_menu_item = ?", tenantID, true), branchID)
+	if len(completeIDs) > 0 {
+		q = q.Where("id NOT IN ?", completeIDs)
+	}
+	q.Count(&n)
+	if n == 0 {
+		return models.Task{}, false
+	}
+	return models.Task{
+		ID: models.TaskMenuIncomplete + ":" + tenantID, Kind: models.TaskMenuIncomplete, SourceID: tenantID,
+		Title: "Complete sus recetas", Subtitle: fmt.Sprintf("%d plato(s) sin ingredientes ni costo", n),
+		Urgency: models.TaskUrgencyNormal, Count: int(n), ActionLabel: "Completar",
+		DeepLink: "/recipes", CreatedAt: time.Now(),
 	}, true
 }
 

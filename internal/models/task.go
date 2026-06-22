@@ -5,11 +5,12 @@ import "time"
 
 // TaskKind — discriminador de la fuente de una tarea (deriva de una entidad real).
 const (
-	TaskOnlineOrder  = "online_order"
-	TaskTableAccount = "table_account"
-	TaskErrand       = "errand"
-	TaskReorder      = "reorder"
-	TaskPerishable   = "perishable"
+	TaskOnlineOrder    = "online_order"
+	TaskTableAccount   = "table_account"
+	TaskErrand         = "errand"
+	TaskReorder        = "reorder"
+	TaskPerishable     = "perishable"
+	TaskMenuIncomplete = "menu_incomplete"
 )
 
 // Urgencias (orden y color en el cliente).

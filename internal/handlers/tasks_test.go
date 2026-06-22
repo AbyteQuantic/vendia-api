@@ -91,3 +91,26 @@ func TestListTasks_DismissHidesAggregated(t *testing.T) {
 	w3 := doJSON(t, r, http.MethodGet, "/tasks", nil)
 	assert.Empty(t, decodeTasks(t, w3.Body.Bytes()))
 }
+
+func TestListTasks_IncompleteMenuItem(t *testing.T) {
+	db := taskDB(t)
+	require.NoError(t, db.AutoMigrate(&models.Recipe{}, &models.RecipeIngredient{}))
+	// plato importado SIN receta → incompleto.
+	require.NoError(t, db.Create(&models.Product{BaseModel: models.BaseModel{ID: "plato1"}, TenantID: "t1", Name: "Bandeja", IsMenuItem: true, IsAvailable: true}).Error)
+	// plato CON receta + ingrediente → completo (no cuenta).
+	require.NoError(t, db.Create(&models.Product{BaseModel: models.BaseModel{ID: "plato2"}, TenantID: "t1", Name: "Sopa", IsMenuItem: true, IsAvailable: true}).Error)
+	pid := "plato2"
+	require.NoError(t, db.Create(&models.Recipe{BaseModel: models.BaseModel{ID: "rec2"}, TenantID: "t1", ProductID: &pid}).Error)
+	require.NoError(t, db.Create(&models.RecipeIngredient{BaseModel: models.BaseModel{ID: "ri1"}, RecipeUUID: "rec2"}).Error)
+
+	w := doJSON(t, tasksRouter(db), http.MethodGet, "/tasks", nil)
+	tasks := decodeTasks(t, w.Body.Bytes())
+	var found map[string]any
+	for _, tk := range tasks {
+		if tk["id"] == "menu_incomplete:t1" {
+			found = tk
+		}
+	}
+	require.NotNil(t, found, "debe haber tarea de menú incompleto")
+	assert.Equal(t, float64(1), found["count"]) // solo el plato sin receta
+}
