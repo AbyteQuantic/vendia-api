@@ -800,6 +800,7 @@ func main() {
 		v1.POST("/errands", handlers.CreateErrand(db))                 // Spec 077 — crear mandado
 		v1.GET("/errands", handlers.ListErrands(db))                   // Spec 077 — listar mandados
 		v1.PATCH("/errands/:id", handlers.UpdateErrandStatus(db))      // Spec 077 — estado del mandado
+		v1.POST("/errands/:id/receive", handlers.ReceiveErrand(db))    // Spec 077 — marcar comprado + ingresar inventario
 		v1.POST("/errands/match-today", handlers.MatchTodayErrand(db)) // Spec 077 — reenviar pedido del día
 		v1.POST("/ingredients", handlers.CreateIngredient(db))
 		v1.PATCH("/ingredients/:uuid", handlers.UpdateIngredient(db))
