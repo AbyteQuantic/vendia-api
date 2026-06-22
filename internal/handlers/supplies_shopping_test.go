@@ -10,6 +10,7 @@ import (
 	"vendia-backend/internal/handlers"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
+	"vendia-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -158,3 +159,38 @@ func TestShoppingList_PackagingWholeUnits(t *testing.T) {
 	assert.Equal(t, "Crema de leche x 1L", it.PackLabel)
 }
 func strPtr(s string) *string { return &s }
+
+// Spec 077 — un producto de CADENA con unidad incompatible (insumo en ml,
+// empaque en g) NO se cobra como faltante × precio-por-g (daba "$73 por 3 ml");
+// se cobra el EMPAQUE ENTERO (Éxito no vende fracciones).
+func TestShoppingList_ChainWholePackage_NotFractional(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&models.Ingredient{}, &models.IngredientPrice{}, &models.InventoryMovement{}, &models.ChainPrice{}, &models.Tenant{}))
+	require.NoError(t, db.Create(&models.Tenant{BaseModel: models.BaseModel{ID: "t1"}, BusinessName: "X"}).Error)
+	require.NoError(t, db.Create(&models.Ingredient{BaseModel: models.BaseModel{ID: "crema"}, TenantID: "t1", Name: "Crema de leche", Unit: "ml", Stock: 0}).Error)
+	// Cadena: crema en GRAMOS (incompatible con ml del insumo). Empaque $4520.
+	require.NoError(t, db.Create(&models.ChainPrice{
+		Chain: "exito", RawName: "Crema de leche COLANTA 175 gr",
+		NormalizedName: services.NormalizeText("Crema de leche COLANTA 175 gr"),
+		Category:       "Cremas", Price: 4520, Unit: "g", PackQty: 175, PricePerBaseUnit: 25.83,
+		ScrapedAt: time.Now(),
+	}).Error)
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set(middleware.TenantIDKey, "t1"); c.Next() })
+	r.POST("/supplies/shopping-list", handlers.SuppliesShoppingList(db))
+	// Necesita 3 ml → NO debe costar 3 × 25.83 ≈ $78; debe costar el empaque ($4520).
+	w := doJSON(t, r, http.MethodPost, "/supplies/shopping-list",
+		map[string]any{"needs": []map[string]any{{"ingredient_id": "crema", "name": "Crema de leche", "unit": "ml", "qty": 3}}})
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp struct {
+		Data struct {
+			Items []map[string]any `json:"items"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data.Items, 1)
+	assert.InDelta(t, 4520, resp.Data.Items[0]["estimated_cost"].(float64), 1, "debe ser el empaque entero, no fracción")
+}

@@ -144,8 +144,19 @@ func SuppliesShoppingList(db *gorm.DB) gin.HandlerFunc {
 				}
 			}
 			if packUnknown {
-				// per-unidad en la unidad del insumo (sp.PricePerUnit es por esa unidad).
-				cost = math.Round(shortfall*sp.PricePerUnit*100) / 100
+				if sp.PackPrice > 0 {
+					// La cadena/proveedor NO vende fracciones: si no se puede calcular
+					// cuántos empaques caben (unidad incompatible, ej insumo en ml y
+					// empaque en g), el costo es UN empaque entero, nunca faltante ×
+					// precio-por-unidad (eso daba "$73 por 3 ml"). Spec 077.
+					cost = math.Round(sp.PackPrice*100) / 100
+					one := 1
+					packsPtr = &one
+					packUnknown = false // sí conocemos el empaque (se compra 1)
+				} else {
+					// Sin empaque (solo "última compra" per-unidad en la unidad del insumo).
+					cost = math.Round(shortfall*sp.PricePerUnit*100) / 100
+				}
 			}
 			total += cost
 			// "Estimado" = confianza del PRECIO (origen). El empaque desconocido
