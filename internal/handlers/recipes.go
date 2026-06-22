@@ -77,12 +77,16 @@ func CreateRecipe(db *gorm.DB) gin.HandlerFunc {
 	}
 
 	type Request struct {
-		ID          string  `json:"id"`
-		ProductName string  `json:"product_name" binding:"required"`
-		Category    string  `json:"category"`
-		SalePrice   float64 `json:"sale_price"   binding:"required,gt=0"`
-		Emoji       string  `json:"emoji"`
-		PhotoURL    string  `json:"photo_url"`
+		ID string `json:"id"`
+		// LinkProductID (Spec 078): completar un plato de menú YA existente
+		// (importado sin receta) — liga la receta a ese producto en vez de crear
+		// uno nuevo (evita duplicados). Vacío = crea el producto-receta normal.
+		LinkProductID string  `json:"link_product_id"`
+		ProductName   string  `json:"product_name" binding:"required"`
+		Category      string  `json:"category"`
+		SalePrice     float64 `json:"sale_price"   binding:"required,gt=0"`
+		Emoji         string  `json:"emoji"`
+		PhotoURL      string  `json:"photo_url"`
 		// F043 — el plato/receta también es un ítem del menú: la
 		// descripción apetitosa y la porción alimentan la tarjeta del
 		// catálogo público. Opcionales; viajan al Product, no a la Recipe
@@ -167,6 +171,26 @@ func CreateRecipe(db *gorm.DB) gin.HandlerFunc {
 			}
 
 			recipeID := recipe.ID
+
+			// COMPLETAR un plato importado (Spec 078): si viene link_product_id y
+			// es un menú existente sin receta, se le LIGA la receta (no se crea un
+			// producto nuevo → sin duplicados). Si no se encuentra, cae a crear.
+			if req.LinkProductID != "" {
+				res := tx.Model(&models.Product{}).
+					Where("id = ? AND tenant_id = ? AND is_menu_item = ?", req.LinkProductID, tenantID, true).
+					Updates(map[string]interface{}{"is_recipe": true, "recipe_id": recipeID, "price": recipe.SalePrice})
+				if res.Error != nil {
+					return res.Error
+				}
+				if res.RowsAffected > 0 {
+					pid := req.LinkProductID
+					recipe.ProductID = &pid
+					return tx.Model(&recipe).
+						Where("id = ? AND tenant_id = ?", recipe.ID, tenantID).
+						UpdateColumn("product_id", pid).Error
+				}
+			}
+
 			// The vendible product-receta. IsRecipe flips the POS sale
 			// path to ExplodeRecipe; Stock stays 0 because availability
 			// is derived from the insumos (D1 — disponibilidad derivada).
