@@ -29,6 +29,8 @@ func setupRecipeProductDB(t *testing.T) *gorm.DB {
 		&models.RecipeIngredient{},
 		&models.Ingredient{},
 		&models.Product{},
+		&models.WeeklyMenuPlan{},   // DeleteRecipe limpia menús (Spec 078)
+		&models.MenuPlanOverride{},
 	))
 	return db
 }
