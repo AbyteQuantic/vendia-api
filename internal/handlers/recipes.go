@@ -407,6 +407,12 @@ func DeleteRecipe(db *gorm.DB) gin.HandlerFunc {
 		// transaction so the POS never keeps a sellable product whose
 		// recipe is gone (Art. IX — coherent state).
 		if err := db.Transaction(func(tx *gorm.DB) error {
+			// Estado coherente (Art. IX): quitar la receta de TODOS los menús
+			// (plantilla semanal + overrides) para no dejar un recipe_uuid colgado.
+			// La app ya avisó al tendero en qué días estaba y pidió confirmación. Spec 078.
+			if err := stripRecipeFromMenus(tx, tenantID, uuid); err != nil {
+				return err
+			}
 			if err := tx.Where("id = ? AND tenant_id = ?", uuid, tenantID).
 				Delete(&models.Recipe{}).Error; err != nil {
 				return err

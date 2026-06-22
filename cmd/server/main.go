@@ -760,6 +760,7 @@ func main() {
 		v1.PATCH("/recipes/:uuid", handlers.UpdateRecipe(db))
 		v1.DELETE("/recipes/:uuid", handlers.DeleteRecipe(db))
 		v1.GET("/recipes/:uuid/cost", handlers.RecipeCost(db))
+		v1.GET("/recipes/:uuid/menu-usage", handlers.RecipeMenuUsage(db)) // Spec 078 — dónde está activa en menús (antes de eliminar)
 		// Feature 001 — units a product-receta can be made from the
 		// current insumo stock (FR-05).
 		v1.GET("/recipes/:uuid/availability", handlers.RecipeAvailability(db))
