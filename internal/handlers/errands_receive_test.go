@@ -109,3 +109,29 @@ func TestReceiveErrand_Partial_NoDoubleCount(t *testing.T) {
 	require.NoError(t, db.First(&er, "id = ?", "e3").Error)
 	assert.Equal(t, "comprado", er.Status)
 }
+
+// Spec 078 — registrar MÁS de lo necesario (empaque entero): 8 de una necesidad
+// de 7.8 → stock 8 (el excedente queda como stock), mandado comprado.
+func TestReceiveErrand_OverReceive_RegistersAll(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&models.Ingredient{}, &models.Product{}, &models.PurchaseErrand{}, &models.PurchaseErrandLine{}, &models.InventoryMovement{}))
+	require.NoError(t, db.Create(&models.Ingredient{BaseModel: models.BaseModel{ID: "ajo"}, TenantID: "t1", Name: "Ajo", Unit: "unidad", Stock: 0}).Error)
+	require.NoError(t, db.Create(&models.PurchaseErrand{BaseModel: models.BaseModel{ID: "e4"}, TenantID: "t1", Status: "pendiente"}).Error)
+	iid := "ajo"
+	require.NoError(t, db.Create(&models.PurchaseErrandLine{BaseModel: models.BaseModel{ID: "l4"}, ErrandID: "e4", IngredientID: &iid, LineKind: "ingredient", Name: "Ajo", Unit: "unidad", Qty: 7.8}).Error)
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set(middleware.TenantIDKey, "t1"); c.Next() })
+	r.POST("/errands/:id/receive", handlers.ReceiveErrand(db))
+	w := doJSON(t, r, http.MethodPost, "/errands/e4/receive", map[string]any{"lines": []map[string]any{{"line_id": "l4", "received_qty": 8}}})
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var ing models.Ingredient
+	require.NoError(t, db.First(&ing, "id = ?", "ajo").Error)
+	assert.Equal(t, 8.0, ing.Stock) // se registró TODO lo que llegó, no se capó a 7.8
+	var er models.PurchaseErrand
+	require.NoError(t, db.First(&er, "id = ?", "e4").Error)
+	assert.Equal(t, "comprado", er.Status)
+}

@@ -76,9 +76,9 @@ func ReceiveErrand(db *gorm.DB) gin.HandlerFunc {
 				if target < 0 {
 					target = 0
 				}
-				if target > line.Qty {
-					target = line.Qty
-				}
+				// Sin tope superior: se compra por empaque entero (8 ajos para una
+				// necesidad de 7.8), se registra TODO lo que llegó; el excedente queda
+				// como stock. Spec 078. 'cumplida' = cubrió al menos la necesidad.
 				fulfilled := target >= line.Qty-recvEpsilon
 				delta := target - line.ReceivedQty
 
