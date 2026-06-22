@@ -31,6 +31,26 @@ type ChainPriceMatch struct {
 
 const priceDropThreshold = 0.10 // 10%
 
+// ChainDisplayName devuelve el nombre presentable de una cadena ("exito"→"Éxito",
+// "olimpica"→"Olímpica"), para que la fila/opción diga la cadena y no "cadena".
+func ChainDisplayName(chain string) string {
+	switch strings.ToLower(strings.TrimSpace(chain)) {
+	case "exito":
+		return "Éxito"
+	case "olimpica":
+		return "Olímpica"
+	case "d1":
+		return "D1"
+	case "ara":
+		return "Ara"
+	case "":
+		return "Cadena"
+	default:
+		r := []rune(chain)
+		return strings.ToUpper(string(r[0])) + string(r[1:])
+	}
+}
+
 // comparable — el precio para comparar la MISMA presentación (bajó-de-precio):
 // por unidad base si hay paquete, si no el precio crudo.
 func comparable(r models.ChainPrice) float64 {

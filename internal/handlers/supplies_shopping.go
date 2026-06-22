@@ -30,6 +30,7 @@ type ShoppingItem struct {
 	PricePerUnit  float64 `json:"price_per_unit"`
 	EstimatedCost float64 `json:"estimated_cost"`
 	PriceSource   string  `json:"price_source"`
+	Supplier      string  `json:"supplier,omitempty"` // nombre de la cadena/proveedor (ej "Éxito")
 	IsEstimate    bool    `json:"is_estimate"`
 
 	// Empaque-completo (Spec 077): nadie vende fracciones; se compra el/los
@@ -115,7 +116,7 @@ func SuppliesShoppingList(db *gorm.DB) gin.HandlerFunc {
 					}
 					sp = services.SuggestedPrice{
 						PricePerUnit: ppu, Source: models.PriceSourceScrapedChain,
-						IsEstimate: true, SupplierName: m.Chain,
+						IsEstimate: true, SupplierName: services.ChainDisplayName(m.Chain),
 						PackPrice: m.Price, PackQty: m.PackQty, PackUnit: m.Unit,
 						PackLabel: m.RawName, PackUnknown: m.PackQty <= 0,
 					}
@@ -162,6 +163,7 @@ func SuppliesShoppingList(db *gorm.DB) gin.HandlerFunc {
 				PricePerUnit:  sp.PricePerUnit,
 				EstimatedCost: cost,
 				PriceSource:   sp.Source,
+				Supplier:      sp.SupplierName,
 				IsEstimate:    sp.IsEstimate,
 				Packs:         packsPtr,
 				PackLabel:     sp.PackLabel,

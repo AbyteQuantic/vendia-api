@@ -56,8 +56,9 @@ func SupplySearch(db *gorm.DB) gin.HandlerFunc {
 		db.Select("city").Where("id = ?", tenantID).First(&tenant)
 		for _, m := range services.SearchChainProducts(db, services.NormalizeText(query), tenant.City, 12) {
 			o := PriceOption{
-				ID: "chain:" + m.Chain + ":" + m.RawName, Label: m.RawName, Supplier: m.Chain,
-				Source: models.PriceSourceScrapedChain, PackPrice: m.Price, PackQty: m.PackQty,
+				ID: "chain:" + m.Chain + ":" + m.RawName, Label: m.RawName,
+				Supplier: services.ChainDisplayName(m.Chain),
+				Source:   models.PriceSourceScrapedChain, PackPrice: m.Price, PackQty: m.PackQty,
 				PackUnit: m.Unit, PricePerBaseUnit: m.PricePerBaseUnit, IsEstimate: true,
 			}
 			applyPackaging(&o, shortfall, unit)

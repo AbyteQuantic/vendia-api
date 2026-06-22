@@ -92,7 +92,7 @@ func SupplyOptions(db *gorm.DB) gin.HandlerFunc {
 				o := PriceOption{
 					ID:               "chain:" + m.Chain + ":" + m.RawName,
 					Label:            m.RawName,
-					Supplier:         m.Chain,
+					Supplier:         services.ChainDisplayName(m.Chain),
 					Source:           models.PriceSourceScrapedChain,
 					PackPrice:        m.Price,
 					PackQty:          m.PackQty,

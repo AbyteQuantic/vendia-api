@@ -103,3 +103,10 @@ func TestBestChainPrice_CheapestRelevant(t *testing.T) {
 	assert.Equal(t, 4080.0, m.Price)
 	assert.Equal(t, "exito", m.Chain)
 }
+
+func TestChainDisplayName(t *testing.T) {
+	assert.Equal(t, "Éxito", services.ChainDisplayName("exito"))
+	assert.Equal(t, "Olímpica", services.ChainDisplayName("olimpica"))
+	assert.Equal(t, "Cadena", services.ChainDisplayName(""))
+	assert.Equal(t, "Carulla", services.ChainDisplayName("carulla"))
+}
