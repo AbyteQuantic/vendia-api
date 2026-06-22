@@ -5,21 +5,61 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
+	"sync"
 	"time"
 
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
+	"vendia-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+// rankCache — orden del re-rank por IA cacheado por (tenant + hora + conjunto de
+// ids), TTL 5 min, para no llamar a Gemini en cada poll de 15s. Spec 078 F3.
+type rankEntry struct {
+	order  []string
+	expiry time.Time
+}
+
+var rankCache sync.Map // string -> rankEntry
+
+func rankCacheKey(tenantID string, hour int, tasks []models.Task) string {
+	ids := services.TaskIDs(tasks)
+	sort.Strings(ids)
+	return tenantID + "|" + itoaHour(hour) + "|" + strings.Join(ids, ",")
+}
+
+func itoaHour(h int) string { return fmt.Sprintf("%d", h) }
+
+// rankTasks aplica el re-rank por IA con caché. Sin IA o sin caché válido, llama
+// a RankTasks (que internamente cae al orden por reglas si la IA falla).
+func rankTasks(tenantID string, tasks []models.Task, gen services.GenerateFunc) []models.Task {
+	if len(tasks) < 2 || gen == nil {
+		return tasks
+	}
+	hour := time.Now().Hour()
+	key := rankCacheKey(tenantID, hour, tasks)
+	if v, ok := rankCache.Load(key); ok {
+		if e := v.(rankEntry); time.Now().Before(e.expiry) {
+			if reordered := services.ApplyTaskOrder(tasks, e.order); reordered != nil {
+				return reordered
+			}
+		}
+	}
+	reordered := services.RankTasks(tasks, hour, gen)
+	rankCache.Store(key, rankEntry{order: services.TaskIDs(reordered), expiry: time.Now().Add(5 * time.Minute)})
+	return reordered
+}
 
 // ListTasks — GET /api/v1/tasks  (Spec 078, Fase 0)
 // Agregador read-only: DERIVA las tareas pendientes del tenant leyendo las
 // entidades dueñas (pedidos online, mesas/órdenes, mandados, productos), sin una
 // tabla 'tasks'. Deduplicado por id "{kind}:{source}", filtrado por descartes
 // vigentes, ordenado por urgencia (lo más urgente y lo que más espera, arriba).
-func ListTasks(db *gorm.DB) gin.HandlerFunc {
+func ListTasks(db *gorm.DB, gen services.GenerateFunc) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
 		branchID := c.Query("branch_id")
@@ -37,6 +77,8 @@ func ListTasks(db *gorm.DB) gin.HandlerFunc {
 
 		tasks = filterDismissed(db, tenantID, tasks)
 		tasks = dedupeAndSort(tasks)
+		// Re-rank por IA SEGÚN CONTEXTO (no bloqueante; cae al orden por reglas).
+		tasks = rankTasks(tenantID, tasks, gen)
 
 		urgent, important := 0, 0
 		for _, t := range tasks {

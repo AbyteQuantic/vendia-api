@@ -33,7 +33,7 @@ func tasksRouter(db *gorm.DB) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.Use(func(c *gin.Context) { c.Set(middleware.TenantIDKey, "t1"); c.Next() })
-	r.GET("/tasks", handlers.ListTasks(db))
+	r.GET("/tasks", handlers.ListTasks(db, nil))
 	r.POST("/tasks/dismiss", handlers.DismissTask(db))
 	return r
 }
