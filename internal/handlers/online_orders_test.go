@@ -189,6 +189,36 @@ func TestListOnlineOrders_FiltersByStatus(t *testing.T) {
 	assert.Equal(t, "A", resp.Data[0].CustomerName)
 }
 
+// Spec 078 — un pedido web pinneado a OTRA sede sigue visible (tenant-wide), no
+// se esconde por la sede activa (era el bug "tarea sí, Pedidos Web no" de Yeimy).
+func TestListOnlineOrders_TenantWide_NotHiddenByBranch(t *testing.T) {
+	db := setupOnlineOrdersDB(t)
+	tenantID, _ := seedTenantWithBranch(t, db, "tienda-multi")
+	otherBranch := uuid.NewString()
+	require.NoError(t, db.Exec(
+		`INSERT INTO online_orders (id, tenant_id, customer_name, status, branch_id, created_at) VALUES (?, ?, 'Yeimy', 'pending', ?, datetime('now'))`,
+		uuid.NewString(), tenantID, otherBranch,
+	).Error)
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/api/v1/online-orders", func(c *gin.Context) {
+		c.Set(middleware.TenantIDKey, tenantID)
+		handlers.ListOnlineOrders(db)(c)
+	})
+	// Pide con sede activa DISTINTA → el pedido debe aparecer igual.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/online-orders?status=pending&branch_id="+uuid.NewString(), nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var resp struct {
+		Data []models.OnlineOrder `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data, 1, "el pedido de otra sede no debe esconderse")
+	assert.Equal(t, "Yeimy", resp.Data[0].CustomerName)
+}
+
 // Customer Portal — verifies the sanitized projection does NOT leak
 // any PII (name, phone, address-in-notes, branch_id, etc.) and
 // that the lookup is strictly scoped to the slug's tenant so a
@@ -227,8 +257,8 @@ func TestPublicCustomerOrders_SanitizedAndTenantScoped(t *testing.T) {
 	// must surface in the response. They were present in the seed.
 	body := w.Body.String()
 	for _, leak := range []string{
-		"Pedro Pérez", // customer_name
-		"3001112222",  // customer_phone (caller already knows it)
+		"Pedro Pérez",  // customer_name
+		"3001112222",   // customer_phone (caller already knows it)
 		"Cra 7 #45-12", // address inside notes
 		"customer_name",
 		"customer_phone",

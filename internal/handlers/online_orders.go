@@ -244,14 +244,11 @@ func ListOnlineOrders(db *gorm.DB) gin.HandlerFunc {
 		tenantID := middleware.GetTenantID(c)
 		status := strings.TrimSpace(c.DefaultQuery("status", ""))
 
-		scope := ResolveBranchScope(c, db)
-		if scope.NotOwned {
-			c.JSON(http.StatusForbidden, gin.H{"error": "branch_not_owned"})
-			return
-		}
-
+		// Los pedidos web son a NIVEL DE NEGOCIO: visibles desde CUALQUIER sede
+		// para no perder un pedido (igual que el Centro de Tareas). NO se filtran
+		// por la sede activa — antes un pedido pinneado a otra sede salía como
+		// tarea pero "Pedidos Web" decía "sin pedidos" (Spec 078, fix consistencia).
 		query := db.Where("tenant_id = ?", tenantID)
-		query = ApplyBranchScope(query, scope)
 		if status != "" {
 			query = query.Where("status = ?", status)
 		}
@@ -373,13 +370,13 @@ func bridgeOnlineOrderToSale(db *gorm.DB, order models.OnlineOrder) error {
 
 	return db.Transaction(func(tx *gorm.DB) error {
 		sale := models.Sale{
-			BaseModel: models.BaseModel{ID: order.ID},
-			TenantID:  order.TenantID,
-			BranchID:  order.BranchID,
-			Total:     order.TotalAmount,
-			PaymentMethod: method,
-			PaymentStatus: "COMPLETED",
-			Source:        models.SaleSourceWeb,
+			BaseModel:             models.BaseModel{ID: order.ID},
+			TenantID:              order.TenantID,
+			BranchID:              order.BranchID,
+			Total:                 order.TotalAmount,
+			PaymentMethod:         method,
+			PaymentStatus:         "COMPLETED",
+			Source:                models.SaleSourceWeb,
 			CustomerNameSnapshot:  order.CustomerName,
 			CustomerPhoneSnapshot: order.CustomerPhone,
 		}

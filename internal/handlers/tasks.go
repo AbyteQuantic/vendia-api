@@ -62,19 +62,24 @@ func rankTasks(tenantID string, tasks []models.Task, gen services.GenerateFunc) 
 func ListTasks(db *gorm.DB, gen services.GenerateFunc) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
-		branchID := c.Query("branch_id")
+		// Sede activa SOLO para las fuentes FÍSICAS (mesas/stock/perecederos), que
+		// deben coincidir con la sede de su pantalla. Pedidos web, mandados y
+		// recetas son a NIVEL DE NEGOCIO (tenant-wide, visibles desde cualquier
+		// sede) — antes un pedido de otra sede salía como tarea pero la pantalla
+		// no lo mostraba (Spec 078, fix consistencia tarea↔pantalla).
+		branchID := ResolveBranchScope(c, db).BranchID
 
 		tasks := make([]models.Task, 0, 16)
-		tasks = append(tasks, onlineOrderTasks(db, tenantID, branchID)...)
-		tasks = append(tasks, tableAccountTasks(db, tenantID, branchID)...)
-		tasks = append(tasks, errandTasks(db, tenantID)...)
-		if t, ok := reorderTask(db, tenantID, branchID); ok {
+		tasks = append(tasks, onlineOrderTasks(db, tenantID)...)            // negocio
+		tasks = append(tasks, tableAccountTasks(db, tenantID, branchID)...) // sede activa
+		tasks = append(tasks, errandTasks(db, tenantID)...)                 // negocio
+		if t, ok := reorderTask(db, tenantID, branchID); ok {               // sede activa
 			tasks = append(tasks, t)
 		}
-		if t, ok := perishableTask(db, tenantID, branchID); ok {
+		if t, ok := perishableTask(db, tenantID, branchID); ok { // sede activa
 			tasks = append(tasks, t)
 		}
-		if t, ok := incompleteMenuTask(db, tenantID, branchID); ok {
+		if t, ok := incompleteMenuTask(db, tenantID); ok { // recetas globales
 			tasks = append(tasks, t)
 		}
 
@@ -122,9 +127,10 @@ func ago(t time.Time) string {
 }
 
 // T1/T2 — pedidos en línea por aceptar (pending) o por entregar (accepted).
-func onlineOrderTasks(db *gorm.DB, tenantID, branchID string) []models.Task {
+// Tenant-wide: un pedido web es a nivel de negocio, visible desde cualquier sede.
+func onlineOrderTasks(db *gorm.DB, tenantID string) []models.Task {
 	var rows []models.OnlineOrder
-	q := scopeBranch(db.Where("tenant_id = ? AND status IN ?", tenantID, []string{"pending", "accepted"}), branchID)
+	q := db.Where("tenant_id = ? AND status IN ?", tenantID, []string{"pending", "accepted"})
 	q.Order("created_at ASC").Limit(50).Find(&rows)
 	out := make([]models.Task, 0, len(rows))
 	for _, o := range rows {
@@ -244,7 +250,7 @@ func perishableTask(db *gorm.DB, tenantID, branchID string) (models.Task, bool) 
 // T13 — platos de menú INCOMPLETOS (agregada): importados/creados sin una receta
 // con ingredientes → no se pueden costear. Tarea persistente para completarlos.
 // DERIVADO (sin flag): is_menu_item sin una receta que tenga ingredientes.
-func incompleteMenuTask(db *gorm.DB, tenantID, branchID string) (models.Task, bool) {
+func incompleteMenuTask(db *gorm.DB, tenantID string) (models.Task, bool) {
 	var completeIDs []string
 	db.Table("recipe_ingredients ri").
 		Joins("JOIN recipes r ON r.id = ri.recipe_uuid").
@@ -252,8 +258,9 @@ func incompleteMenuTask(db *gorm.DB, tenantID, branchID string) (models.Task, bo
 		Distinct().Pluck("r.product_id", &completeIDs)
 
 	var n int64
-	q := scopeBranch(db.Model(&models.Product{}).
-		Where("tenant_id = ? AND is_menu_item = ?", tenantID, true), branchID)
+	// Tenant-wide: los platos de menú son globales (branch NULL).
+	q := db.Model(&models.Product{}).
+		Where("tenant_id = ? AND is_menu_item = ?", tenantID, true)
 	if len(completeIDs) > 0 {
 		q = q.Where("id NOT IN ?", completeIDs)
 	}
