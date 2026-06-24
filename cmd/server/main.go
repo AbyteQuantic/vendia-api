@@ -972,6 +972,9 @@ func main() {
 		admin.GET("/ecosystem/cross-identities", handlers.AdminCrossIdentities(db))
 		admin.GET("/ecosystem/metrics", handlers.AdminEcosystemMetrics(db))
 
+		// GTM 073 — Tablero de activación (embudo + desglose por tienda)
+		admin.GET("/activation", handlers.AdminActivationFunnel(db))
+
 		// Phase 3 — Support hub (super-admin side)
 		admin.GET("/support/tickets", handlers.AdminListSupportTickets(db))
 		admin.GET("/support/tickets/:id", handlers.AdminGetSupportTicket(db))
