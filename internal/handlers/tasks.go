@@ -254,7 +254,10 @@ func incompleteMenuTask(db *gorm.DB, tenantID string) (models.Task, bool) {
 	var completeIDs []string
 	db.Table("recipe_ingredients ri").
 		Joins("JOIN recipes r ON r.id = ri.recipe_uuid").
-		Where("r.tenant_id = ? AND r.product_id IS NOT NULL AND r.deleted_at IS NULL", tenantID).
+		// ri.deleted_at IS NULL: el Table crudo no aplica el scope soft-delete de
+		// GORM. Sin esto, un insumo borrado seguiría contando el plato como
+		// "completo" y desaparecería erróneamente de "Complete sus recetas".
+		Where("r.tenant_id = ? AND r.product_id IS NOT NULL AND r.deleted_at IS NULL AND ri.deleted_at IS NULL", tenantID).
 		Distinct().Pluck("r.product_id", &completeIDs)
 
 	var n int64

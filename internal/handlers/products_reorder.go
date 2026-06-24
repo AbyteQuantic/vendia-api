@@ -25,7 +25,9 @@ func ProductReorderList(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		q := db.Where("tenant_id = ? AND min_stock > 0 AND stock <= min_stock AND is_available = ?", tenantID, true)
+		// stock < min_stock (no <=): un producto con stock==min_stock pasaría el
+		// SQL pero el loop lo descarta (shortfall 0). Alinear evita traer esa fila.
+		q := db.Where("tenant_id = ? AND min_stock > 0 AND stock < min_stock AND is_available = ?", tenantID, true)
 		q = ApplyBranchScope(q, scope)
 		var products []models.Product
 		q.Order("name ASC").Find(&products)

@@ -234,6 +234,11 @@ func Migrate(db *gorm.DB) error {
 		if err := applyLedgerIndexes(db); err != nil {
 			log.Printf("[bootstrap] ledger indexes: %v", err)
 		}
+		// Audit 2026-06-24 — índices compuestos para las rutas calientes
+		// (dashboard, /tasks, lista de productos, sync). Aditivos/idempotentes.
+		if err := applyPerformanceIndexes(db); err != nil {
+			log.Printf("[bootstrap] performance indexes: %v", err)
+		}
 		// F042 — el tipo academias_instituciones debe pasar el CHECK
 		// tenants_business_types_valid. Render solo corre AutoMigrate, no
 		// los .sql, así que actualizamos la función de validación en el

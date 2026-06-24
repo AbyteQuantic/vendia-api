@@ -413,6 +413,13 @@ func DeleteRecipe(db *gorm.DB) gin.HandlerFunc {
 			if err := stripRecipeFromMenus(tx, tenantID, uuid); err != nil {
 				return err
 			}
+			// Borrar también los insumos de la receta (mismo patrón que
+			// UpdateRecipe) — si no, quedan filas recipe_ingredients huérfanas
+			// apuntando a un recipe_uuid muerto. Soft-delete, no toca FKs/Kardex.
+			if err := tx.Where("recipe_uuid = ?", uuid).
+				Delete(&models.RecipeIngredient{}).Error; err != nil {
+				return err
+			}
 			if err := tx.Where("id = ? AND tenant_id = ?", uuid, tenantID).
 				Delete(&models.Recipe{}).Error; err != nil {
 				return err

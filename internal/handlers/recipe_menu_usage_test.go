@@ -20,8 +20,10 @@ import (
 func TestRecipeMenuUsage_AndDeleteStrips(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&models.Recipe{}, &models.Product{}, &models.WeeklyMenuPlan{}, &models.MenuPlanOverride{}))
+	require.NoError(t, db.AutoMigrate(&models.Recipe{}, &models.Product{}, &models.WeeklyMenuPlan{}, &models.MenuPlanOverride{}, &models.RecipeIngredient{}))
 	require.NoError(t, db.Create(&models.Recipe{BaseModel: models.BaseModel{ID: "r1"}, TenantID: "t1", ProductName: "Bandeja", SalePrice: 12000}).Error)
+	// Insumo de r1: tras borrar la receta NO debe quedar huérfano (audit 2026-06-24).
+	require.NoError(t, db.Create(&models.RecipeIngredient{BaseModel: models.BaseModel{ID: "ri1"}, RecipeUUID: "r1", ProductName: "Arroz", Quantity: 2, UnitCost: 1500}).Error)
 	// Plan semanal con la receta el lunes y el martes.
 	days := `{"mon":{"enabled":true,"items":[{"recipe_uuid":"r1","planned_qty":0}]},"tue":{"enabled":true,"items":[{"recipe_uuid":"r1","planned_qty":0},{"recipe_uuid":"r2","planned_qty":0}]}}`
 	require.NoError(t, db.Create(&models.WeeklyMenuPlan{BaseModel: models.BaseModel{ID: "p1"}, TenantID: "t1", BranchID: "", Days: days}).Error)
@@ -55,4 +57,8 @@ func TestRecipeMenuUsage_AndDeleteStrips(t *testing.T) {
 	var cnt int64
 	db.Model(&models.Recipe{}).Where("id = ?", "r1").Count(&cnt)
 	assert.Equal(t, int64(0), cnt)
+	// Los insumos de r1 NO deben quedar huérfanos (soft-delete vía el scope GORM).
+	var ingCnt int64
+	db.Model(&models.RecipeIngredient{}).Where("recipe_uuid = ?", "r1").Count(&ingCnt)
+	assert.Equal(t, int64(0), ingCnt)
 }

@@ -108,6 +108,55 @@ func applyLedgerIndexes(db *gorm.DB) error {
 	return nil
 }
 
+// applyPerformanceIndexes installs composite indexes that back the hottest
+// read paths (dashboard analytics, /tasks poll, product list, offline sync).
+// Postgres-only, idempotent (IF NOT EXISTS). The engine today only has
+// single-column indexes and filters the rest in memory; these composites let
+// the leading-equality + range/order be served from the index. Multi-sede safe:
+// branch_id is filtered separately (often `branch_id = ? OR branch_id IS NULL`
+// for globals), so we deliberately do NOT lead with branch_id — the equality
+// would not serve the OR cleanly. Audit 2026-06-24.
+func applyPerformanceIndexes(db *gorm.DB) error {
+	statements := []string{
+		// Toda la analítica/dashboard y ListSales filtran tenant_id + ordenan
+		// por created_at DESC. Partial deleted_at respeta el soft-delete.
+		`CREATE INDEX IF NOT EXISTS idx_sales_tenant_created
+		 ON sales (tenant_id, created_at DESC)
+		 WHERE deleted_at IS NULL`,
+
+		// ListProducts, InventoryHealth y el catálogo filtran tenant_id +
+		// is_available. El prefijo de igualdad ya ayuda (stock/min_stock son
+		// rangos que el índice no cubre del todo, pero acotan el escaneo).
+		`CREATE INDEX IF NOT EXISTS idx_products_tenant_avail
+		 ON products (tenant_id, is_available)
+		 WHERE deleted_at IS NULL`,
+
+		// /tasks (poll 15s) y el KDS leen order_tickets por tenant_id + status.
+		`CREATE INDEX IF NOT EXISTS idx_order_tickets_tenant_status
+		 ON order_tickets (tenant_id, status)
+		 WHERE deleted_at IS NULL`,
+
+		// Sync pull (collectServerChanges) lee por (tenant_id, updated_at) y usa
+		// Unscoped — DEBE enviar borrados — así que estos van SIN partial
+		// deleted_at (si no, los soft-deleted no entrarían al índice y el pull
+		// los perdería). Solo aceleran el WHERE updated_at > last_sync.
+		`CREATE INDEX IF NOT EXISTS idx_products_tenant_updated
+		 ON products (tenant_id, updated_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_sales_tenant_updated
+		 ON sales (tenant_id, updated_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_customers_tenant_updated
+		 ON customers (tenant_id, updated_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_credit_accounts_tenant_updated
+		 ON credit_accounts (tenant_id, updated_at)`,
+	}
+	for _, stmt := range statements {
+		if err := db.Exec(stmt).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ensureBusinessTypesWhitelist keeps the Postgres validate_business_types()
 // function in sync with models.ValidBusinessTypes. The CHECK constraint
 // tenants_business_types_valid (migration 020) calls this function, so adding

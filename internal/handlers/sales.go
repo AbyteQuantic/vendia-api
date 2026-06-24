@@ -534,6 +534,15 @@ func TodayStats(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
 		scope := ResolveBranchScope(c, db)
+		// Rechazar branch_id de otro negocio (anti-exfiltración) en vez de caer
+		// silenciosamente a KPIs tenant-wide. Mismo patrón que ListSales.
+		if scope.NotOwned {
+			c.JSON(http.StatusForbidden, gin.H{
+				"error":      "la sucursal no pertenece al negocio",
+				"error_code": "branch_not_owned",
+			})
+			return
+		}
 
 		startOfToday := startOfTenantDay(tenantNow())
 		startOfYesterday := startOfToday.AddDate(0, 0, -1)

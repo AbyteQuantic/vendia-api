@@ -87,19 +87,39 @@ func ListBroadcastPromotions(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// Una sola query agregada (antes 2 COUNT por promo = N+1). db.Model
+		// conserva el scope soft-delete (deleted_at IS NULL) en el WHERE, así
+		// que audience y sent lo respetan. Audit 2026-06-24.
+		ids := make([]string, len(promos))
+		for i, p := range promos {
+			ids[i] = p.ID
+		}
+		type aggRow struct {
+			PromotionID string
+			Audience    int64
+			Sent        int64
+		}
+		metricsByID := make(map[string]aggRow, len(promos))
+		if len(ids) > 0 {
+			var rows []aggRow
+			db.Model(&models.BroadcastPromotionDelivery{}).
+				Select("promotion_id, COUNT(*) AS audience, COUNT(*) FILTER (WHERE status = ?) AS sent", models.PromotionDeliverySent).
+				Where("promotion_id IN ?", ids).
+				Group("promotion_id").
+				Scan(&rows)
+			for _, r := range rows {
+				metricsByID[r.PromotionID] = r
+			}
+		}
+
 		out := make([]gin.H, 0, len(promos))
 		for _, p := range promos {
-			var audience, sent int64
-			db.Model(&models.BroadcastPromotionDelivery{}).
-				Where("promotion_id = ?", p.ID).Count(&audience)
-			db.Model(&models.BroadcastPromotionDelivery{}).
-				Where("promotion_id = ? AND status = ?", p.ID, models.PromotionDeliverySent).
-				Count(&sent)
+			m := metricsByID[p.ID]
 			out = append(out, gin.H{
 				"promotion": p,
 				"metrics": gin.H{
-					"audience_count": audience,
-					"sent_count":     sent,
+					"audience_count": m.Audience,
+					"sent_count":     m.Sent,
 					"visit_count":    p.VisitCount,
 				},
 			})

@@ -709,27 +709,27 @@ func InventoryHealth(db *gorm.DB) gin.HandlerFunc {
 		tenantID := middleware.GetTenantID(c)
 		scope := ResolveBranchScope(c, db)
 
-		var totalValue float64
+		// Una sola pasada a products (antes 4): SUM + COUNT(*) FILTER. stock>0 se
+		// quita de la base (aporta 0 al SUM) para que los FILTER de low/out vean
+		// todas las filas; los números son idénticos. db.Model conserva el
+		// deleted_at IS NULL y el branch scope. Audit 2026-06-24.
+		var agg struct {
+			Cost   float64
+			Retail float64
+			Low    int64
+			Out    int64
+		}
 		ApplyBranchScope(db.Model(&models.Product{}), scope).
-			Where("tenant_id = ? AND is_available = true AND stock > 0", tenantID).
-			Select("COALESCE(SUM(purchase_price * stock), 0)").
-			Scan(&totalValue)
-
-		var totalRetailValue float64
-		ApplyBranchScope(db.Model(&models.Product{}), scope).
-			Where("tenant_id = ? AND is_available = true AND stock > 0", tenantID).
-			Select("COALESCE(SUM(price * stock), 0)").
-			Scan(&totalRetailValue)
-
-		var lowStockCount int64
-		ApplyBranchScope(db.Model(&models.Product{}), scope).
-			Where("tenant_id = ? AND is_available = true AND stock <= min_stock AND min_stock > 0", tenantID).
-			Count(&lowStockCount)
-
-		var outOfStockCount int64
-		ApplyBranchScope(db.Model(&models.Product{}), scope).
-			Where("tenant_id = ? AND is_available = true AND stock = 0", tenantID).
-			Count(&outOfStockCount)
+			Where("tenant_id = ? AND is_available = true", tenantID).
+			Select(`COALESCE(SUM(purchase_price * stock), 0) AS cost,
+				COALESCE(SUM(price * stock), 0) AS retail,
+				COUNT(*) FILTER (WHERE stock <= min_stock AND min_stock > 0) AS low,
+				COUNT(*) FILTER (WHERE stock = 0) AS out`).
+			Scan(&agg)
+		totalValue := agg.Cost
+		totalRetailValue := agg.Retail
+		lowStockCount := agg.Low
+		outOfStockCount := agg.Out
 
 		sevenDays := time.Now().AddDate(0, 0, 7).Format("2006-01-02")
 		var expiringCount int64

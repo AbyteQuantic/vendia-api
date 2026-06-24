@@ -22,7 +22,9 @@ func IncompleteMenuItems(db *gorm.DB) gin.HandlerFunc {
 		var completeIDs []string
 		db.Table("recipe_ingredients ri").
 			Joins("JOIN recipes r ON r.id = ri.recipe_uuid").
-			Where("r.tenant_id = ? AND r.product_id IS NOT NULL AND r.deleted_at IS NULL", tenantID).
+			// ri.deleted_at IS NULL: el Table crudo no aplica el soft-delete de
+			// GORM. Sin esto un insumo borrado contaría el plato como completo.
+			Where("r.tenant_id = ? AND r.product_id IS NOT NULL AND r.deleted_at IS NULL AND ri.deleted_at IS NULL", tenantID).
 			Distinct().Pluck("r.product_id", &completeIDs)
 
 		q := db.Model(&models.Product{}).
