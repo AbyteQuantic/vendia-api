@@ -571,11 +571,16 @@ func TodayStats(db *gorm.DB) gin.HandlerFunc {
 			Quantity int    `json:"quantity"`
 		}
 		var top TopProduct
-		db.Model(&models.SaleItem{}).
+		topQ := db.Model(&models.SaleItem{}).
 			Select("sale_items.name, SUM(sale_items.quantity) as quantity").
 			Joins("JOIN sales ON sales.id = sale_items.sale_id").
-			Where("sales.tenant_id = ? AND sales.created_at >= ? AND sales.deleted_at IS NULL", tenantID, startOfToday).
-			Group("sale_items.name").
+			Where("sales.tenant_id = ? AND sales.created_at >= ? AND sales.deleted_at IS NULL", tenantID, startOfToday)
+		// MISMO scope de sede que las stats hermanas: per-sede + globales. Antes
+		// sumaba TODAS las sedes (KPI inflado desde la Secundaria). Spec 078 council.
+		if scope.BranchID != "" {
+			topQ = topQ.Where("sales.branch_id = ? OR sales.branch_id IS NULL", scope.BranchID)
+		}
+		topQ.Group("sale_items.name").
 			Order("quantity DESC").
 			Limit(1).
 			Scan(&top)
