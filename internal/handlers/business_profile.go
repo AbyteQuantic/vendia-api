@@ -48,6 +48,7 @@ func GetBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 				"logo_url":               tenant.LogoURL,
 				"store_tagline":          tenant.StoreTagline,
 				"brand_color":            tenant.BrandColor,
+				"store_hours":            tenant.StoreHours,
 				"store_slug":             tenant.StoreSlug,
 				"owner_name":             tenant.OwnerName,
 				"phone":                  tenant.Phone,
@@ -182,6 +183,7 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 		// Spec 082 — personalización del catálogo online.
 		StoreTagline *string `json:"store_tagline"`
 		BrandColor   *string `json:"brand_color"`
+		StoreHours   *string `json:"store_hours"`
 
 		// Spec F036 — bandera del onboarding. El wizard la manda en
 		// `true` al terminar o al saltarse ("Configurar después").
@@ -246,6 +248,9 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 		}
 		if req.BrandColor != nil {
 			updates["brand_color"] = sanitizeHexColor(*req.BrandColor)
+		}
+		if req.StoreHours != nil {
+			updates["store_hours"] = *req.StoreHours
 		}
 		if req.Latitude != nil {
 			updates["latitude"] = *req.Latitude

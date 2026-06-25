@@ -202,6 +202,9 @@ type Tenant struct {
 	//   - BrandColor: color de marca (hex "#RRGGBB") para el tema del catálogo.
 	StoreTagline string `gorm:"type:varchar(140);default:''" json:"store_tagline"`
 	BrandColor   string `gorm:"type:varchar(9);default:''" json:"brand_color"`
+	// StoreHours: horario de atención legible ("Lun–Sáb 8am–8pm"). Se muestra en
+	// el catálogo público. Vacío = no se muestra. Spec 082 F2.
+	StoreHours string `gorm:"type:varchar(160);default:''" json:"store_hours"`
 
 	// ── IVA / Growth Radar (epic Safe Tax Flow) ───────────────────
 	// VATEnabled is the master switch for IVA flow. Frontend reads this
