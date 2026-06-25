@@ -1,9 +1,13 @@
 // Spec: specs/081-mercado-cercano-mapa/spec.md
 //
-// Ubicaciones de tiendas/mercados cercanos desde OpenStreetMap (Overpass API).
-// Gratis, sin llave. Se usa bajo demanda (al abrir "Mercado cercano") → NO
-// depende del cron (hoy bloqueado por CRON_TOKEN). Cache server-side por celda
-// para respetar los límites de Overpass.
+// Ubicaciones de tiendas/mercados cercanos para el MAPA "Mercado cercano".
+// Multi-fuente, bajo demanda (no depende del cron), con cache por celda:
+//   1. OpenStreetMap (Overpass) — gratis, cualquier supermercado mapeado.
+//   2. VTEX pickup-points de las cadenas del scraper (Éxito, Olímpica) —
+//      gratis, da sedes REALES con coords aunque OSM no las tenga.
+//   3. Google Places — OPCIONAL (solo si GOOGLE_PLACES_API_KEY está set):
+//      cubre cadenas que faltan (D1, Ara). Con costo → opt-in.
+// Se fusionan y deduplican por (nombre normalizado + coord redondeada).
 package services
 
 import (
@@ -14,6 +18,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -26,36 +31,61 @@ type NearbyMarket struct {
 	Address string  `json:"address,omitempty"`
 	Lat     float64 `json:"lat"`
 	Lng     float64 `json:"lng"`
+	Source  string  `json:"source,omitempty"` // osm | exito | olimpica | google
 }
+
+type vtexChain struct{ Chain, BaseURL string }
 
 type placesCacheEntry struct {
 	markets []NearbyMarket
 	at      time.Time
 }
 
-// PlacesService consulta Overpass con un fetcher inyectable (testeable) y
-// cachea por celda redondeada (TTL largo: las sedes no cambian a menudo).
+// PlacesService agrega las fuentes. Los fetchers son inyectables (tests).
 type PlacesService struct {
-	fetch    func(ctx context.Context, query string) ([]byte, error)
-	cacheTTL time.Duration
-	mu       sync.Mutex
-	cache    map[string]placesCacheEntry
+	overpass   func(ctx context.Context, query string) ([]byte, error)
+	httpGet    func(ctx context.Context, rawURL string) ([]byte, error)
+	vtexChains []vtexChain
+	googleKey  string
+	cacheTTL   time.Duration
+	mu         sync.Mutex
+	cache      map[string]placesCacheEntry
 }
 
 func NewPlacesService() *PlacesService {
 	return &PlacesService{
-		fetch:    overpassFetch,
-		cacheTTL: 24 * time.Hour,
-		cache:    map[string]placesCacheEntry{},
+		overpass: overpassFetch,
+		httpGet:  defaultHTTPGet,
+		vtexChains: []vtexChain{
+			{Chain: "exito", BaseURL: "https://www.exito.com"},
+			{Chain: "olimpica", BaseURL: "https://www.olimpica.com"},
+		},
+		googleKey: os.Getenv("GOOGLE_PLACES_API_KEY"),
+		cacheTTL:  24 * time.Hour,
+		cache:     map[string]placesCacheEntry{},
 	}
 }
 
-// NewPlacesServiceWithFetch inyecta el fetcher (tests).
-func NewPlacesServiceWithFetch(fetch func(ctx context.Context, query string) ([]byte, error)) *PlacesService {
-	return &PlacesService{fetch: fetch, cacheTTL: 24 * time.Hour, cache: map[string]placesCacheEntry{}}
+// NewPlacesServiceWithFetch inyecta ambos fetchers + cadenas + llave (tests).
+func NewPlacesServiceWithFetch(
+	overpass func(ctx context.Context, query string) ([]byte, error),
+	httpGet func(ctx context.Context, rawURL string) ([]byte, error),
+	chains []vtexChain,
+	googleKey string,
+) *PlacesService {
+	return &PlacesService{
+		overpass:   overpass,
+		httpGet:    httpGet,
+		vtexChains: chains,
+		googleKey:  googleKey,
+		cacheTTL:   24 * time.Hour,
+		cache:      map[string]placesCacheEntry{},
+	}
 }
 
-// NearbyMarkets devuelve supermercados/mercados a ≤ radiusM metros de (lat,lng).
+// NearbyMarkets fusiona todas las fuentes para (lat,lng) en un radio. Cachea el
+// resultado combinado por celda. Cada fuente falla en silencio: una caída de
+// Overpass no debe tumbar las sedes VTEX, ni viceversa.
 func (s *PlacesService) NearbyMarkets(ctx context.Context, lat, lng float64, radiusM int) ([]NearbyMarket, error) {
 	key := placesCacheKey(lat, lng, radiusM)
 	s.mu.Lock()
@@ -65,26 +95,113 @@ func (s *PlacesService) NearbyMarkets(ctx context.Context, lat, lng float64, rad
 	}
 	s.mu.Unlock()
 
-	body, err := s.fetch(ctx, BuildOverpassQuery(lat, lng, radiusM))
-	if err != nil {
-		return nil, fmt.Errorf("overpass: %w", err)
+	var (
+		wg   sync.WaitGroup
+		mu   sync.Mutex
+		all  []NearbyMarket
+		errs int
+	)
+	add := func(ms []NearbyMarket, err error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if err != nil {
+			errs++
+			return
+		}
+		all = append(all, ms...)
 	}
-	markets := ParseOverpassMarkets(body)
+
+	// 1. OSM.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		body, err := s.overpass(ctx, BuildOverpassQuery(lat, lng, radiusM))
+		if err != nil {
+			add(nil, err)
+			return
+		}
+		add(ParseOverpassMarkets(body), nil)
+	}()
+
+	// 2. VTEX pickup-points por cadena.
+	for _, ch := range s.vtexChains {
+		ch := ch
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			u := fmt.Sprintf("%s/api/checkout/pub/pickup-points?geoCoordinates=%f;%f", ch.BaseURL, lng, lat)
+			body, err := s.httpGet(ctx, u)
+			if err != nil {
+				add(nil, err)
+				return
+			}
+			add(ParseVTEXPickupPoints(body, ch.Chain), nil)
+		}()
+	}
+
+	// 3. Google Places (opcional).
+	if s.googleKey != "" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			u := fmt.Sprintf(
+				"https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=%f,%f&radius=%d&type=supermarket&key=%s",
+				lat, lng, radiusM, url.QueryEscape(s.googleKey))
+			body, err := s.httpGet(ctx, u)
+			if err != nil {
+				add(nil, err)
+				return
+			}
+			add(ParseGooglePlaces(body), nil)
+		}()
+	}
+
+	wg.Wait()
+
+	merged := DedupMarkets(all)
+	// Si TODAS las fuentes fallaron y no hay nada → error; si al menos una dio
+	// datos (o vacío legítimo), devolvemos lo que haya.
+	if len(merged) == 0 && errs > 0 && errs >= s.sourceCount() {
+		return nil, fmt.Errorf("todas las fuentes de mapa fallaron")
+	}
 
 	s.mu.Lock()
-	s.cache[key] = placesCacheEntry{markets: markets, at: time.Now()}
+	s.cache[key] = placesCacheEntry{markets: merged, at: time.Now()}
 	s.mu.Unlock()
-	return markets, nil
+	return merged, nil
 }
 
-// placesCacheKey redondea a ~110 m (3 decimales) + radio → celda de cache.
+func (s *PlacesService) sourceCount() int {
+	n := 1 + len(s.vtexChains) // OSM + VTEX
+	if s.googleKey != "" {
+		n++
+	}
+	return n
+}
+
 func placesCacheKey(lat, lng float64, radiusM int) string {
 	return fmt.Sprintf("%.3f:%.3f:%d", lat, lng, radiusM)
 }
 
-// BuildOverpassQuery arma la consulta Overpass QL para supermercados, tiendas
-// de conveniencia y mayoristas en el radio. `out center` da coords también a
-// los `way` (polígonos de tienda).
+// DedupMarkets quita repetidos por (nombre normalizado + coord ~110m). Cuando
+// dos fuentes traen la misma sede, gana la primera (orden: OSM, VTEX, Google).
+func DedupMarkets(in []NearbyMarket) []NearbyMarket {
+	seen := map[string]bool{}
+	out := make([]NearbyMarket, 0, len(in))
+	for _, m := range in {
+		k := fmt.Sprintf("%.3f:%.3f:%s", m.Lat, m.Lng,
+			strings.ToLower(strings.TrimSpace(m.Name)))
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, m)
+	}
+	return out
+}
+
+// ── OSM / Overpass ────────────────────────────────────────────────────────
+
 func BuildOverpassQuery(lat, lng float64, radiusM int) string {
 	const shops = `^(supermarket|convenience|wholesale|greengrocer)$`
 	return fmt.Sprintf(
@@ -93,13 +210,9 @@ func BuildOverpassQuery(lat, lng float64, radiusM int) string {
 	)
 }
 
-// ParseOverpassMarkets convierte la respuesta JSON de Overpass en sedes. Tolera
-// nodos (lat/lon directos) y ways (center.lat/lon). Omite los que no tienen
-// nombre ni coords. Pura → unit-testeable.
 func ParseOverpassMarkets(body []byte) []NearbyMarket {
 	var resp struct {
 		Elements []struct {
-			Type   string  `json:"type"`
 			Lat    float64 `json:"lat"`
 			Lon    float64 `json:"lon"`
 			Center *struct {
@@ -127,14 +240,11 @@ func ParseOverpassMarkets(body []byte) []NearbyMarket {
 			name = brand
 		}
 		if name == "" {
-			continue // sin nombre no sirve al tendero
+			continue
 		}
 		out = append(out, NearbyMarket{
-			Name:    name,
-			Brand:   brand,
-			Address: overpassAddress(e.Tags),
-			Lat:     lat,
-			Lng:     lng,
+			Name: name, Brand: brand, Address: overpassAddress(e.Tags),
+			Lat: lat, Lng: lng, Source: "osm",
 		})
 	}
 	return out
@@ -158,8 +268,107 @@ func overpassAddress(tags map[string]string) string {
 	return strings.Join(parts, ", ")
 }
 
-// overpassFetch hace el POST real a Overpass con un User-Agent claro (política
-// de uso de OSM). Round-robin simple de mirrors no — un endpoint estable.
+// ── VTEX pickup-points ─────────────────────────────────────────────────────
+
+// ParseVTEXPickupPoints convierte la respuesta de
+// {baseURL}/api/checkout/pub/pickup-points en sedes. OJO: VTEX da las coords
+// como [lng, lat] (al revés). Pura → testeable.
+func ParseVTEXPickupPoints(body []byte, chain string) []NearbyMarket {
+	var resp struct {
+		Items []struct {
+			PickupPoint struct {
+				FriendlyName string `json:"friendlyName"`
+				Address      struct {
+					GeoCoordinates []float64 `json:"geoCoordinates"` // [lng, lat]
+					Street         string    `json:"street"`
+					Number         string    `json:"number"`
+					City           string    `json:"city"`
+					Neighborhood   string    `json:"neighborhood"`
+				} `json:"address"`
+			} `json:"pickupPoint"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil
+	}
+	brand := vtexBrandLabel(chain)
+	out := make([]NearbyMarket, 0, len(resp.Items))
+	for _, it := range resp.Items {
+		pp := it.PickupPoint
+		if len(pp.Address.GeoCoordinates) < 2 {
+			continue
+		}
+		lng, lat := pp.Address.GeoCoordinates[0], pp.Address.GeoCoordinates[1]
+		if lat == 0 && lng == 0 {
+			continue
+		}
+		name := strings.TrimSpace(pp.FriendlyName)
+		if name == "" {
+			name = brand
+		}
+		addrParts := []string{}
+		if pp.Address.Street != "" {
+			addrParts = append(addrParts, strings.TrimSpace(pp.Address.Street+" "+pp.Address.Number))
+		}
+		if pp.Address.Neighborhood != "" {
+			addrParts = append(addrParts, pp.Address.Neighborhood)
+		}
+		if pp.Address.City != "" {
+			addrParts = append(addrParts, pp.Address.City)
+		}
+		out = append(out, NearbyMarket{
+			Name: name, Brand: brand, Address: strings.Join(addrParts, ", "),
+			Lat: lat, Lng: lng, Source: chain,
+		})
+	}
+	return out
+}
+
+func vtexBrandLabel(chain string) string {
+	switch chain {
+	case "exito":
+		return "Éxito"
+	case "olimpica":
+		return "Olímpica"
+	default:
+		return strings.Title(chain) //nolint:staticcheck — etiqueta simple
+	}
+}
+
+// ── Google Places (opcional) ───────────────────────────────────────────────
+
+func ParseGooglePlaces(body []byte) []NearbyMarket {
+	var resp struct {
+		Results []struct {
+			Name     string `json:"name"`
+			Vicinity string `json:"vicinity"`
+			Geometry struct {
+				Location struct {
+					Lat float64 `json:"lat"`
+					Lng float64 `json:"lng"`
+				} `json:"location"`
+			} `json:"geometry"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil
+	}
+	out := make([]NearbyMarket, 0, len(resp.Results))
+	for _, r := range resp.Results {
+		if r.Name == "" || (r.Geometry.Location.Lat == 0 && r.Geometry.Location.Lng == 0) {
+			continue
+		}
+		out = append(out, NearbyMarket{
+			Name: r.Name, Address: r.Vicinity,
+			Lat: r.Geometry.Location.Lat, Lng: r.Geometry.Location.Lng,
+			Source: "google",
+		})
+	}
+	return out
+}
+
+// ── HTTP fetchers reales ───────────────────────────────────────────────────
+
 func overpassFetch(ctx context.Context, query string) ([]byte, error) {
 	endpoint := "https://overpass-api.de/api/interpreter"
 	form := url.Values{"data": {query}}
@@ -170,6 +379,19 @@ func overpassFetch(ctx context.Context, query string) ([]byte, error) {
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("User-Agent", "VendIA/1.0 (mercado-cercano; soporte@vendia.store)")
+	return doHTTP(req)
+}
+
+func defaultHTTPGet(ctx context.Context, rawURL string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (VendIA mercado-cercano)")
+	return doHTTP(req)
+}
+
+func doHTTP(req *http.Request) ([]byte, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -179,11 +401,11 @@ func overpassFetch(ctx context.Context, query string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 4<<20)) // 4 MB tope
+	return io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 }
 
-// haversineKmSvc — distancia km (duplicado mínimo del de handlers para no crear
-// dependencia services→handlers). 6371 km radio terrestre.
+// ── Distancia / orden ──────────────────────────────────────────────────────
+
 func haversineKmSvc(lat1, lon1, lat2, lon2 float64) float64 {
 	const r = 6371.0
 	dLat := (lat2 - lat1) * math.Pi / 180
@@ -194,11 +416,9 @@ func haversineKmSvc(lat1, lon1, lat2, lon2 float64) float64 {
 	return r * 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 }
 
-// SortMarketsByDistance ordena (y filtra > radio) las sedes por cercanía a
-// (lat,lng). Devuelve pares {market, distKm}. Pura → testeable.
 type MarketWithDistance struct {
-	Market   NearbyMarket
-	DistKm   float64
+	Market NearbyMarket
+	DistKm float64
 }
 
 func SortMarketsByDistance(markets []NearbyMarket, lat, lng, radiusKm float64) []MarketWithDistance {
@@ -209,7 +429,6 @@ func SortMarketsByDistance(markets []NearbyMarket, lat, lng, radiusKm float64) [
 			out = append(out, MarketWithDistance{Market: m, DistKm: d})
 		}
 	}
-	// orden por distancia asc (insertion simple; listas chicas).
 	for i := 1; i < len(out); i++ {
 		for j := i; j > 0 && out[j].DistKm < out[j-1].DistKm; j-- {
 			out[j], out[j-1] = out[j-1], out[j]
