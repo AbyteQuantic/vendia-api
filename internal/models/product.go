@@ -37,6 +37,17 @@ type Product struct {
 	IsRecipe bool    `gorm:"default:false" json:"is_recipe"`
 	RecipeID *string `gorm:"type:uuid;index" json:"recipe_id,omitempty"`
 
+	// ── Spec 080 — platos por porciones (pre-hechos del día) ────────────
+	// AvailabilityMode: 'a_demanda' (default — se prepara al pedirlo, la venta
+	// explota la receta y descuenta insumos) | 'por_porciones' (se cocina un
+	// lote en la mañana: los insumos se descuentan UNA vez al preparar, y cada
+	// venta descuenta `stock` —porciones restantes— sin re-explotar la receta).
+	// Aditivo + default ''/a_demanda → los platos existentes no cambian (Art. X).
+	AvailabilityMode string `gorm:"default:'a_demanda'" json:"availability_mode"`
+	// PreparedDate: día (YYYY-MM-DD) del lote vigente de un plato por_porciones.
+	// Si != hoy, el lote es viejo → el plato queda AGOTADO hasta re-preparar.
+	PreparedDate *string `gorm:"type:varchar(10)" json:"prepared_date,omitempty"`
+
 	// ── Spec F043 — Menú de restaurante ─────────────────────────────────
 	// Description: texto del plato para el catálogo ("Hamburguesa artesanal
 	// con queso, papas y bebida"). Vacío para productos retail normales.

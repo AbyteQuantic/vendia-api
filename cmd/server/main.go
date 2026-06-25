@@ -509,6 +509,7 @@ func main() {
 		v1.POST("/products", handlers.CreateProduct(db, catalogSvc))
 		v1.PATCH("/products/:id", handlers.UpdateProduct(db, catalogSvc))
 		v1.POST("/products/:id/restock", handlers.RestockProduct(db))
+		v1.POST("/products/:id/prepare-batch", handlers.PrepareDishBatch(db)) // Spec 080 — cocinar lote de plato por porciones
 		v1.DELETE("/products/:id", handlers.DeleteProduct(db))
 		v1.POST("/products/seed", middleware.DevOnly(cfg.Env), handlers.SeedProducts(db))
 		// F027 — bulk import from Excel/CSV wizard (Flutter + admin-web).

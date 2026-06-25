@@ -82,7 +82,11 @@ func (s *SaleInventoryService) ApplyPostSale(tx *gorm.DB, p PostSaleParams) erro
 			continue
 		}
 
-		if product.IsRecipe {
+		// Spec 080: un plato "por porciones" YA descontó sus insumos al cocinar
+		// el lote (prepare-batch). Su venta NO debe re-explotar la receta o
+		// descontaría insumos dos veces (incidente mesas, Spec 052): cae al
+		// camino de producto directo y descuenta `stock` (porciones restantes).
+		if product.IsRecipe && product.AvailabilityMode != "por_porciones" {
 			// Product-receta: explode into insumo consumption. Idempotent
 			// per (SaleUUID, ingredient) so a re-apply is safe.
 			if err := s.recipes.ExplodeRecipe(tx, ExplodeParams{

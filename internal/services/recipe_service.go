@@ -34,6 +34,10 @@ type ExplodeParams struct {
 	Quantity  int    // how many units of the product were sold
 	BranchID  *string
 	UserID    *string
+	// ForPrep (Spec 080): true sólo cuando se cocina un lote de un plato
+	// "por porciones" (prepare-batch). Permite explotar la receta para
+	// descontar insumos una vez; en la VENTA va false → no se explota.
+	ForPrep bool
 }
 
 // ExplodeRecipe discounts the ingredients of a product-receta and logs
@@ -64,6 +68,15 @@ func (s *RecipeService) ExplodeRecipe(tx *gorm.DB, p ExplodeParams) error {
 		return nil //nolint:nilerr — a non-recipe / not-found product is a no-op by design
 	}
 	if !product.IsRecipe {
+		return nil
+	}
+	// Spec 080: un plato "por porciones" descuenta insumos SOLO al cocinar el
+	// lote (prepare-batch pasa ForPrep=true), nunca en la venta. Guard CENTRAL:
+	// cualquier ruta de VENTA que intente explotar su receta (syncSale offline)
+	// es no-op aquí → nunca doble descuento. El stock (porciones) se descuenta
+	// por el camino de producto directo. ApplyPostSale ya ni llega aquí para
+	// estos platos (toma la rama de stock).
+	if product.AvailabilityMode == "por_porciones" && !p.ForPrep {
 		return nil
 	}
 
