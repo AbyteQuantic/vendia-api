@@ -619,6 +619,8 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 				"business_type":    businessType,
 				"phone":            tenant.Phone,
 				"logo_url":         tenant.LogoURL,
+				"store_tagline":    tenant.StoreTagline, // Spec 082 — personalización
+				"brand_color":      tenant.BrandColor,
 				"is_open":          tenant.IsDeliveryOpen,
 				"delivery_cost":    tenant.DeliveryCost,
 				"min_order_amount": tenant.MinOrderAmount,

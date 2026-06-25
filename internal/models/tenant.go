@@ -196,6 +196,13 @@ type Tenant struct {
 	MinOrderAmount float64 `gorm:"default:0" json:"min_order_amount"`
 	LogoURL        string  `json:"logo_url,omitempty"`
 
+	// ── Spec 082 — personalización del catálogo online ──────────────────
+	// Aditivos (Art. X). Vacíos = el catálogo se ve como hoy.
+	//   - StoreTagline: eslogan/descripción corta bajo el nombre.
+	//   - BrandColor: color de marca (hex "#RRGGBB") para el tema del catálogo.
+	StoreTagline string `gorm:"type:varchar(140);default:''" json:"store_tagline"`
+	BrandColor   string `gorm:"type:varchar(9);default:''" json:"brand_color"`
+
 	// ── IVA / Growth Radar (epic Safe Tax Flow) ───────────────────
 	// VATEnabled is the master switch for IVA flow. Frontend reads this
 	// to drive the snapshot population on closed sales.

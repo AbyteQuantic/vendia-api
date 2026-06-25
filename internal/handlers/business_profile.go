@@ -46,6 +46,9 @@ func GetBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 				"latitude":               tenant.Latitude,
 				"longitude":              tenant.Longitude,
 				"logo_url":               tenant.LogoURL,
+				"store_tagline":          tenant.StoreTagline,
+				"brand_color":            tenant.BrandColor,
+				"store_slug":             tenant.StoreSlug,
 				"owner_name":             tenant.OwnerName,
 				"phone":                  tenant.Phone,
 				"payment_method_name":    tenant.PaymentMethodName,
@@ -146,6 +149,25 @@ type ProfileConfigInput struct {
 // (type-implied capabilities) OR (toggle values) — Spec F023 FR-07.
 // Accepts optional credit_label_mode ("fiar"|"credit") — Spec F028 FR-02.
 // PATCH /api/v1/store/profile
+// sanitizeHexColor acepta "" (limpiar) o un hex "#RRGGBB"/"#AARRGGBB"; cualquier
+// otra cosa se descarta (devuelve "") para no guardar basura en brand_color.
+func sanitizeHexColor(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if s[0] != '#' || (len(s) != 7 && len(s) != 9) {
+		return ""
+	}
+	for _, r := range s[1:] {
+		isHex := (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
+		if !isHex {
+			return ""
+		}
+	}
+	return s
+}
+
 func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 	type Request struct {
 		BusinessName    *string             `json:"business_name"`
@@ -157,6 +179,9 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 		Longitude       *float64            `json:"longitude"`
 		Config          *ProfileConfigInput `json:"config"`
 		CreditLabelMode *string             `json:"credit_label_mode"`
+		// Spec 082 — personalización del catálogo online.
+		StoreTagline *string `json:"store_tagline"`
+		BrandColor   *string `json:"brand_color"`
 
 		// Spec F036 — bandera del onboarding. El wizard la manda en
 		// `true` al terminar o al saltarse ("Configurar después").
@@ -213,6 +238,14 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 		}
 		if req.Address != nil {
 			updates["address"] = *req.Address
+		}
+		// Spec 082 — eslogan + color de marca del catálogo (whitelist suave del
+		// color: solo hex "#RRGGBB"/"#AARRGGBB" o vacío para limpiar).
+		if req.StoreTagline != nil {
+			updates["store_tagline"] = *req.StoreTagline
+		}
+		if req.BrandColor != nil {
+			updates["brand_color"] = sanitizeHexColor(*req.BrandColor)
 		}
 		if req.Latitude != nil {
 			updates["latitude"] = *req.Latitude
