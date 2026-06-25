@@ -25,6 +25,12 @@ type Recipe struct {
 	Yield     string `gorm:"default:''" json:"yield"`
 	PrepTime  string `gorm:"default:''" json:"prep_time"`
 	PrepSteps string `gorm:"type:jsonb;default:'[]'" json:"prep_steps"`
+
+	// Description NO es columna de recipes (gorm:"-"): la descripción del plato
+	// vive en el Product vinculado (lo que lee el catálogo). Se expone aquí como
+	// campo TRANSITORIO para que ListRecipes la devuelva y el Recipe Studio la
+	// precargue al editar (round-trip). La escritura va al Product. Spec 078.
+	Description string `gorm:"-" json:"description,omitempty"`
 }
 
 type RecipeIngredient struct {

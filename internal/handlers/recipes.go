@@ -62,6 +62,36 @@ func ListRecipes(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// La descripción del plato vive en el Product vinculado (no en recipes).
+		// La inyectamos como campo transitorio para que el Studio la precargue al
+		// editar (round-trip de #3 — antes salía vacía y "no persistía"). Spec 078.
+		productIDs := make([]string, 0, len(recipes))
+		for _, rc := range recipes {
+			if rc.ProductID != nil && *rc.ProductID != "" {
+				productIDs = append(productIDs, *rc.ProductID)
+			}
+		}
+		if len(productIDs) > 0 {
+			type pd struct {
+				ID          string
+				Description string
+			}
+			var rows []pd
+			db.Model(&models.Product{}).
+				Select("id, description").
+				Where("id IN ?", productIDs).
+				Scan(&rows)
+			descByID := make(map[string]string, len(rows))
+			for _, r := range rows {
+				descByID[r.ID] = r.Description
+			}
+			for i := range recipes {
+				if recipes[i].ProductID != nil {
+					recipes[i].Description = descByID[*recipes[i].ProductID]
+				}
+			}
+		}
+
 		c.JSON(http.StatusOK, gin.H{"data": recipes})
 	}
 }
@@ -176,9 +206,29 @@ func CreateRecipe(db *gorm.DB) gin.HandlerFunc {
 			// es un menú existente sin receta, se le LIGA la receta (no se crea un
 			// producto nuevo → sin duplicados). Si no se encuentra, cae a crear.
 			if req.LinkProductID != "" {
+				// Al COMPLETAR un plato importado, copiar también foto/descripción/
+				// categoría/emoji al Product — el catálogo online los lee de ahí.
+				// Antes solo se ligaba is_recipe/recipe_id/price → la foto quedaba
+				// en la receta pero el catálogo la mostraba vacía (#2). Solo se
+				// escriben si vienen (no pisar con vacío lo ya cargado).
+				linkUpdates := map[string]interface{}{
+					"is_recipe": true, "recipe_id": recipeID, "price": recipe.SalePrice,
+				}
+				if recipe.Category != "" {
+					linkUpdates["category"] = recipe.Category
+				}
+				if recipe.Emoji != "" {
+					linkUpdates["emoji"] = recipe.Emoji
+				}
+				if recipe.PhotoURL != "" {
+					linkUpdates["photo_url"] = recipe.PhotoURL
+				}
+				if req.Description != "" {
+					linkUpdates["description"] = req.Description
+				}
 				res := tx.Model(&models.Product{}).
 					Where("id = ? AND tenant_id = ? AND is_menu_item = ?", req.LinkProductID, tenantID, true).
-					Updates(map[string]interface{}{"is_recipe": true, "recipe_id": recipeID, "price": recipe.SalePrice})
+					Updates(linkUpdates)
 				if res.Error != nil {
 					return res.Error
 				}
@@ -239,6 +289,9 @@ func UpdateRecipe(db *gorm.DB) gin.HandlerFunc {
 		SalePrice   *float64 `json:"sale_price"`
 		Emoji       *string  `json:"emoji"`
 		PhotoURL    *string  `json:"photo_url"`
+		// Description: vive en el Product (lo lee el catálogo). UpdateRecipe la
+		// ignoraba → al editar un plato la descripción no persistía (#3). Spec 078.
+		Description *string `json:"description"`
 		// Spec 065 — metadatos de preparación (aditivos, no tocan el costeo).
 		Yield     *string     `json:"yield"`
 		PrepTime  *string     `json:"prep_time"`
@@ -368,6 +421,9 @@ func UpdateRecipe(db *gorm.DB) gin.HandlerFunc {
 			}
 			if req.PhotoURL != nil {
 				productUpdates["photo_url"] = *req.PhotoURL
+			}
+			if req.Description != nil {
+				productUpdates["description"] = *req.Description
 			}
 			if len(productUpdates) == 0 {
 				return nil
