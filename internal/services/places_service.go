@@ -111,11 +111,14 @@ func (s *PlacesService) NearbyMarkets(ctx context.Context, lat, lng float64, rad
 		all = append(all, ms...)
 	}
 
-	// 1. OSM.
+	// 1. OSM — Overpass suele ser LENTO; cap a 10s para no bloquear la respuesta
+	// (si tarda más, VTEX igual responde y el mapa muestra esas sedes).
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		body, err := s.overpass(ctx, BuildOverpassQuery(lat, lng, radiusM))
+		c, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		body, err := s.overpass(c, BuildOverpassQuery(lat, lng, radiusM))
 		if err != nil {
 			add(nil, err)
 			return
@@ -123,14 +126,16 @@ func (s *PlacesService) NearbyMarkets(ctx context.Context, lat, lng float64, rad
 		add(ParseOverpassMarkets(body), nil)
 	}()
 
-	// 2. VTEX pickup-points por cadena.
+	// 2. VTEX pickup-points por cadena (rápido; cap 8s por si una cadena cuelga).
 	for _, ch := range s.vtexChains {
 		ch := ch
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			c, cancel := context.WithTimeout(ctx, 8*time.Second)
+			defer cancel()
 			u := fmt.Sprintf("%s/api/checkout/pub/pickup-points?geoCoordinates=%f;%f", ch.BaseURL, lng, lat)
-			body, err := s.httpGet(ctx, u)
+			body, err := s.httpGet(c, u)
 			if err != nil {
 				add(nil, err)
 				return
