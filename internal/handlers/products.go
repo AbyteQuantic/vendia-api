@@ -80,6 +80,20 @@ func ListProducts(db *gorm.DB) gin.HandlerFunc {
 			Where("tenant_id = ? AND is_available = true", tenantID)
 		query = ApplyBranchScope(query, scope)
 
+		// sellable_only (POS / caché Isar): oculta los platos de menú
+		// INCOMPLETOS — is_menu_item sin receta con ingredientes, no costeables
+		// (Spec 078). El inventario y demás consumidores NO pasan el flag, así
+		// que los siguen viendo para poder completarlos. Una receta incompleta
+		// no es un plato vendible (reporte fundador 2026-06-24).
+		if c.Query("sellable_only") == "true" {
+			completeIDs := completeMenuProductIDs(db, tenantID)
+			if len(completeIDs) > 0 {
+				query = query.Where("is_menu_item = ? OR id IN ?", false, completeIDs)
+			} else {
+				query = query.Where("is_menu_item = ?", false)
+			}
+		}
+
 		var total int64
 		query.Count(&total)
 

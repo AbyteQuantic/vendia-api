@@ -19,13 +19,7 @@ func IncompleteMenuItems(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
 
-		var completeIDs []string
-		db.Table("recipe_ingredients ri").
-			Joins("JOIN recipes r ON r.id = ri.recipe_uuid").
-			// ri.deleted_at IS NULL: el Table crudo no aplica el soft-delete de
-			// GORM. Sin esto un insumo borrado contaría el plato como completo.
-			Where("r.tenant_id = ? AND r.product_id IS NOT NULL AND r.deleted_at IS NULL AND ri.deleted_at IS NULL", tenantID).
-			Distinct().Pluck("r.product_id", &completeIDs)
+		completeIDs := completeMenuProductIDs(db, tenantID)
 
 		q := db.Model(&models.Product{}).
 			Where("tenant_id = ? AND is_menu_item = ?", tenantID, true)
@@ -44,4 +38,20 @@ func IncompleteMenuItems(db *gorm.DB) gin.HandlerFunc {
 		}
 		c.JSON(http.StatusOK, gin.H{"data": out})
 	}
+}
+
+// completeMenuProductIDs devuelve los IDs de producto cuyo plato (is_menu_item)
+// tiene una receta con AL MENOS un ingrediente (no borrado) → es COSTEABLE, por
+// ende COMPLETO. Un plato sin esto está incompleto (no vendible). Fuente única
+// de verdad para /menu/incomplete y para el filtro sellable_only de ListProducts.
+//
+// ri.deleted_at IS NULL: el Table crudo no aplica el soft-delete de GORM; sin
+// esto un insumo borrado contaría el plato como completo.
+func completeMenuProductIDs(db *gorm.DB, tenantID string) []string {
+	var completeIDs []string
+	db.Table("recipe_ingredients ri").
+		Joins("JOIN recipes r ON r.id = ri.recipe_uuid").
+		Where("r.tenant_id = ? AND r.product_id IS NOT NULL AND r.deleted_at IS NULL AND ri.deleted_at IS NULL", tenantID).
+		Distinct().Pluck("r.product_id", &completeIDs)
+	return completeIDs
 }
