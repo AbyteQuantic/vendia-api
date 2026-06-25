@@ -107,6 +107,18 @@ func ListProducts(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// Spec 080 AC-03: un plato "por porciones" cuyo lote NO es de hoy está
+		// agotado hasta re-cocinar → reportamos stock 0 (efectivo). Así el POS
+		// lo muestra AGOTADO sin lógica de fechas en el cliente. Es solo de
+		// presentación: no toca la BD.
+		today := time.Now().Format("2006-01-02")
+		for i := range products {
+			if products[i].AvailabilityMode == "por_porciones" &&
+				(products[i].PreparedDate == nil || *products[i].PreparedDate != today) {
+				products[i].Stock = 0
+			}
+		}
+
 		c.JSON(http.StatusOK, newPaginatedResponse(products, total, p))
 	}
 }
@@ -405,6 +417,9 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		Characteristics *string `json:"characteristics"`
 		// Spec 063 — alternar "solo mayores de 18" al editar.
 		IsAgeRestricted *bool `json:"is_age_restricted"`
+		// Spec 080 — alternar el modo de venta del plato ('a_demanda' |
+		// 'por_porciones'). Volver a 'a_demanda' limpia el lote del día.
+		AvailabilityMode *string `json:"availability_mode"`
 
 		// Spec F029 — optional tier prices on PATCH. Same nullable
 		// semantics as CreateProduct.
@@ -431,6 +446,19 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		}
 
 		updates := map[string]any{}
+		// Spec 080 — modo de venta del plato. Whitelist (solo dos valores) para
+		// no escribir basura. Volver a 'a_demanda' limpia el lote del día
+		// (prepared_date) → el plato vuelve a estar disponible por receta.
+		if req.AvailabilityMode != nil {
+			mode := "a_demanda"
+			if *req.AvailabilityMode == "por_porciones" {
+				mode = "por_porciones"
+			}
+			updates["availability_mode"] = mode
+			if mode == "a_demanda" {
+				updates["prepared_date"] = nil
+			}
+		}
 		if req.Name != nil {
 			updates["name"] = *req.Name
 		}

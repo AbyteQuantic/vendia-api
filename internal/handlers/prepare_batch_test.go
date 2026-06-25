@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"vendia-backend/internal/handlers"
 	"vendia-backend/internal/middleware"
@@ -87,6 +88,50 @@ func TestPrepareDishBatch_DiscountsInsumosOnceAndSetsStock(t *testing.T) {
 	require.Equal(t, http.StatusOK, w2.Code, w2.Body.String())
 	require.NoError(t, db.First(&arroz, "id = ?", insID).Error)
 	assert.InDelta(t, 3.0, arroz.Stock, 1e-9, "doble preparado mismo día no re-descuenta insumos")
+}
+
+// AC-03: un plato por_porciones con lote de AYER reporta stock 0 (agotado)
+// en GET /products; con lote de HOY reporta su stock real.
+func TestListProducts_PorPorciones_StaleBatchReportsZero(t *testing.T) {
+	db := setupPrepareBatchDB(t)
+	const tenant = "tenant-stale"
+	today := time.Now().Format("2006-01-02")
+	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+
+	fresh := today
+	stale := yesterday
+	require.NoError(t, db.Create(&models.Product{
+		BaseModel: models.BaseModel{ID: "p-fresh"}, TenantID: tenant, Name: "Hoy",
+		IsMenuItem: true, IsRecipe: true, Stock: 7,
+		AvailabilityMode: "por_porciones", PreparedDate: &fresh,
+	}).Error)
+	require.NoError(t, db.Create(&models.Product{
+		BaseModel: models.BaseModel{ID: "p-stale"}, TenantID: tenant, Name: "Ayer",
+		IsMenuItem: true, IsRecipe: true, Stock: 5,
+		AvailabilityMode: "por_porciones", PreparedDate: &stale,
+	}).Error)
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set(middleware.TenantIDKey, tenant); c.Next() })
+	r.GET("/api/v1/products", handlers.ListProducts(db))
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/products", nil))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var resp struct {
+		Data []struct {
+			Name  string `json:"name"`
+			Stock int    `json:"stock"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	byName := map[string]int{}
+	for _, d := range resp.Data {
+		byName[d.Name] = d.Stock
+	}
+	assert.Equal(t, 7, byName["Hoy"], "lote de hoy mantiene su stock")
+	assert.Equal(t, 0, byName["Ayer"], "lote viejo se reporta agotado")
 }
 
 // Un plato incompleto (sin receta) no se puede cocinar por lote.
