@@ -198,6 +198,9 @@ func main() {
 	catalogSvc := services.NewCatalogService(db, storageSvc)
 	catalogSvc.StartCleanupTicker(context.Background())
 
+	// Spec 081 — mercado cercano (mapa de tiendas reales vía OpenStreetMap).
+	placesSvc := services.NewPlacesService()
+
 	// Daily self-heal: scan products for URLs whose bucket file is gone and
 	// clear them so the UI can show "generate photo" instead of a broken image.
 	// Loud regression alarm if image loss ever happens again.
@@ -732,6 +735,7 @@ func main() {
 
 		// Suppliers
 		v1.GET("/suppliers/nearby", handlers.SuppliersNearby(db))              // Spec 075 — descubrimiento por cercanía
+		v1.GET("/market/nearby", handlers.MarketNearby(db, placesSvc))         // Spec 081 — mapa de tiendas reales (OSM)
 		v1.GET("/suppliers/:uuid/catalog", handlers.SupplierCatalog(db))       // Spec 075 — catálogo del proveedor (cross-tenant)
 		v1.POST("/suppliers/:uuid/orders", handlers.PlaceSupplierOrder(db))    // Spec 075 — pedido a proveedor
 		v1.GET("/supplier/inbox", handlers.SupplierInbox(db))                  // Spec 075 — buzón del proveedor
