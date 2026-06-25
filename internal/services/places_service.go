@@ -111,22 +111,12 @@ func (s *PlacesService) NearbyMarkets(ctx context.Context, lat, lng float64, rad
 		all = append(all, ms...)
 	}
 
-	// 1. OSM — Overpass suele ser LENTO; cap a 10s para no bloquear la respuesta
-	// (si tarda más, VTEX igual responde y el mapa muestra esas sedes).
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		c, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
-		body, err := s.overpass(c, BuildOverpassQuery(lat, lng, radiusM))
-		if err != nil {
-			add(nil, err)
-			return
-		}
-		add(ParseOverpassMarkets(body), nil)
-	}()
+	// Fuentes = SOLO surtido real (decisión fundador): cadenas del scraping
+	// (VTEX) + Google opcional. NO OSM — traía tiendas de barrio (competencia,
+	// ruido tipo "Tienda RJJ"), no proveedores. Los proveedores propios del
+	// tenant los agrega el handler desde la BD.
 
-	// 2. VTEX pickup-points por cadena (rápido; cap 8s por si una cadena cuelga).
+	// 1. VTEX pickup-points por cadena (rápido; cap 8s por si una cadena cuelga).
 	for _, ch := range s.vtexChains {
 		ch := ch
 		wg.Add(1)
@@ -144,7 +134,7 @@ func (s *PlacesService) NearbyMarkets(ctx context.Context, lat, lng float64, rad
 		}()
 	}
 
-	// 3. Google Places (opcional).
+	// 2. Google Places (opcional).
 	if s.googleKey != "" {
 		wg.Add(1)
 		go func() {
@@ -177,7 +167,7 @@ func (s *PlacesService) NearbyMarkets(ctx context.Context, lat, lng float64, rad
 }
 
 func (s *PlacesService) sourceCount() int {
-	n := 1 + len(s.vtexChains) // OSM + VTEX
+	n := len(s.vtexChains) // VTEX (scraping). OSM se removió a propósito.
 	if s.googleKey != "" {
 		n++
 	}

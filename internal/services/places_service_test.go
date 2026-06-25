@@ -86,15 +86,14 @@ func TestSortMarketsByDistance_FiltersAndSorts(t *testing.T) {
 	assert.Equal(t, "Medio", out[1].Market.Name)
 }
 
-func TestNearbyMarkets_MergesOSMandVTEX_AndCaches(t *testing.T) {
+func TestNearbyMarkets_VTEXOnly_NoOSM_AndCaches(t *testing.T) {
 	osmCalls, getCalls := 0, 0
 	overpass := func(ctx context.Context, q string) ([]byte, error) {
-		osmCalls++
+		osmCalls++ // ya NO debe llamarse (OSM removido)
 		return []byte(`{"elements":[{"type":"node","lat":4.361,"lon":-74.808,"tags":{"shop":"supermarket","name":"Supercundi"}}]}`), nil
 	}
 	httpGet := func(ctx context.Context, rawURL string) ([]byte, error) {
 		getCalls++
-		// Cualquier cadena VTEX devuelve una sede.
 		return []byte(`{"items":[{"pickupPoint":{"friendlyName":"Exito Girardot","address":{"geoCoordinates":[-74.804,4.302]}}}]}`), nil
 	}
 	svc := NewPlacesServiceWithFetch(overpass, httpGet,
@@ -102,18 +101,21 @@ func TestNearbyMarkets_MergesOSMandVTEX_AndCaches(t *testing.T) {
 
 	m, err := svc.NearbyMarkets(context.Background(), 4.36, -74.80, 5000)
 	require.NoError(t, err)
-	names := []string{}
-	for _, x := range m {
-		names = append(names, x.Name)
-	}
-	assert.Contains(t, strings.Join(names, ","), "Supercundi", "trae OSM")
-	assert.Contains(t, strings.Join(names, ","), "Exito Girardot", "trae VTEX")
+	names := strings.Join(func() []string {
+		out := []string{}
+		for _, x := range m {
+			out = append(out, x.Name)
+		}
+		return out
+	}(), ",")
+	assert.NotContains(t, names, "Supercundi", "OSM removido: NO trae tiendas de barrio")
+	assert.Contains(t, names, "Exito Girardot", "trae VTEX (scraping)")
+	assert.Equal(t, 0, osmCalls, "OSM no se consulta")
 
-	// Segunda llamada misma celda → cache (no vuelve a llamar fuentes).
+	// Segunda llamada misma celda → cache.
 	_, err = svc.NearbyMarkets(context.Background(), 4.36, -74.80, 5000)
 	require.NoError(t, err)
-	assert.Equal(t, 1, osmCalls)
-	assert.Equal(t, 1, getCalls)
+	assert.Equal(t, 1, getCalls, "VTEX sale de cache la 2da vez")
 }
 
 func TestNearbyMarkets_AllSourcesFail_ReturnsError(t *testing.T) {

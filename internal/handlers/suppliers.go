@@ -28,11 +28,14 @@ func ListSuppliers(db *gorm.DB) gin.HandlerFunc {
 
 func CreateSupplier(db *gorm.DB) gin.HandlerFunc {
 	type Request struct {
-		ID          string `json:"id"`
-		CompanyName string `json:"company_name" binding:"required"`
-		ContactName string `json:"contact_name"`
-		Phone       string `json:"phone"        binding:"required"`
-		Emoji       string `json:"emoji"`
+		ID          string  `json:"id"`
+		CompanyName string  `json:"company_name" binding:"required"`
+		ContactName string  `json:"contact_name"`
+		Phone       string  `json:"phone"        binding:"required"`
+		Emoji       string  `json:"emoji"`
+		Latitude    float64 `json:"latitude"`  // Spec 081 — ubicación opcional
+		Longitude   float64 `json:"longitude"`
+		Address     string  `json:"address"`
 	}
 
 	return func(c *gin.Context) {
@@ -55,6 +58,9 @@ func CreateSupplier(db *gorm.DB) gin.HandlerFunc {
 			ContactName: req.ContactName,
 			Phone:       req.Phone,
 			Emoji:       req.Emoji,
+			Latitude:    req.Latitude,
+			Longitude:   req.Longitude,
+			Address:     req.Address,
 		}
 		if req.ID != "" {
 			supplier.ID = req.ID
@@ -71,10 +77,13 @@ func CreateSupplier(db *gorm.DB) gin.HandlerFunc {
 
 func UpdateSupplier(db *gorm.DB) gin.HandlerFunc {
 	type Request struct {
-		CompanyName *string `json:"company_name"`
-		ContactName *string `json:"contact_name"`
-		Phone       *string `json:"phone"`
-		Emoji       *string `json:"emoji"`
+		CompanyName *string  `json:"company_name"`
+		ContactName *string  `json:"contact_name"`
+		Phone       *string  `json:"phone"`
+		Emoji       *string  `json:"emoji"`
+		Latitude    *float64 `json:"latitude"`  // Spec 081
+		Longitude   *float64 `json:"longitude"`
+		Address     *string  `json:"address"`
 	}
 
 	return func(c *gin.Context) {
@@ -106,6 +115,15 @@ func UpdateSupplier(db *gorm.DB) gin.HandlerFunc {
 		}
 		if req.Emoji != nil {
 			updates["emoji"] = *req.Emoji
+		}
+		if req.Latitude != nil {
+			updates["latitude"] = *req.Latitude
+		}
+		if req.Longitude != nil {
+			updates["longitude"] = *req.Longitude
+		}
+		if req.Address != nil {
+			updates["address"] = *req.Address
 		}
 
 		if err := db.Model(&supplier).Updates(updates).Error; err != nil {

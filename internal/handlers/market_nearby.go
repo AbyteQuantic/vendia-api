@@ -41,17 +41,25 @@ func MarketNearby(db *gorm.DB, places *services.PlacesService) gin.HandlerFunc {
 			}
 		}
 
-		markets, err := places.NearbyMarkets(
+		// Fuentes externas (cadenas del scraping vía VTEX + Google opcional).
+		// Si fallan, igual seguimos con los proveedores del tenant.
+		markets, extErr := places.NearbyMarkets(
 			c.Request.Context(), me.Latitude, me.Longitude, int(radius*1000))
-		if err != nil {
-			// No reventar el mapa: devolvemos el origen para que igual se
-			// dibuje, con aviso de que la fuente externa falló.
-			c.JSON(http.StatusOK, gin.H{
-				"origin": gin.H{"lat": me.Latitude, "lng": me.Longitude},
-				"data":   []gin.H{},
-				"source_error": "No pudimos consultar el mapa de tiendas ahora. Intente más tarde.",
+
+		// Proveedores propios del tenant con ubicación fijada (Spec 081). Estos
+		// SIEMPRE se muestran (no dependen de fuentes externas).
+		var suppliers []models.Supplier
+		db.Where("tenant_id = ? AND NOT (latitude = 0 AND longitude = 0)", tenantID).
+			Find(&suppliers)
+		for _, sup := range suppliers {
+			markets = append(markets, services.NearbyMarket{
+				Name:    sup.CompanyName,
+				Brand:   "Mi proveedor",
+				Address: sup.Address,
+				Lat:     sup.Latitude,
+				Lng:     sup.Longitude,
+				Source:  "proveedor",
 			})
-			return
 		}
 
 		sorted := services.SortMarketsByDistance(markets, me.Latitude, me.Longitude, radius)
@@ -64,11 +72,18 @@ func MarketNearby(db *gorm.DB, places *services.PlacesService) gin.HandlerFunc {
 				"lat":         mw.Market.Lat,
 				"lng":         mw.Market.Lng,
 				"distance_km": math.Round(mw.DistKm*10) / 10,
+				"source":      mw.Market.Source, // proveedor | exito | olimpica | google
 			})
 		}
-		c.JSON(http.StatusOK, gin.H{
+		resp := gin.H{
 			"origin": gin.H{"lat": me.Latitude, "lng": me.Longitude},
 			"data":   out,
-		})
+		}
+		// Solo avisamos si las fuentes externas fallaron Y no quedó nada que
+		// mostrar (ni proveedores propios) — para no asustar sin necesidad.
+		if extErr != nil && len(out) == 0 {
+			resp["source_error"] = "No pudimos consultar las cadenas ahora. Intente más tarde."
+		}
+		c.JSON(http.StatusOK, resp)
 	}
 }
