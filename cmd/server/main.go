@@ -866,6 +866,9 @@ func main() {
 		// Business profile
 		v1.GET("/store/profile", handlers.GetBusinessProfile(db))
 		v1.PATCH("/store/profile", handlers.UpdateBusinessProfile(db))
+		// Spec 082 F2b — portada del catálogo con IA (generar desde cero o
+		// mejorar la imagen subida).
+		v1.POST("/store/cover-ai", handlers.GenerateStoreCover(db, geminiSvc, storageSvc))
 
 		// VAT / Growth Radar (Safe Tax Flow epic) — backend mirror of the
 		// Flutter TaxSettingsService (SharedPreferences). Hydrated on login.
