@@ -622,6 +622,7 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 				"store_tagline":    tenant.StoreTagline, // Spec 082 — personalización
 				"brand_color":      tenant.BrandColor,
 				"store_hours":      tenant.StoreHours,
+				"store_cover_url":  tenant.StoreCoverURL,
 				"address":          tenant.Address,
 				"is_open":          tenant.IsDeliveryOpen,
 				"delivery_cost":    tenant.DeliveryCost,

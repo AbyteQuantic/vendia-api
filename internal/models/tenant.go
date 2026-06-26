@@ -205,6 +205,9 @@ type Tenant struct {
 	// StoreHours: horario de atención legible ("Lun–Sáb 8am–8pm"). Se muestra en
 	// el catálogo público. Vacío = no se muestra. Spec 082 F2.
 	StoreHours string `gorm:"type:varchar(160);default:''" json:"store_hours"`
+	// StoreCoverURL: imagen de PORTADA/banner propia del catálogo (la elige el
+	// tendero). Vacío = se usa el banner de la plantilla. Spec 082 F2b.
+	StoreCoverURL string `gorm:"type:text;default:''" json:"store_cover_url"`
 
 	// ── IVA / Growth Radar (epic Safe Tax Flow) ───────────────────
 	// VATEnabled is the master switch for IVA flow. Frontend reads this

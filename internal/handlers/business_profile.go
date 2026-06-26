@@ -49,6 +49,7 @@ func GetBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 				"store_tagline":          tenant.StoreTagline,
 				"brand_color":            tenant.BrandColor,
 				"store_hours":            tenant.StoreHours,
+				"store_cover_url":        tenant.StoreCoverURL,
 				"store_slug":             tenant.StoreSlug,
 				"owner_name":             tenant.OwnerName,
 				"phone":                  tenant.Phone,
@@ -181,9 +182,10 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 		Config          *ProfileConfigInput `json:"config"`
 		CreditLabelMode *string             `json:"credit_label_mode"`
 		// Spec 082 — personalización del catálogo online.
-		StoreTagline *string `json:"store_tagline"`
-		BrandColor   *string `json:"brand_color"`
-		StoreHours   *string `json:"store_hours"`
+		StoreTagline  *string `json:"store_tagline"`
+		BrandColor    *string `json:"brand_color"`
+		StoreHours    *string `json:"store_hours"`
+		StoreCoverURL *string `json:"store_cover_url"`
 
 		// Spec F036 — bandera del onboarding. El wizard la manda en
 		// `true` al terminar o al saltarse ("Configurar después").
@@ -251,6 +253,9 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 		}
 		if req.StoreHours != nil {
 			updates["store_hours"] = *req.StoreHours
+		}
+		if req.StoreCoverURL != nil {
+			updates["store_cover_url"] = *req.StoreCoverURL
 		}
 		if req.Latitude != nil {
 			updates["latitude"] = *req.Latitude
