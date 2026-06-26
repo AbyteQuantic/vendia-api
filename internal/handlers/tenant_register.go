@@ -116,6 +116,18 @@ func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 			FractionalUnits: req.Config.SellsByWeight,
 		})
 
+		// Spec 075 — ser proveedor B2B SÍ se deriva del tipo al registrarse: es
+		// la identidad del negocio (no una capacidad opcional como Mesas/KDS que
+		// se dejan en false por AC-01). Sin esto, un negocio que se registra como
+		// "Proveedor mayorista/agrícola" no vería su Panel de proveedor.
+		for _, t := range businessTypes {
+			if t == models.BusinessTypeProveedorAgricola ||
+				t == models.BusinessTypeProveedorMayorista {
+				flags.EnableSupplierMode = true
+				break
+			}
+		}
+
 		var tenant models.Tenant
 		var user models.User
 

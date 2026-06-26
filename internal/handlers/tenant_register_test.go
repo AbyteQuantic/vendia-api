@@ -496,3 +496,55 @@ func TestTenantRegister_NoCapabilitiesByType(t *testing.T) {
 		})
 	}
 }
+
+// Spec 075 — registrarse como proveedor B2B debe derivar EnableSupplierMode
+// (panel de proveedor) y persistir el tipo. Cierra el flujo de ONBOARDING de
+// proveedores (antes solo existían por seed). Corre en CI con Postgres; se
+// salta sin DB local (TCP pre-check de setupTestDB).
+func TestRegister_Proveedor_DerivaSupplierMode(t *testing.T) {
+	db := setupTestDB(t)
+	phone := uniquePhone()
+	t.Cleanup(func() { cleanupByPhone(t, db, phone) })
+
+	payload := defaultPayload(phone)
+	payload.Business.Type = "proveedor_mayorista"
+	w := postJSON(setupRouter(db), payload)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var tenant models.Tenant
+	require.NoError(t, db.Where("phone = ?", phone).First(&tenant).Error)
+	assert.Contains(t, tenant.BusinessTypes, "proveedor_mayorista",
+		"el tipo de proveedor debe persistir en el tenant")
+	assert.True(t, tenant.FeatureFlags.EnableSupplierMode,
+		"registrarse como proveedor debe activar el Panel de proveedor")
+}
+
+// El tipo agrícola también activa el modo proveedor.
+func TestRegister_ProveedorAgricola_DerivaSupplierMode(t *testing.T) {
+	db := setupTestDB(t)
+	phone := uniquePhone()
+	t.Cleanup(func() { cleanupByPhone(t, db, phone) })
+
+	payload := defaultPayload(phone)
+	payload.Business.Type = "proveedor_agricola"
+	w := postJSON(setupRouter(db), payload)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var tenant models.Tenant
+	require.NoError(t, db.Where("phone = ?", phone).First(&tenant).Error)
+	assert.True(t, tenant.FeatureFlags.EnableSupplierMode)
+}
+
+// Una tienda normal NO debe quedar en modo proveedor (regresión del AC-01).
+func TestRegister_TiendaNormal_SinSupplierMode(t *testing.T) {
+	db := setupTestDB(t)
+	phone := uniquePhone()
+	t.Cleanup(func() { cleanupByPhone(t, db, phone) })
+
+	w := postJSON(setupRouter(db), defaultPayload(phone)) // tienda_barrio
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var tenant models.Tenant
+	require.NoError(t, db.Where("phone = ?", phone).First(&tenant).Error)
+	assert.False(t, tenant.FeatureFlags.EnableSupplierMode)
+}
