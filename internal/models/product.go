@@ -65,6 +65,13 @@ type Product struct {
 	// módulo (cámara/manual/voz) y las recetas.
 	IsMenuItem bool `gorm:"default:false;index" json:"is_menu_item"`
 
+	// ── Spec 082 F3 — organización del catálogo online (aditivos) ─────────
+	// HiddenInCatalog: el producto NO aparece en la tienda en línea (sigue en
+	// el POS). IsFeatured: aparece DESTACADO (primero + estrella). Default
+	// false → catálogo se ve como hoy.
+	HiddenInCatalog bool `gorm:"default:false;index" json:"hidden_in_catalog"`
+	IsFeatured      bool `gorm:"default:false;index" json:"is_featured"`
+
 	// PhotoIsSample marca que ImageURL es una foto de MUESTRA generada por IA
 	// a partir del nombre (una ilustración), NO la foto real del plato. El
 	// catálogo público la etiqueta como "Imagen de muestra" para no engañar al

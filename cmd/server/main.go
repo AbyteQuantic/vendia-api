@@ -869,6 +869,9 @@ func main() {
 		// Spec 082 F2b — portada del catálogo con IA (generar desde cero o
 		// mejorar la imagen subida).
 		v1.POST("/store/cover-ai", handlers.GenerateStoreCover(db, geminiSvc, storageSvc))
+		// Spec 082 F3 — organizar el catálogo (orden de categorías, ocultar,
+		// destacados).
+		v1.PATCH("/store/catalog-organization", handlers.UpdateCatalogOrganization(db))
 
 		// VAT / Growth Radar (Safe Tax Flow epic) — backend mirror of the
 		// Flutter TaxSettingsService (SharedPreferences). Hydrated on login.

@@ -208,6 +208,9 @@ type Tenant struct {
 	// StoreCoverURL: imagen de PORTADA/banner propia del catálogo (la elige el
 	// tendero). Vacío = se usa el banner de la plantilla. Spec 082 F2b.
 	StoreCoverURL string `gorm:"type:text;default:''" json:"store_cover_url"`
+	// CategoryOrder: orden personalizado de las categorías en el catálogo
+	// público. Las no listadas van al final (alfabético). Spec 082 F3.
+	CategoryOrder []string `gorm:"serializer:json;default:'[]'" json:"category_order"`
 
 	// ── IVA / Growth Radar (epic Safe Tax Flow) ───────────────────
 	// VATEnabled is the master switch for IVA flow. Frontend reads this

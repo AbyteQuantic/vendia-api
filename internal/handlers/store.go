@@ -298,8 +298,10 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 		// Stock/availability is still surfaced per-product so the
 		// web can show "Agotado" or disable add-to-cart client-side.
 		var products []models.Product
-		db.Where("tenant_id = ?", tenant.ID).
-			Order("name ASC").
+		// Spec 082 F3 — los productos ocultos no salen en el catálogo público
+		// (siguen visibles en el POS). Los destacados primero.
+		db.Where("tenant_id = ? AND hidden_in_catalog = ?", tenant.ID, false).
+			Order("is_featured DESC, name ASC").
 			Find(&products)
 
 		// Spec 070 — media EXTRA por producto, en UN solo Find (sin N+1).
@@ -342,6 +344,7 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 			Description string `json:"description,omitempty"`
 			Portion     string `json:"portion,omitempty"`
 			IsMenuItem  bool   `json:"is_menu_item"`
+			IsFeatured  bool   `json:"is_featured"` // Spec 082 F3 — destacado
 			// Spec 068 — características del producto (texto libre): el catálogo
 			// las muestra en el detalle ("card interna").
 			Characteristics string `json:"characteristics,omitempty"`
@@ -407,6 +410,7 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 				Portion:         p.Portion,
 				Characteristics: p.Characteristics,
 				IsMenuItem:      p.IsMenuItem,
+				IsFeatured:      p.IsFeatured,
 				PhotoIsSample:   p.PhotoIsSample,
 				IsService:       p.IsService,
 				IsAgeRestricted: p.IsAgeRestricted,
@@ -623,6 +627,7 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 				"brand_color":      tenant.BrandColor,
 				"store_hours":      tenant.StoreHours,
 				"store_cover_url":  tenant.StoreCoverURL,
+				"category_order":   tenant.CategoryOrder, // Spec 082 F3
 				"address":          tenant.Address,
 				"is_open":          tenant.IsDeliveryOpen,
 				"delivery_cost":    tenant.DeliveryCost,
