@@ -24,6 +24,8 @@ type NearbySupplier struct {
 	DistanceKm        float64  `json:"distance_km"`
 	ProductCount      int      `json:"product_count"`
 	ExpiringSoonCount int      `json:"expiring_soon_count"`
+	Lat               float64  `json:"lat"` // Spec 075 — para la vista de mapa
+	Lng               float64  `json:"lng"`
 }
 
 const (
@@ -136,6 +138,8 @@ func SuppliersNearby(db *gorm.DB) gin.HandlerFunc {
 				DistanceKm:        math.Round(m.dist*100) / 100,
 				ProductCount:      productCount[m.t.ID],
 				ExpiringSoonCount: expiringCount[m.t.ID],
+				Lat:               m.t.Latitude,
+				Lng:               m.t.Longitude,
 			})
 		}
 		// Orden por distancia ascendente.
@@ -145,6 +149,9 @@ func SuppliersNearby(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 
-		c.JSON(http.StatusOK, gin.H{"data": out})
+		c.JSON(http.StatusOK, gin.H{
+			"data":   out,
+			"origin": gin.H{"lat": me.Latitude, "lng": me.Longitude}, // Spec 075 — centro del mapa
+		})
 	}
 }
