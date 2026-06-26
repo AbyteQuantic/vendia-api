@@ -897,6 +897,8 @@ func main() {
 		// Logo IA
 		v1.POST("/tenant/generate-logo", handlers.GenerateLogo(db, geminiSvc, storageSvc))
 		v1.POST("/tenant/upload-logo", handlers.UploadLogo(db, storageSvc))
+		// Spec 082 — mejorar el logo con IA (sube su logo actual y lo realza).
+		v1.POST("/tenant/enhance-logo", handlers.EnhanceTenantLogo(db, geminiSvc, storageSvc))
 
 		// Owner PIN — cashier handshake for restricted actions (new fiado, void, etc.)
 		v1.POST("/tenant/owner-pin", handlers.SetOwnerPin(db))

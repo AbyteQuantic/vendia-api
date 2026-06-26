@@ -110,6 +110,69 @@ func GenerateLogo(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc ser
 	}
 }
 
+// EnhanceTenantLogo — POST /api/v1/tenant/enhance-logo (Spec 082)
+//
+// "Mejorar logo con IA": el tendero sube su logo actual y Gemini lo limpia /
+// realza (mismo motor EnhancePhoto que las fotos de producto). Persiste el
+// nuevo logo_url y lo devuelve.
+func EnhanceTenantLogo(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		if geminiSvc == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "IA no disponible"})
+			return
+		}
+		if storageSvc == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "almacenamiento no configurado"})
+			return
+		}
+
+		file, header, err := c.Request.FormFile("logo")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "logo requerido (campo: logo)"})
+			return
+		}
+		defer file.Close()
+		if header.Size > 5<<20 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "logo excede 5MB"})
+			return
+		}
+		data, err := io.ReadAll(file)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al leer logo"})
+			return
+		}
+		mimeType := detectImageType(data)
+		if !uploadableImageTypes[mimeType] {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":      logoFormatoNoSoportadoMsg,
+				"error_code": logoFormatoNoSoportadoCode,
+			})
+			return
+		}
+
+		var tenant models.Tenant
+		db.Where("id = ?", tenantID).First(&tenant)
+
+		enhanced, err := geminiSvc.EnhancePhoto(
+			c.Request.Context(), data, mimeType, "logo de la tienda "+tenant.BusinessName)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "no se pudo mejorar el logo", "detail": err.Error()})
+			return
+		}
+
+		key := fmt.Sprintf("logos/%s/enhanced-%s.png", tenantID, uuid.NewString()[:8])
+		logoURL, err := storageSvc.Upload(c.Request.Context(), "vendia-logos", key, enhanced, "image/png")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al guardar el logo"})
+			return
+		}
+
+		db.Model(&models.Tenant{}).Where("id = ?", tenantID).Update("logo_url", logoURL)
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{"logo_url": logoURL}})
+	}
+}
+
 func UploadLogo(db *gorm.DB, storageSvc services.FileStorage) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
