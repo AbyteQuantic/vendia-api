@@ -50,6 +50,7 @@ func GetBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 				"brand_color":            tenant.BrandColor,
 				"store_hours":            tenant.StoreHours,
 				"store_cover_url":        tenant.StoreCoverURL,
+				"category_order":         tenant.CategoryOrder,
 				"store_slug":             tenant.StoreSlug,
 				"owner_name":             tenant.OwnerName,
 				"phone":                  tenant.Phone,
