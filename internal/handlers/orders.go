@@ -378,12 +378,17 @@ func CloseOrder(db *gorm.DB) gin.HandlerFunc {
 			var inventoryLines []services.SaleInventoryLine
 			for _, item := range order.Items {
 				pid := item.ProductUUID
+				// Spec 084 — preserva la atribución al profesional al cerrar la
+				// comanda (la comisión de la comanda se congela en una mejora
+				// posterior; el flujo principal del salón es venta directa /sales).
 				saleItems = append(saleItems, models.SaleItem{
-					ProductID: &pid,
-					Name:      item.ProductName,
-					Price:     item.UnitPrice,
-					Quantity:  item.Quantity,
-					Subtotal:  item.UnitPrice * float64(item.Quantity),
+					ProductID:    &pid,
+					Name:         item.ProductName,
+					Price:        item.UnitPrice,
+					Quantity:     item.Quantity,
+					Subtotal:     item.UnitPrice * float64(item.Quantity),
+					EmployeeUUID: item.EmployeeUUID,
+					EmployeeName: item.EmployeeName,
 				})
 				// Queue the line for the shared inventory service. A
 				// blank product UUID (legacy / ad-hoc item) is skipped —

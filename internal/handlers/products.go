@@ -184,6 +184,8 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		PhotoIsSample bool `json:"photo_is_sample"`
 		// Spec F044 — servicio publicable (catálogo unificado).
 		IsService bool `json:"is_service"`
+		// Spec 084 — comisión por servicio (peluquería/barbería).
+		CommissionPct *float64 `json:"commission_pct"`
 		// Spec 063 — venta solo para mayores de 18 (licor, cigarrillos…).
 		IsAgeRestricted bool `json:"is_age_restricted"`
 
@@ -322,6 +324,7 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			IsMenuItem:        req.IsMenuItem,
 			PhotoIsSample:     req.PhotoIsSample,
 			IsService:         req.IsService,
+			CommissionPct:     req.CommissionPct,
 			IsAgeRestricted:   req.IsAgeRestricted,
 			PriceTier1:        req.PriceTier1,
 			PriceTier2:        req.PriceTier2,
@@ -417,6 +420,8 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		Characteristics *string `json:"characteristics"`
 		// Spec 063 — alternar "solo mayores de 18" al editar.
 		IsAgeRestricted *bool `json:"is_age_restricted"`
+		// Spec 084 — comisión por servicio (peluquería/barbería).
+		CommissionPct *float64 `json:"commission_pct"`
 		// Spec 080 — alternar el modo de venta del plato ('a_demanda' |
 		// 'por_porciones'). Volver a 'a_demanda' limpia el lote del día.
 		AvailabilityMode *string `json:"availability_mode"`
@@ -502,6 +507,9 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		// categoría para normalizar (sin lowercasing: respeta lo que ve el tendero).
 		if req.Category != nil {
 			updates["category"] = strings.TrimSpace(*req.Category)
+		}
+		if req.CommissionPct != nil {
+			updates["commission_pct"] = *req.CommissionPct
 		}
 		if req.Description != nil {
 			updates["description"] = *req.Description

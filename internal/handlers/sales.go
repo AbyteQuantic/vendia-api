@@ -51,6 +51,11 @@ type SaleItemRequest struct {
 	// for F029). Optional pointer: nil or <= 0 → server falls back to the
 	// product's retail Price, so retail sales are unchanged. Spec 049.
 	UnitPrice *float64 `json:"unit_price"`
+
+	// Spec 084 — profesional que realizó este servicio (peluquería/barbería).
+	// Por LÍNEA: el ticket puede tener servicios de distintos profesionales. El
+	// server CONGELA la comisión (pay_basis/pct/monto) según su esquema de pago.
+	EmployeeUUID string `json:"employee_uuid"`
 }
 
 // resolveLineUnitPrice returns the effective per-unit price for a product line:
@@ -312,11 +317,51 @@ func CreateSale(db *gorm.DB, dispatcher *push.Dispatcher) gin.HandlerFunc {
 			// idempotency anchor for the recipe explosion).
 			var inventoryLines []services.SaleInventoryLine
 
+			// Spec 084 — congelado de comisión por línea al profesional. Cache de
+			// config de pago y nombre por empleado (una query por persona).
+			payCfgCache := map[string]*models.EmployeePayConfig{}
+			empNameCache := map[string]string{}
+			resolveCfg := func(empUUID string) *models.EmployeePayConfig {
+				if v, ok := payCfgCache[empUUID]; ok {
+					return v
+				}
+				var cfg models.EmployeePayConfig
+				if err := tx.Where("tenant_id = ? AND employee_uuid = ? AND is_active = ?",
+					tenantID, empUUID, true).Order("effective_from DESC").First(&cfg).Error; err != nil {
+					payCfgCache[empUUID] = nil
+					return nil
+				}
+				payCfgCache[empUUID] = &cfg
+				return &cfg
+			}
+			empName := func(empUUID string) string {
+				if n, ok := empNameCache[empUUID]; ok {
+					return n
+				}
+				var e models.Employee
+				tx.Select("name").Where("id = ? AND tenant_id = ?", empUUID, tenantID).First(&e)
+				empNameCache[empUUID] = e.Name
+				return e.Name
+			}
+			// freeze fija la atribución + comisión congelada sobre el subtotal de
+			// la línea (salones suelen ser exentos de IVA; refinar a net es TODO).
+			freeze := func(si *models.SaleItem, empUUID string, productPct *float64) {
+				if strings.TrimSpace(empUUID) == "" {
+					return
+				}
+				basis, pct, amount := services.ResolveLineCommission(resolveCfg(empUUID), productPct, si.Subtotal)
+				si.EmployeeUUID = middleware.UUIDPtr(empUUID)
+				si.EmployeeName = empName(empUUID)
+				si.PayBasis = basis
+				si.CommissionPct = pct
+				si.CommissionAmount = amount
+			}
+
 			for _, item := range req.Items {
 				if item.IsService {
 					subtotal := item.CustomUnitPrice * float64(item.Quantity)
 					total += subtotal
-					items = append(items, models.SaleItem{
+					si := models.SaleItem{
 						ProductID:         nil,
 						Name:              item.CustomDescription,
 						Price:             item.CustomUnitPrice,
@@ -325,7 +370,9 @@ func CreateSale(db *gorm.DB, dispatcher *push.Dispatcher) gin.HandlerFunc {
 						IsService:         true,
 						CustomDescription: item.CustomDescription,
 						CustomUnitPrice:   item.CustomUnitPrice,
-					})
+					}
+					freeze(&si, item.EmployeeUUID, nil) // ad-hoc: sin tarifa de producto
+					items = append(items, si)
 					continue
 				}
 
@@ -356,13 +403,18 @@ func CreateSale(db *gorm.DB, dispatcher *push.Dispatcher) gin.HandlerFunc {
 				total += subtotal
 
 				productID := product.ID
-				items = append(items, models.SaleItem{
+				si := models.SaleItem{
 					ProductID: &productID,
 					Name:      product.Name,
 					Price:     unitPrice,
 					Quantity:  item.Quantity,
 					Subtotal:  subtotal,
-				})
+					// Spec 084 — un servicio de catálogo (Product.IsService) vendido
+					// se atribuye al profesional, igual que una línea de servicio.
+					IsService: product.IsService,
+				}
+				freeze(&si, item.EmployeeUUID, product.CommissionPct)
+				items = append(items, si)
 
 				// Every product line — direct or recipe — is queued for
 				// the shared SaleInventoryService, applied after the sale

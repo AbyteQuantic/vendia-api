@@ -113,15 +113,15 @@ type PayrollContext struct {
 
 // Payout — resultado de la liquidación de UN profesional en el periodo.
 type Payout struct {
-	GrossServices    float64
-	ServiceCount     int
-	CommissionAmount float64
-	FixedAmount      float64
-	SalaryAmount     float64
-	ChairRentAmount  float64 // renta debida (informativo); resta en el neto
-	TipAmount        float64
-	NetPayout        float64 // puede ser NEGATIVO (el pro debe al salón)
-	Direction        string  // to_pro | to_salon
+	GrossServices    float64 `json:"gross_services"`
+	ServiceCount     int     `json:"service_count"`
+	CommissionAmount float64 `json:"commission_amount"`
+	FixedAmount      float64 `json:"fixed_amount"`
+	SalaryAmount     float64 `json:"salary_amount"`
+	ChairRentAmount  float64 `json:"chair_rent_amount"` // renta debida (informativo); resta en el neto
+	TipAmount        float64 `json:"tip_amount"`
+	NetPayout        float64 `json:"net_payout"` // puede ser NEGATIVO (el pro debe al salón)
+	Direction        string  `json:"direction"`  // to_pro | to_salon
 }
 
 // ComputePayout calcula la liquidación de un profesional. Determinista.

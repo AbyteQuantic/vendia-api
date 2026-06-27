@@ -495,6 +495,16 @@ func main() {
 		// Employees
 		v1.GET("/employees", handlers.ListEmployees(db))
 		v1.POST("/employees", handlers.CreateEmployee(db))
+		// Spec 084 — esquema de pago del profesional + liquidación. Gating de
+		// capacidad es client-side (EnableStaffCommissions, como el resto). TODO:
+		// gatear escrituras de payout a rol admin/owner cuando se confirme el rol
+		// en el contexto sin riesgo de lockout.
+		v1.GET("/employees/:uuid/pay-config", handlers.GetEmployeePayConfig(db))
+		v1.PUT("/employees/:uuid/pay-config", handlers.UpsertEmployeePayConfig(db))
+		v1.GET("/payouts/liquidation", handlers.GetLiquidation(db))
+		v1.GET("/payouts", handlers.ListPayouts(db))
+		v1.POST("/payouts", handlers.CreatePayout(db))
+		v1.POST("/payouts/:id/void", handlers.VoidPayout(db))
 		v1.PATCH("/employees/:uuid", handlers.UpdateEmployee(db))
 		v1.DELETE("/employees/:uuid", handlers.DeleteEmployee(db))
 		v1.POST("/employees/verify-pin", handlers.VerifyPin(db))
