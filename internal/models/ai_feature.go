@@ -19,4 +19,6 @@ const (
 	// (completar / refinar ingredientes y pasos).
 	AIFeatureVoiceRecipe  = "VOICE_RECIPE"
 	AIFeatureRecipeAssist = "RECIPE_ASSIST"
+	// Spec 085 — vender por voz: comandos de venta dictados (POS).
+	AIFeatureVoiceOrder = "VOICE_ORDER"
 )

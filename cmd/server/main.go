@@ -993,6 +993,9 @@ func main() {
 	premium.Use(middleware.PremiumAuth(db))
 	{
 		premium.POST("/ai/voice-inventory", handlers.VoiceInventory(geminiSvc))
+		// Spec 085 — vender por voz: comandos de venta dictados al POS. Mismo
+		// gate PremiumAuth y transporte que voice-inventory.
+		premium.POST("/ai/voice-order", handlers.VoiceOrder(geminiSvc))
 		// Spec 065 — Recipe Studio: dictado de receta por voz y asistente IA
 		// (completar/refinar). Mismo gate PremiumAuth que voice-inventory.
 		premium.POST("/ai/voice-recipe", handlers.VoiceRecipe(geminiSvc))
