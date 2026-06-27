@@ -13,6 +13,7 @@ import (
 
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
+	"vendia-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -161,6 +162,92 @@ func UpdateAppointment(db *gorm.DB) gin.HandlerFunc {
 		}
 		db.Where("id = ?", id).First(&a)
 		c.JSON(http.StatusOK, gin.H{"data": a})
+	}
+}
+
+// ConvertAppointmentToSale — POST /api/v1/appointments/:id/convert
+// Marca la cita como atendida y crea la VENTA del servicio, atribuida al
+// profesional, congelando la comisión (alimenta la liquidación). Idempotente:
+// si la cita ya tiene venta, la devuelve sin duplicar.
+func ConvertAppointmentToSale(db *gorm.DB) gin.HandlerFunc {
+	type Request struct {
+		PaymentMethod string `json:"payment_method"`
+	}
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		id := c.Param("id")
+		var req Request
+		_ = c.ShouldBindJSON(&req)
+		method := req.PaymentMethod
+		if method == "" {
+			method = string(models.PaymentCash)
+		}
+
+		var appt models.Appointment
+		if err := db.Where("id = ? AND tenant_id = ?", id, tenantID).First(&appt).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "cita no encontrada"})
+			return
+		}
+		// Idempotencia: ya convertida.
+		if appt.SaleID != nil && *appt.SaleID != "" {
+			c.JSON(http.StatusOK, gin.H{"data": gin.H{"sale_id": *appt.SaleID, "status": appt.Status}})
+			return
+		}
+
+		// Resolver y congelar comisión de la línea de servicio.
+		var cfg *models.EmployeePayConfig
+		if appt.EmployeeUUID != nil {
+			var found models.EmployeePayConfig
+			if err := db.Where("tenant_id = ? AND employee_uuid = ? AND is_active = ?",
+				tenantID, *appt.EmployeeUUID, true).Order("effective_from DESC").First(&found).Error; err == nil {
+				cfg = &found
+			}
+		}
+		var productPct *float64
+		if appt.ProductID != nil {
+			var p models.Product
+			if err := db.Where("id = ? AND tenant_id = ?", *appt.ProductID, tenantID).First(&p).Error; err == nil {
+				productPct = p.CommissionPct
+			}
+		}
+		basis, pct, amount := services.ResolveLineCommission(cfg, productPct, appt.Price)
+
+		sale := models.Sale{
+			TenantID:      tenantID,
+			BranchID:      appt.BranchID,
+			Total:         appt.Price,
+			PaymentMethod: models.PaymentMethod(method),
+			PaymentStatus: "COMPLETED",
+			Source:        models.SaleSourcePOS,
+			EmployeeUUID:  appt.EmployeeUUID,
+			EmployeeName:  appt.EmployeeName,
+			Items: []models.SaleItem{{
+				ProductID:        appt.ProductID,
+				Name:             appt.ServiceName,
+				Price:            appt.Price,
+				Quantity:         1,
+				Subtotal:         appt.Price,
+				IsService:        true,
+				EmployeeUUID:     appt.EmployeeUUID,
+				EmployeeName:     appt.EmployeeName,
+				PayBasis:         basis,
+				CommissionPct:    pct,
+				CommissionAmount: amount,
+			}},
+		}
+		err := db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Create(&sale).Error; err != nil {
+				return err
+			}
+			return tx.Model(&models.Appointment{}).
+				Where("id = ? AND tenant_id = ?", id, tenantID).
+				Updates(map[string]any{"status": models.AppointmentAttended, "sale_id": sale.ID}).Error
+		})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo cobrar la cita"})
+			return
+		}
+		c.JSON(http.StatusCreated, gin.H{"data": gin.H{"sale_id": sale.ID, "status": models.AppointmentAttended}})
 	}
 }
 

@@ -27,7 +27,8 @@ func setupApptDB(t *testing.T) *gorm.DB {
 		`CREATE TABLE tenants (id TEXT PRIMARY KEY, deleted_at DATETIME,
 			store_slug TEXT DEFAULT '', created_at DATETIME)`).Error)
 	require.NoError(t, db.AutoMigrate(
-		&models.Employee{}, &models.Product{}, &models.Appointment{}))
+		&models.Employee{}, &models.Product{}, &models.Appointment{},
+		&models.EmployeePayConfig{}, &models.Sale{}, &models.SaleItem{}))
 	return db
 }
 
@@ -44,6 +45,7 @@ func mountAppt(db *gorm.DB, tenantID string) *gin.Engine {
 		c.Next()
 	})
 	auth.GET("/appointments", handlers.ListAppointments(db))
+	auth.POST("/appointments/:id/convert", handlers.ConvertAppointmentToSale(db))
 	return r
 }
 
@@ -115,6 +117,53 @@ func TestPublicBooking_AvailabilityAndDoubleBook(t *testing.T) {
 	require.Equal(t, http.StatusOK, ag.Code)
 	assert.Contains(t, ag.Body.String(), "Ana")
 	assert.Contains(t, ag.Body.String(), "Corte")
+}
+
+// Convertir cita → venta con comisión congelada; idempotente.
+func TestConvertAppointmentToSale(t *testing.T) {
+	db := setupApptDB(t)
+	tenantID := uuid.NewString()
+	empID := uuid.NewString()
+	require.NoError(t, db.Exec(
+		`INSERT INTO tenants (id, store_slug, created_at) VALUES (?, 'salon', ?)`,
+		tenantID, time.Now()).Error)
+	pct := 40.0
+	require.NoError(t, db.Create(&models.EmployeePayConfig{
+		BaseModel: models.BaseModel{ID: uuid.NewString()}, TenantID: tenantID, EmployeeUUID: empID,
+		PayModel: models.PayModelCommission, CommissionPct: &pct, TipRate: 1,
+		EffectiveFrom: time.Now().Add(-time.Hour), IsActive: true,
+	}).Error)
+	apptID := uuid.NewString()
+	require.NoError(t, db.Create(&models.Appointment{
+		BaseModel: models.BaseModel{ID: apptID}, TenantID: tenantID,
+		EmployeeUUID: &empID, EmployeeName: "Ana", ServiceName: "Corte", Price: 20000,
+		StartsAt: time.Now(), EndsAt: time.Now().Add(30 * time.Minute),
+		Status: models.AppointmentConfirmed,
+	}).Error)
+
+	r := mountAppt(db, tenantID)
+	w := doJSON(t, r, http.MethodPost, "/appointments/"+apptID+"/convert",
+		map[string]any{"payment_method": "cash"})
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	// La venta tiene la comisión congelada (20000 * 40% = 8000).
+	var item models.SaleItem
+	require.NoError(t, db.Where("is_service = ?", true).First(&item).Error)
+	assert.Equal(t, 8000.0, item.CommissionAmount)
+	assert.Equal(t, empID, *item.EmployeeUUID)
+
+	// La cita quedó atendida + con sale_id.
+	var appt models.Appointment
+	require.NoError(t, db.First(&appt, "id = ?", apptID).Error)
+	assert.Equal(t, models.AppointmentAttended, appt.Status)
+	require.NotNil(t, appt.SaleID)
+
+	// Idempotente: segundo convert devuelve la misma venta (200, no duplica).
+	w2 := doJSON(t, r, http.MethodPost, "/appointments/"+apptID+"/convert", map[string]any{})
+	assert.Equal(t, http.StatusOK, w2.Code)
+	var count int64
+	db.Model(&models.SaleItem{}).Count(&count)
+	assert.Equal(t, int64(1), count, "no debe duplicar la venta")
 }
 
 // Reserva en el pasado → 400.

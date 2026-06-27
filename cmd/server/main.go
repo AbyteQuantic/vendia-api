@@ -515,6 +515,7 @@ func main() {
 		v1.GET("/appointments", handlers.ListAppointments(db))
 		v1.POST("/appointments", handlers.CreateAppointment(db))
 		v1.PATCH("/appointments/:id", handlers.UpdateAppointment(db))
+		v1.POST("/appointments/:id/convert", handlers.ConvertAppointmentToSale(db))
 		v1.PATCH("/employees/:uuid", handlers.UpdateEmployee(db))
 		v1.DELETE("/employees/:uuid", handlers.DeleteEmployee(db))
 		v1.POST("/employees/verify-pin", handlers.VerifyPin(db))
