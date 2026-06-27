@@ -365,6 +365,12 @@ func main() {
 	// Recupera la inscripción del asistente por teléfono (para mostrar su
 	// componente en el catálogo sin el deep link del correo).
 	r.POST("/api/v1/store/:slug/my-event-registration", handlers.PublicFindRegistration(db))
+
+	// Spec 084 Fase 2 — reserva pública de citas/turnos (peluquería/barbería).
+	r.GET("/api/v1/store/:slug/booking/services", handlers.PublicBookableServices(db))
+	r.GET("/api/v1/store/:slug/booking/staff", handlers.PublicBookingStaff(db))
+	r.GET("/api/v1/store/:slug/booking/availability", handlers.PublicAvailability(db))
+	r.POST("/api/v1/store/:slug/booking", handlers.PublicCreateBooking(db))
 	// Tasa de cambio USD→COP para convertir el precio del evento al cambiar moneda.
 	r.GET("/api/v1/fx/usd-cop", handlers.ExchangeRateUSDCOP())
 	// Carné del asistente (por public_token): el QR solo viaja si ya pagó.
@@ -505,6 +511,10 @@ func main() {
 		v1.GET("/payouts", handlers.ListPayouts(db))
 		v1.POST("/payouts", handlers.CreatePayout(db))
 		v1.POST("/payouts/:id/void", handlers.VoidPayout(db))
+		// Spec 084 Fase 2 — agenda de citas/turnos del salón.
+		v1.GET("/appointments", handlers.ListAppointments(db))
+		v1.POST("/appointments", handlers.CreateAppointment(db))
+		v1.PATCH("/appointments/:id", handlers.UpdateAppointment(db))
 		v1.PATCH("/employees/:uuid", handlers.UpdateEmployee(db))
 		v1.DELETE("/employees/:uuid", handlers.DeleteEmployee(db))
 		v1.POST("/employees/verify-pin", handlers.VerifyPin(db))

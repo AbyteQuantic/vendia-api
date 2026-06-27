@@ -76,6 +76,7 @@ func Migrate(db *gorm.DB) error {
 		&models.SaleItem{},
 		&models.EmployeePayConfig{}, // Spec 084 — modelo de pago del profesional
 		&models.EmployeePayout{},    // Spec 084 — liquidaciones (append-only)
+		&models.Appointment{},       // Spec 084 Fase 2 — citas/turnos
 		&models.RefreshToken{},
 		&models.Customer{},
 		&models.CreditAccount{},

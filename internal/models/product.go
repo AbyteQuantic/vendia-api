@@ -93,6 +93,10 @@ type Product struct {
 	// (cae a la del profesional o 0). Solo aplica cuando IsService=true.
 	CommissionPct *float64 `gorm:"column:commission_pct;type:numeric(5,2)" json:"commission_pct,omitempty"`
 
+	// Spec 084 Fase 2 — duración estimada del servicio en minutos, para armar la
+	// agenda de citas (franjas disponibles). Nullable = sin duración definida.
+	DurationMin *int `gorm:"column:duration_min" json:"duration_min,omitempty"`
+
 	// ── Spec 063 — venta restringida a mayores de edad ──────────────────
 	// IsAgeRestricted marca productos de venta SOLO para mayores de 18
 	// (licor, cigarrillos, vapeadores…). El catálogo público exige
