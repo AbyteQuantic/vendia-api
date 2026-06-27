@@ -9,6 +9,10 @@ import "time"
 var IconVariants = map[string]struct{}{
 	"default":      {},
 	"navidad":      {},
+	"mundial":      {},
+	"dia_mujer":    {},
+	"dia_madre":    {},
+	"dia_padre":    {},
 	"amor_amistad": {},
 	"halloween":    {},
 	"patrias":      {},
