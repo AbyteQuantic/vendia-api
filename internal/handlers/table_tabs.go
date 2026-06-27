@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // UpsertTableTab serves PUT /api/v1/tables/tab.
@@ -225,7 +226,9 @@ func AddItemsToTableTab(db *gorm.DB) gin.HandlerFunc {
 		var result models.OrderTicket
 		txErr := db.Transaction(func(tx *gorm.DB) error {
 			var existing models.OrderTicket
-			err := tx.Set("gorm:query_option", "FOR UPDATE").
+			// Lock pesimista REAL (clause.Locking; el viejo Set("gorm:query_option")
+			// era no-op en GORM v2 → council BUG-RACE Spec 083).
+			err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 				Preload("Items").
 				Where("tenant_id = ? AND label = ? AND status IN ?",
 					tenantID, label, []models.OrderStatus{
@@ -273,10 +276,7 @@ func AddItemsToTableTab(db *gorm.DB) gin.HandlerFunc {
 			}
 
 			// Existing tab — accumulate items (Spec 052: sin tocar stock).
-			var addedTotal float64
 			for _, it := range req.Items {
-				addedTotal += it.UnitPrice * float64(it.Quantity)
-
 				// Check if product already in the tab
 				found := false
 				for idx, oi := range existing.Items {
@@ -302,11 +302,15 @@ func AddItemsToTableTab(db *gorm.DB) gin.HandlerFunc {
 				// Spec 052: sin descuento de stock al agregar (solo al cobrar).
 			}
 
-			// Update total
-			tx.Model(&existing).Update("total", existing.Total+addedTotal)
-
-			// Reload
+			// Recomputar Total desde las líneas reales (council BUG-PRICE-DRIFT
+			// Spec 083): nunca dejar Total != suma(unit_price*quantity).
 			tx.Preload("Items").First(&existing, "id = ?", existing.ID)
+			var recomputed float64
+			for _, oi := range existing.Items {
+				recomputed += oi.UnitPrice * float64(oi.Quantity)
+			}
+			tx.Model(&existing).Update("total", recomputed)
+			existing.Total = recomputed
 			result = existing
 			return nil
 		})

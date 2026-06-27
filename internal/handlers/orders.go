@@ -182,6 +182,8 @@ func UpdateOrderStatus(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		previousStatus := order.Status
+
 		updates := map[string]any{"status": req.Status}
 		if req.PaymentMethod != "" {
 			updates["payment_method"] = req.PaymentMethod
@@ -192,8 +194,11 @@ func UpdateOrderStatus(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		// Restore stock when cancelling — return all items to inventory
-		if req.Status == models.OrderStatusCancelado {
+		// Restaurar stock SOLO al cancelar una orden que YA había descontado
+		// (estaba 'cobrado'). En el modelo unificado de mesa el stock se descuenta
+		// únicamente al COBRAR (close); una cuenta abierta nunca tocó inventario,
+		// así que restaurarla lo INFLARÍA (council BUG-CANCEL-INFLATE Spec 083).
+		if req.Status == models.OrderStatusCancelado && previousStatus == models.OrderStatusCobrado {
 			for _, item := range order.Items {
 				if item.ProductUUID != "" && item.Quantity > 0 {
 					services.LogInventoryMovement(db, services.MovementParams{

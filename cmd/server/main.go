@@ -446,6 +446,12 @@ func main() {
 	// devuelve label + área para mostrar "Mesa X · Área" al comensal.
 	r.GET("/api/v1/public/catalog/:slug/table/:id", handlers.PublicTableInfo(db))
 
+	// Spec 083 — pedido de mesa por QR UNIFICADO con la cuenta de mesa: abre o
+	// agrega a la cuenta (OrderTicket) de esa mesa. Rate-limit + honeypot como
+	// el pedido online (anti-abuso del endpoint público).
+	r.POST("/api/v1/public/catalog/:slug/table/:id/order",
+		buildHandlers(orderRateLimiter, honeypotMiddleware, handlers.PublicAddItemsToTableTab(db))...)
+
 	// Public "live tab" viewer. The QR printed for each table
 	// encodes only the session_token (not the order id or tenant
 	// id), so the lookup surface is narrow and un-guessable. See
