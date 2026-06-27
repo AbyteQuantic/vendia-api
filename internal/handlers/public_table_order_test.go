@@ -7,8 +7,14 @@
 package handlers_test
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,10 +30,36 @@ import (
 	"gorm.io/gorm"
 )
 
+// sharedDBSeq da un nombre único a cada BD compartida (soporta go test -count=N).
+var sharedDBSeq int64
+
 func setupPublicTableOrderDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
+	applyMesaSchema(t, db)
+	return db
+}
+
+// setupSharedMesaDB abre una BD sqlite en memoria COMPARTIDA entre conexiones
+// (cache=shared) para poder ejercer concurrencia real con goroutines. busy_timeout
+// evita SQLITE_BUSY espurios. El nombre lo deriva del test para aislar.
+func setupSharedMesaDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	dsn := fmt.Sprintf("file:mesa_%s_%d?mode=memory&cache=shared&_busy_timeout=5000&_txlock=immediate",
+		strings.ReplaceAll(t.Name(), "/", "_"), atomic.AddInt64(&sharedDBSeq, 1))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(4)
+	sqlDB.SetMaxIdleConns(4)
+	applyMesaSchema(t, db)
+	return db
+}
+
+func applyMesaSchema(t *testing.T, db *gorm.DB) {
+	t.Helper()
 	stmts := []string{
 		`CREATE TABLE tenants (
 			id TEXT PRIMARY KEY, deleted_at DATETIME,
@@ -83,7 +115,11 @@ func setupPublicTableOrderDB(t *testing.T) *gorm.DB {
 		&models.Recipe{}, &models.RecipeIngredient{}, &models.Ingredient{},
 		&models.InventoryMovement{}, &models.Table{},
 	))
-	return db
+	// Spec 083 — índice único parcial: una sola cuenta ABIERTA por (tenant,label).
+	require.NoError(t, db.Exec(
+		`CREATE UNIQUE INDEX IF NOT EXISTS uniq_open_table_account
+		 ON order_tickets (tenant_id, label)
+		 WHERE status IN ('nuevo','preparando','listo') AND deleted_at IS NULL`).Error)
 }
 
 func seedTenantSlug(t *testing.T, db *gorm.DB, slug string) (tenantID, branchID string) {
@@ -486,3 +522,100 @@ func TestCancelPreparedDirect_NoMerma(t *testing.T) {
 	require.NoError(t, db.First(&p, "id = ?", soda).Error)
 	assert.Equal(t, 20, p.Stock, "gaseosa cancelada se revende: stock intacto")
 }
+
+// council BUG-DUP-ACCOUNT-RACE — el índice único parcial impide DOS cuentas
+// ABIERTAS para la misma (tenant,label). Una segunda inserción de cuenta abierta
+// con el mismo label debe fallar a nivel BD.
+func TestOpenTableAccount_UniqueIndex_RejectsDuplicate(t *testing.T) {
+	db := setupPublicTableOrderDB(t)
+	tenantID, branchID := seedTenantSlug(t, db, "rest")
+	makeTicket(t, db, tenantID, branchID, "Mesa 1", models.OrderStatusNuevo,
+		seedDirectProduct(t, db, tenantID, branchID, "Gaseosa", 2500, 10), 1, 2500)
+
+	// Segunda cuenta ABIERTA para 'Mesa 1' → viola el índice único parcial.
+	dup := models.OrderTicket{
+		BaseModel: models.BaseModel{ID: uuid.NewString()},
+		TenantID:  tenantID, Label: "Mesa 1",
+		Status: models.OrderStatusNuevo, Type: models.OrderTypeMesa,
+	}
+	err := db.Create(&dup).Error
+	require.Error(t, err, "no debe permitir 2 cuentas abiertas para la misma mesa")
+	assert.Contains(t, strings.ToUpper(err.Error()), "UNIQUE", "el error es de índice único: %v", err)
+
+	// Pero una cuenta CERRADA con el mismo label sí se permite (no choca el parcial).
+	closed := models.OrderTicket{
+		BaseModel: models.BaseModel{ID: uuid.NewString()},
+		TenantID:  tenantID, Label: "Mesa 1",
+		Status: models.OrderStatusCobrado, Type: models.OrderTypeMesa,
+	}
+	assert.NoError(t, db.Create(&closed).Error, "una cuenta cobrada no choca con el índice parcial")
+}
+
+// council BUG-STOCK0-NOKARDEX — cobrar un producto directo con stock=0 SÍ
+// descuenta (queda negativo) y registra el movimiento de venta (trazabilidad).
+func TestCloseOrder_StockZero_RecordsKardexAndGoesNegative(t *testing.T) {
+	db := setupPublicTableOrderDB(t)
+	tenantID, branchID := seedTenantSlug(t, db, "rest")
+	p0 := seedDirectProduct(t, db, tenantID, branchID, "Cerveza", 4000, 0) // stock 0
+	orderID := makeTicket(t, db, tenantID, branchID, "Mesa 1", models.OrderStatusListo, p0, 2, 4000)
+
+	w := doJSON(t, mountCloseOrderHandler(db, tenantID), http.MethodPost,
+		"/orders/"+orderID+"/close", map[string]any{"payment_method": "efectivo"})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var p models.Product
+	require.NoError(t, db.First(&p, "id = ?", p0).Error)
+	assert.Equal(t, -2, p.Stock, "stock baja a negativo (vendido sin existencias)")
+	var movs int64
+	db.Model(&models.InventoryMovement{}).
+		Where("product_id = ? AND movement_type = ?", p0, models.MovementSale).Count(&movs)
+	assert.Equal(t, int64(1), movs, "toda venta queda trazada en kardex aunque el stock sea 0")
+}
+
+// council BUG-CLOSE-RACE — dos cierres CONCURRENTES del mismo pedido producen
+// UNA sola venta y descuentan el inventario UNA sola vez (lock + update condicional).
+func TestCloseOrder_Concurrent_OneSale(t *testing.T) {
+	db := setupSharedMesaDB(t)
+	tenantID, branchID := seedTenantSlug(t, db, "rest")
+	p := seedDirectProduct(t, db, tenantID, branchID, "Cerveza", 4000, 30)
+	orderID := makeTicket(t, db, tenantID, branchID, "Mesa 1", models.OrderStatusListo, p, 5, 4000)
+	r := mountCloseOrderHandler(db, tenantID)
+
+	body, _ := json.Marshal(map[string]any{"payment_method": "efectivo"})
+	var wg sync.WaitGroup
+	codes := make([]int, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodPost, "/orders/"+orderID+"/close", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			codes[i] = w.Code
+		}(i)
+	}
+	wg.Wait()
+
+	ok := 0
+	for _, c := range codes {
+		if c == http.StatusOK {
+			ok++
+		}
+	}
+	assert.Equal(t, 1, ok, "exactamente un cierre exitoso; codes=%v", codes)
+	var sales int64
+	db.Model(&models.Sale{}).Where("tenant_id = ?", tenantID).Count(&sales)
+	assert.Equal(t, int64(1), sales, "una sola venta pese al doble cierre concurrente")
+	var prod models.Product
+	require.NoError(t, db.First(&prod, "id = ?", p).Error)
+	assert.Equal(t, 25, prod.Stock, "stock descontado una sola vez (30-5)")
+}
+
+// Nota: la carrera de DOS PRIMEROS pedidos concurrentes a una mesa vacía está
+// cubierta por: (1) TestOpenTableAccount_UniqueIndex_RejectsDuplicate, que prueba
+// que la BD impide 2 cuentas abiertas para la misma (tenant,label); y (2) el retry
+// `isRetryableConflict` en el handler, que ante esa violación reintenta y ACUMULA
+// en la cuenta del ganador. No se prueba con goroutines porque el driver sqlite
+// de tests serializa/devuelve "database is locked" de forma no determinista; en
+// Postgres (prod) el lock de fila + el índice único parcial lo resuelven.

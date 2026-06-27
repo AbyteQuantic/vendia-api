@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
@@ -8,7 +9,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
+
+// errOrderAlreadyClosed — sentinel para distinguir el cierre concurrente
+// (otra request ganó la carrera) de un error real de BD en CloseOrder.
+var errOrderAlreadyClosed = errors.New("order already closed")
 
 func CreateOrder(db *gorm.DB) gin.HandlerFunc {
 	type ItemRequest struct {
@@ -340,11 +346,32 @@ func CloseOrder(db *gorm.DB) gin.HandlerFunc {
 		saleInventory := services.NewSaleInventoryService(db)
 
 		err := db.Transaction(func(tx *gorm.DB) error {
-			if err := tx.Model(&order).Updates(map[string]any{
-				"status":         models.OrderStatusCobrado,
-				"payment_method": req.PaymentMethod,
-			}).Error; err != nil {
+			// Anti doble-cierre CONCURRENTE (council BUG-CLOSE-RACE Spec 083): el
+			// check de estado de arriba está FUERA de la tx. Aquí bloqueamos la
+			// fila y hacemos un UPDATE CONDICIONADO por estado; si 0 filas se
+			// afectaron, otra request ya cobró → abortamos sin crear 2ª venta ni
+			// descontar inventario dos veces.
+			var locked models.OrderTicket
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("id = ? AND tenant_id = ?", uuid, tenantID).
+				First(&locked).Error; err != nil {
 				return err
+			}
+			if locked.Status == models.OrderStatusCobrado || locked.Status == models.OrderStatusCancelado {
+				return errOrderAlreadyClosed
+			}
+			res := tx.Model(&models.OrderTicket{}).
+				Where("id = ? AND tenant_id = ? AND status NOT IN ?", uuid, tenantID,
+					[]models.OrderStatus{models.OrderStatusCobrado, models.OrderStatusCancelado}).
+				Updates(map[string]any{
+					"status":         models.OrderStatusCobrado,
+					"payment_method": req.PaymentMethod,
+				})
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected == 0 {
+				return errOrderAlreadyClosed
 			}
 
 			var saleItems []models.SaleItem
@@ -401,6 +428,10 @@ func CloseOrder(db *gorm.DB) gin.HandlerFunc {
 			})
 		})
 
+		if errors.Is(err, errOrderAlreadyClosed) {
+			c.JSON(http.StatusConflict, gin.H{"error": "el pedido ya está cerrado"})
+			return
+		}
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al cerrar pedido"})
 			return

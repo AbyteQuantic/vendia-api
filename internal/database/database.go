@@ -239,6 +239,10 @@ func Migrate(db *gorm.DB) error {
 		if err := applyPerformanceIndexes(db); err != nil {
 			log.Printf("[bootstrap] performance indexes: %v", err)
 		}
+		// Spec 083 — una sola cuenta de mesa ABIERTA por (tenant, label).
+		if err := applyTableAccountIndex(db); err != nil {
+			log.Printf("[bootstrap] table-account unique index: %v", err)
+		}
 		// F042 — el tipo academias_instituciones debe pasar el CHECK
 		// tenants_business_types_valid. Render solo corre AutoMigrate, no
 		// los .sql, así que actualizamos la función de validación en el

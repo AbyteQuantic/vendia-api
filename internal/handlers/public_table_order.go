@@ -28,6 +28,31 @@ import (
 // Público (sin auth) pero acotado: requiere un table_id real y ACTIVO del tenant
 // del slug (el id viaja en el QR que imprimió el tendero). Sin descuento de
 // stock aquí (Spec 052: el tab es borrador hasta cobrar).
+// isRetryableConflict detecta, de forma portable, los errores transitorios de
+// concurrencia por los que vale la pena REINTENTAR la apertura de la cuenta de
+// mesa: violación de índice único (otro pedido ganó la carrera → el reintento
+// acumula) y fallos de bloqueo/serialización (Postgres 40001/40P01, sqlite
+// "database is locked"). Council BUG-DUP-ACCOUNT-RACE Spec 083.
+func isRetryableConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	for _, needle := range []string{
+		"unique constraint", "duplicate key", "23505", "unique",
+		"database is locked", "database table is locked", "busy",
+		"40001", "40p01", "serializ", "deadlock",
+	} {
+		if strings.Contains(msg, needle) {
+			return true
+		}
+	}
+	return false
+}
+
 // sumItems calcula el total de una cuenta como la suma exacta de sus renglones.
 // Única fuente de verdad del Total (evita drift Total vs líneas).
 func sumItems(items []models.OrderItem) float64 {
@@ -106,101 +131,112 @@ func PublicAddItemsToTableTab(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		var result models.OrderTicket
-		txErr := db.Transaction(func(tx *gorm.DB) error {
-			var existing models.OrderTicket
-			// Lock pesimista REAL (clause.Locking; el viejo Set("gorm:query_option")
-			// era no-op en GORM v2 → council BUG-RACE).
-			err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-				Preload("Items").
-				Where("tenant_id = ? AND label = ? AND status IN ?",
-					tenant.ID, label, []models.OrderStatus{
-						models.OrderStatusNuevo,
-						models.OrderStatusPreparando,
-						models.OrderStatusListo,
-					}).
-				Order("created_at DESC").
-				First(&existing).Error
+		// Retry anti-carrera (council BUG-DUP-ACCOUNT-RACE): si dos primeros
+		// pedidos concurrentes a la misma mesa intentan crear la cuenta, el índice
+		// único parcial (tenant_id,label,abierto) rechaza al perdedor; reintentamos
+		// → el 2º intento encuentra la cuenta del ganador y ACUMULA (no se pierde
+		// el pedido ni se duplica la cuenta).
+		var txErr error
+		for attempt := 0; attempt < 3; attempt++ {
+			txErr = db.Transaction(func(tx *gorm.DB) error {
+				var existing models.OrderTicket
+				// Lock pesimista REAL (clause.Locking; el viejo Set("gorm:query_option")
+				// era no-op en GORM v2 → council BUG-RACE).
+				err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+					Preload("Items").
+					Where("tenant_id = ? AND label = ? AND status IN ?",
+						tenant.ID, label, []models.OrderStatus{
+							models.OrderStatusNuevo,
+							models.OrderStatusPreparando,
+							models.OrderStatusListo,
+						}).
+					Order("created_at DESC").
+					First(&existing).Error
 
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				// No hay cuenta abierta → se crea (mesa ocupada).
-				var items []models.OrderItem
-				for _, pid := range ordered {
-					a := agg[pid]
-					items = append(items, models.OrderItem{
-						ProductUUID: pid, ProductName: a.name,
-						Quantity: a.qty, UnitPrice: a.price,
-					})
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					// No hay cuenta abierta → se crea (mesa ocupada).
+					var items []models.OrderItem
+					for _, pid := range ordered {
+						a := agg[pid]
+						items = append(items, models.OrderItem{
+							ProductUUID: pid, ProductName: a.name,
+							Quantity: a.qty, UnitPrice: a.price,
+						})
+					}
+					for _, a := range adhoc {
+						items = append(items, models.OrderItem{
+							ProductName: a.name, Quantity: a.qty, UnitPrice: a.price,
+						})
+					}
+					created := models.OrderTicket{
+						TenantID:     tenant.ID,
+						BranchID:     branchID,
+						Label:        label,
+						CustomerName: strings.TrimSpace(req.CustomerName),
+						Status:       models.OrderStatusNuevo,
+						Type:         models.OrderTypeMesa,
+						Total:        sumItems(items),
+						Items:        items,
+					}
+					if err := tx.Create(&created).Error; err != nil {
+						return err
+					}
+					result = created
+					return nil
 				}
-				for _, a := range adhoc {
-					items = append(items, models.OrderItem{
-						ProductName: a.name, Quantity: a.qty, UnitPrice: a.price,
-					})
-				}
-				created := models.OrderTicket{
-					TenantID:     tenant.ID,
-					BranchID:     branchID,
-					Label:        label,
-					CustomerName: strings.TrimSpace(req.CustomerName),
-					Status:       models.OrderStatusNuevo,
-					Type:         models.OrderTypeMesa,
-					Total:        sumItems(items),
-					Items:        items,
-				}
-				if err := tx.Create(&created).Error; err != nil {
+				if err != nil {
 					return err
 				}
-				result = created
-				return nil
-			}
-			if err != nil {
-				return err
-			}
 
-			// Cuenta existente → acumular (Spec 052: sin tocar stock).
-			for _, pid := range ordered {
-				a := agg[pid]
-				found := false
-				for idx, oi := range existing.Items {
-					if oi.ProductUUID == pid {
-						if err := tx.Model(&existing.Items[idx]).
-							Update("quantity", oi.Quantity+a.qty).Error; err != nil {
+				// Cuenta existente → acumular (Spec 052: sin tocar stock).
+				for _, pid := range ordered {
+					a := agg[pid]
+					found := false
+					for idx, oi := range existing.Items {
+						if oi.ProductUUID == pid {
+							if err := tx.Model(&existing.Items[idx]).
+								Update("quantity", oi.Quantity+a.qty).Error; err != nil {
+								return err
+							}
+							found = true
+							break
+						}
+					}
+					if !found {
+						if err := tx.Create(&models.OrderItem{
+							OrderUUID:   existing.ID,
+							ProductUUID: pid, ProductName: a.name,
+							Quantity: a.qty, UnitPrice: a.price,
+						}).Error; err != nil {
 							return err
 						}
-						found = true
-						break
 					}
 				}
-				if !found {
+				for _, a := range adhoc {
 					if err := tx.Create(&models.OrderItem{
-						OrderUUID:   existing.ID,
-						ProductUUID: pid, ProductName: a.name,
+						OrderUUID: existing.ID, ProductName: a.name,
 						Quantity: a.qty, UnitPrice: a.price,
 					}).Error; err != nil {
 						return err
 					}
 				}
-			}
-			for _, a := range adhoc {
-				if err := tx.Create(&models.OrderItem{
-					OrderUUID: existing.ID, ProductName: a.name,
-					Quantity: a.qty, UnitPrice: a.price,
-				}).Error; err != nil {
+				// Recomputar Total desde las líneas reales (council BUG-PRICE-DRIFT):
+				// nunca dejar Total != suma(unit_price*quantity).
+				var fresh models.OrderTicket
+				if err := tx.Preload("Items").First(&fresh, "id = ?", existing.ID).Error; err != nil {
 					return err
 				}
+				if err := tx.Model(&fresh).Update("total", sumItems(fresh.Items)).Error; err != nil {
+					return err
+				}
+				tx.Preload("Items").First(&fresh, "id = ?", existing.ID)
+				result = fresh
+				return nil
+			})
+			if txErr == nil || !isRetryableConflict(txErr) {
+				break
 			}
-			// Recomputar Total desde las líneas reales (council BUG-PRICE-DRIFT):
-			// nunca dejar Total != suma(unit_price*quantity).
-			var fresh models.OrderTicket
-			if err := tx.Preload("Items").First(&fresh, "id = ?", existing.ID).Error; err != nil {
-				return err
-			}
-			if err := tx.Model(&fresh).Update("total", sumItems(fresh.Items)).Error; err != nil {
-				return err
-			}
-			tx.Preload("Items").First(&fresh, "id = ?", existing.ID)
-			result = fresh
-			return nil
-		})
+		}
 
 		if txErr != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{

@@ -224,96 +224,105 @@ func AddItemsToTableTab(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		var result models.OrderTicket
-		txErr := db.Transaction(func(tx *gorm.DB) error {
-			var existing models.OrderTicket
-			// Lock pesimista REAL (clause.Locking; el viejo Set("gorm:query_option")
-			// era no-op en GORM v2 → council BUG-RACE Spec 083).
-			err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-				Preload("Items").
-				Where("tenant_id = ? AND label = ? AND status IN ?",
-					tenantID, label, []models.OrderStatus{
-						models.OrderStatusNuevo,
-						models.OrderStatusPreparando,
-						models.OrderStatusListo,
-					}).
-				Order("created_at DESC").
-				First(&existing).Error
+		// Retry anti-carrera de cuenta duplicada (council BUG-DUP-ACCOUNT-RACE
+		// Spec 083): el índice único parcial rechaza el 2º create concurrente;
+		// reintentamos y el siguiente intento ACUMULA en la cuenta del ganador.
+		var txErr error
+		for attempt := 0; attempt < 3; attempt++ {
+			txErr = db.Transaction(func(tx *gorm.DB) error {
+				var existing models.OrderTicket
+				// Lock pesimista REAL (clause.Locking; el viejo Set("gorm:query_option")
+				// era no-op en GORM v2 → council BUG-RACE Spec 083).
+				err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+					Preload("Items").
+					Where("tenant_id = ? AND label = ? AND status IN ?",
+						tenantID, label, []models.OrderStatus{
+							models.OrderStatusNuevo,
+							models.OrderStatusPreparando,
+							models.OrderStatusListo,
+						}).
+					Order("created_at DESC").
+					First(&existing).Error
 
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				// No open tab — create one with these items
-				var items []models.OrderItem
-				var total float64
-				for _, it := range req.Items {
-					total += it.UnitPrice * float64(it.Quantity)
-					items = append(items, models.OrderItem{
-						ProductUUID: it.ProductUUID,
-						ProductName: it.ProductName,
-						Quantity:    it.Quantity,
-						UnitPrice:   it.UnitPrice,
-					})
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					// No open tab — create one with these items
+					var items []models.OrderItem
+					var total float64
+					for _, it := range req.Items {
+						total += it.UnitPrice * float64(it.Quantity)
+						items = append(items, models.OrderItem{
+							ProductUUID: it.ProductUUID,
+							ProductName: it.ProductName,
+							Quantity:    it.Quantity,
+							UnitPrice:   it.UnitPrice,
+						})
+					}
+					created := models.OrderTicket{
+						TenantID:     tenantID,
+						CreatedBy:    middleware.UUIDPtr(userID),
+						BranchID:     middleware.UUIDPtr(branchID),
+						Label:        label,
+						CustomerName: req.CustomerName,
+						EmployeeName: req.EmployeeName,
+						Status:       models.OrderStatusNuevo,
+						Type:         models.OrderTypeMesa,
+						Total:        total,
+						Items:        items,
+					}
+					if err := tx.Create(&created).Error; err != nil {
+						return err
+					}
+					// Spec 052: el tab no descuenta stock al agregar (solo al cobrar).
+					result = created
+					return nil
 				}
-				created := models.OrderTicket{
-					TenantID:     tenantID,
-					CreatedBy:    middleware.UUIDPtr(userID),
-					BranchID:     middleware.UUIDPtr(branchID),
-					Label:        label,
-					CustomerName: req.CustomerName,
-					EmployeeName: req.EmployeeName,
-					Status:       models.OrderStatusNuevo,
-					Type:         models.OrderTypeMesa,
-					Total:        total,
-					Items:        items,
-				}
-				if err := tx.Create(&created).Error; err != nil {
+				if err != nil {
 					return err
 				}
-				// Spec 052: el tab no descuenta stock al agregar (solo al cobrar).
-				result = created
+
+				// Existing tab — accumulate items (Spec 052: sin tocar stock).
+				for _, it := range req.Items {
+					// Check if product already in the tab
+					found := false
+					for idx, oi := range existing.Items {
+						if oi.ProductUUID == it.ProductUUID {
+							// Increment quantity on existing row
+							newQty := oi.Quantity + it.Quantity
+							tx.Model(&existing.Items[idx]).Update("quantity", newQty)
+							found = true
+							break
+						}
+					}
+					if !found {
+						// Add new item row
+						newItem := models.OrderItem{
+							OrderUUID:   existing.ID,
+							ProductUUID: it.ProductUUID,
+							ProductName: it.ProductName,
+							Quantity:    it.Quantity,
+							UnitPrice:   it.UnitPrice,
+						}
+						tx.Create(&newItem)
+					}
+					// Spec 052: sin descuento de stock al agregar (solo al cobrar).
+				}
+
+				// Recomputar Total desde las líneas reales (council BUG-PRICE-DRIFT
+				// Spec 083): nunca dejar Total != suma(unit_price*quantity).
+				tx.Preload("Items").First(&existing, "id = ?", existing.ID)
+				var recomputed float64
+				for _, oi := range existing.Items {
+					recomputed += oi.UnitPrice * float64(oi.Quantity)
+				}
+				tx.Model(&existing).Update("total", recomputed)
+				existing.Total = recomputed
+				result = existing
 				return nil
+			})
+			if txErr == nil || !isRetryableConflict(txErr) {
+				break
 			}
-			if err != nil {
-				return err
-			}
-
-			// Existing tab — accumulate items (Spec 052: sin tocar stock).
-			for _, it := range req.Items {
-				// Check if product already in the tab
-				found := false
-				for idx, oi := range existing.Items {
-					if oi.ProductUUID == it.ProductUUID {
-						// Increment quantity on existing row
-						newQty := oi.Quantity + it.Quantity
-						tx.Model(&existing.Items[idx]).Update("quantity", newQty)
-						found = true
-						break
-					}
-				}
-				if !found {
-					// Add new item row
-					newItem := models.OrderItem{
-						OrderUUID:   existing.ID,
-						ProductUUID: it.ProductUUID,
-						ProductName: it.ProductName,
-						Quantity:    it.Quantity,
-						UnitPrice:   it.UnitPrice,
-					}
-					tx.Create(&newItem)
-				}
-				// Spec 052: sin descuento de stock al agregar (solo al cobrar).
-			}
-
-			// Recomputar Total desde las líneas reales (council BUG-PRICE-DRIFT
-			// Spec 083): nunca dejar Total != suma(unit_price*quantity).
-			tx.Preload("Items").First(&existing, "id = ?", existing.ID)
-			var recomputed float64
-			for _, oi := range existing.Items {
-				recomputed += oi.UnitPrice * float64(oi.Quantity)
-			}
-			tx.Model(&existing).Update("total", recomputed)
-			existing.Total = recomputed
-			result = existing
-			return nil
-		})
+		}
 
 		if txErr != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{

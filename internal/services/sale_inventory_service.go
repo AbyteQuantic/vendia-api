@@ -116,20 +116,20 @@ func (s *SaleInventoryService) ApplyPostSale(tx *gorm.DB, p PostSaleParams) erro
 		// product side effects are best-effort and never abort the
 		// transaction. Recipe explosion, by contrast, DOES propagate
 		// errors — that path was always transactional.
-		if product.Stock > 0 {
-			_ = LogInventoryMovement(tx, MovementParams{
-				TenantID:      p.TenantID,
-				BranchID:      p.BranchID,
-				ProductID:     product.ID,
-				ProductName:   product.Name,
-				MovementType:  models.MovementSale,
-				Quantity:      -line.Quantity,
-				ReferenceType: "sale",
-				UserID:        p.UserID,
-			})
-			_ = tx.Model(&product).
-				UpdateColumn("stock", gorm.Expr("stock - ?", line.Quantity)).Error
-		}
+		// Trazar SIEMPRE (council BUG-STOCK0-NOKARDEX Spec 083): descuenta y
+		// registra el movimiento aunque el stock quede negativo. Best-effort.
+		_ = LogInventoryMovement(tx, MovementParams{
+			TenantID:      p.TenantID,
+			BranchID:      p.BranchID,
+			ProductID:     product.ID,
+			ProductName:   product.Name,
+			MovementType:  models.MovementSale,
+			Quantity:      -line.Quantity,
+			ReferenceType: "sale",
+			UserID:        p.UserID,
+		})
+		_ = tx.Model(&product).
+			UpdateColumn("stock", gorm.Expr("stock - ?", line.Quantity)).Error
 	}
 	return nil
 }

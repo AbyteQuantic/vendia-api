@@ -157,6 +157,20 @@ func applyPerformanceIndexes(db *gorm.DB) error {
 	return nil
 }
 
+// applyTableAccountIndex crea el índice único PARCIAL que garantiza UNA sola
+// cuenta de mesa ABIERTA por (tenant_id, label) — Spec 083, council
+// BUG-DUP-ACCOUNT-RACE. Sin él, dos primeros pedidos concurrentes a la misma
+// mesa crean cuentas duplicadas. Los handlers reintentan al violarlo (el 2º
+// acumula en la cuenta del ganador). Defensivo/idempotente (IF NOT EXISTS); si
+// hubiera duplicados previos en prod, falla y se loguea sin tumbar el arranque.
+func applyTableAccountIndex(db *gorm.DB) error {
+	return db.Exec(
+		`CREATE UNIQUE INDEX IF NOT EXISTS uniq_open_table_account
+		 ON order_tickets (tenant_id, label)
+		 WHERE status IN ('nuevo','preparando','listo') AND deleted_at IS NULL`,
+	).Error
+}
+
 // ensureBusinessTypesWhitelist keeps the Postgres validate_business_types()
 // function in sync with models.ValidBusinessTypes. The CHECK constraint
 // tenants_business_types_valid (migration 020) calls this function, so adding
