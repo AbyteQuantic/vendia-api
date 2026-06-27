@@ -366,6 +366,9 @@ func main() {
 	// componente en el catálogo sin el deep link del correo).
 	r.POST("/api/v1/store/:slug/my-event-registration", handlers.PublicFindRegistration(db))
 
+	// Spec 086 — branding estacional (público, pre-login; ETag/304, fail-closed).
+	r.GET("/api/v1/branding/season", handlers.GetSeasonalBranding(db))
+
 	// Spec 084 Fase 2 — reserva pública de citas/turnos (peluquería/barbería).
 	r.GET("/api/v1/store/:slug/booking/services", handlers.PublicBookableServices(db))
 	r.GET("/api/v1/store/:slug/booking/staff", handlers.PublicBookingStaff(db))
