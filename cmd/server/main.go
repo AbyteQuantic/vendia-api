@@ -423,6 +423,8 @@ func main() {
 
 	// F042: recordatorios de eventos (cuotas + evento próximo). Diario.
 	r.POST("/api/v1/internal/jobs/event-reminders", handlers.EventRemindersJob(db, pushDispatcher, emailSvc))
+	// Spec 084 backlog #1 — aviso diario al salón con los turnos de hoy.
+	r.POST("/api/v1/internal/jobs/agenda-reminders", handlers.AgendaRemindersJob(db, pushDispatcher))
 
 	// Spec 077 F4 — scraping semanal de cadenas (Éxito/Olímpica) → chain_price +
 	// purga >4 meses. Mismo modelo de auth: sin JWT, gated por CRON_TOKEN.
@@ -516,6 +518,10 @@ func main() {
 		v1.POST("/appointments", handlers.CreateAppointment(db))
 		v1.PATCH("/appointments/:id", handlers.UpdateAppointment(db))
 		v1.POST("/appointments/:id/convert", handlers.ConvertAppointmentToSale(db))
+		// Spec 084 backlog #2 — asistencia (arriendo por días presentes).
+		v1.GET("/staff-attendance", handlers.ListAttendance(db))
+		v1.POST("/staff-attendance", handlers.MarkAttendance(db))
+		v1.DELETE("/staff-attendance", handlers.DeleteAttendance(db))
 		v1.PATCH("/employees/:uuid", handlers.UpdateEmployee(db))
 		v1.DELETE("/employees/:uuid", handlers.DeleteEmployee(db))
 		v1.POST("/employees/verify-pin", handlers.VerifyPin(db))

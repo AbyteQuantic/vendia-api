@@ -48,7 +48,8 @@ func setupPayrollDB(t *testing.T) *gorm.DB {
 	for _, s := range stmts {
 		require.NoError(t, db.Exec(s).Error)
 	}
-	require.NoError(t, db.AutoMigrate(&models.EmployeePayConfig{}, &models.EmployeePayout{}))
+	require.NoError(t, db.AutoMigrate(&models.EmployeePayConfig{}, &models.EmployeePayout{},
+		&models.StaffAttendance{}))
 	// Índice parcial de idempotencia de liquidación (espeja ledger_constraints).
 	require.NoError(t, db.Exec(
 		`CREATE UNIQUE INDEX uq_payout_liquidacion_period ON employee_payouts
@@ -75,6 +76,7 @@ func mountPayrollRole(db *gorm.DB, tenantID, role string) *gin.Engine {
 	r.POST("/payouts", handlers.CreatePayout(db))
 	r.GET("/payouts", handlers.ListPayouts(db))
 	r.POST("/payouts/:id/void", handlers.VoidPayout(db))
+	r.POST("/staff-attendance", handlers.MarkAttendance(db))
 	return r
 }
 
@@ -156,6 +158,20 @@ func TestLiquidation_SumsFrozenCommission(t *testing.T) {
 	assert.Contains(t, body, `"commission_amount":6400`) // 4000+2400 congelado
 	assert.Contains(t, body, `"tip_amount":1500`)        // propina prorrateada y sumada
 	assert.Contains(t, body, `"net_payout":7900`)        // 6400 + 1500
+}
+
+// Asistencia idempotente: marcar dos veces el mismo día = una sola fila.
+func TestMarkAttendance_Idempotent(t *testing.T) {
+	db := setupPayrollDB(t)
+	tenantID := uuid.NewString()
+	empID := uuid.NewString()
+	r := mountPayroll(db, tenantID)
+	body := map[string]any{"employee_uuid": empID, "date": "2026-06-27"}
+	require.Equal(t, http.StatusOK, doJSON(t, r, http.MethodPost, "/staff-attendance", body).Code)
+	require.Equal(t, http.StatusOK, doJSON(t, r, http.MethodPost, "/staff-attendance", body).Code)
+	var n int64
+	db.Model(&models.StaffAttendance{}).Where("tenant_id = ? AND employee_uuid = ?", tenantID, empID).Count(&n)
+	assert.Equal(t, int64(1), n, "una sola asistencia por día")
 }
 
 // Rol-gating: un cajero NO puede registrar pagos ni cambiar el esquema (403).

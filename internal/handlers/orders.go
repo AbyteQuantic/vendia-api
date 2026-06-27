@@ -376,12 +376,26 @@ func CloseOrder(db *gorm.DB) gin.HandlerFunc {
 
 			var saleItems []models.SaleItem
 			var inventoryLines []services.SaleInventoryLine
+			// Spec 084 (backlog #5) — congela la comisión de los servicios al
+			// cerrar la comanda (mismo modelo que la venta directa). Cache de
+			// config de pago por profesional para no consultar por línea.
+			payCfgCache := map[string]*models.EmployeePayConfig{}
+			resolveCfg := func(empUUID string) *models.EmployeePayConfig {
+				if v, ok := payCfgCache[empUUID]; ok {
+					return v
+				}
+				var cfg models.EmployeePayConfig
+				if err := tx.Where("tenant_id = ? AND employee_uuid = ? AND is_active = ?",
+					tenantID, empUUID, true).Order("effective_from DESC").First(&cfg).Error; err != nil {
+					payCfgCache[empUUID] = nil
+					return nil
+				}
+				payCfgCache[empUUID] = &cfg
+				return &cfg
+			}
 			for _, item := range order.Items {
 				pid := item.ProductUUID
-				// Spec 084 — preserva la atribución al profesional al cerrar la
-				// comanda (la comisión de la comanda se congela en una mejora
-				// posterior; el flujo principal del salón es venta directa /sales).
-				saleItems = append(saleItems, models.SaleItem{
+				si := models.SaleItem{
 					ProductID:    &pid,
 					Name:         item.ProductName,
 					Price:        item.UnitPrice,
@@ -389,7 +403,23 @@ func CloseOrder(db *gorm.DB) gin.HandlerFunc {
 					Subtotal:     item.UnitPrice * float64(item.Quantity),
 					EmployeeUUID: item.EmployeeUUID,
 					EmployeeName: item.EmployeeName,
-				})
+				}
+				// Si el producto es un servicio y la línea tiene profesional,
+				// congela la comisión (base = subtotal; salones suelen ser exentos).
+				if item.EmployeeUUID != nil && *item.EmployeeUUID != "" && item.ProductUUID != "" {
+					var p models.Product
+					if err := tx.Select("is_service", "commission_pct").
+						Where("id = ? AND tenant_id = ?", item.ProductUUID, tenantID).
+						First(&p).Error; err == nil && p.IsService {
+						si.IsService = true
+						basis, pct, amount := services.ResolveLineCommission(
+							resolveCfg(*item.EmployeeUUID), p.CommissionPct, si.Subtotal)
+						si.PayBasis = basis
+						si.CommissionPct = pct
+						si.CommissionAmount = amount
+					}
+				}
+				saleItems = append(saleItems, si)
 				// Queue the line for the shared inventory service. A
 				// blank product UUID (legacy / ad-hoc item) is skipped —
 				// it has no stock to move.

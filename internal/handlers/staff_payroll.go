@@ -164,6 +164,94 @@ func UpsertEmployeePayConfig(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// ── Asistencia (arriendo por días presentes, backlog #2) ────────────────────
+
+// MarkAttendance — POST /api/v1/staff-attendance {employee_uuid, date?}
+// Registra que un profesional asistió un día (idempotente por día). Sin date,
+// usa HOY (hora Colombia). Operacional → no requiere rol admin.
+func MarkAttendance(db *gorm.DB) gin.HandlerFunc {
+	type Request struct {
+		EmployeeUUID string `json:"employee_uuid" binding:"required"`
+		Date         string `json:"date"`
+	}
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		var req Request
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		date := req.Date
+		if date == "" {
+			date = time.Now().In(bogotaLoc).Format("2006-01-02")
+		}
+		rec := models.StaffAttendance{
+			TenantID:     tenantID,
+			BranchID:     middleware.GetBranchIDPtr(c),
+			EmployeeUUID: req.EmployeeUUID,
+			Date:         date,
+		}
+		// Idempotente: una por (tenant, empleado, día).
+		err := db.Where("tenant_id = ? AND employee_uuid = ? AND date = ?",
+			tenantID, req.EmployeeUUID, date).
+			FirstOrCreate(&rec, rec).Error
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo registrar la asistencia"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": rec})
+	}
+}
+
+// DeleteAttendance — DELETE /api/v1/staff-attendance?employee_uuid=&date=
+// Quita la marca de asistencia de un día (correcciones).
+func DeleteAttendance(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		emp := strings.TrimSpace(c.Query("employee_uuid"))
+		date := strings.TrimSpace(c.Query("date"))
+		if emp == "" || date == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "indique profesional y fecha"})
+			return
+		}
+		db.Where("tenant_id = ? AND employee_uuid = ? AND date = ?", tenantID, emp, date).
+			Delete(&models.StaffAttendance{})
+		c.JSON(http.StatusOK, gin.H{"message": "asistencia actualizada"})
+	}
+}
+
+// ListAttendance — GET /api/v1/staff-attendance?from=&until=&employee_uuid=
+func ListAttendance(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		q := db.Where("tenant_id = ?", tenantID)
+		if e := strings.TrimSpace(c.Query("employee_uuid")); e != "" {
+			q = q.Where("employee_uuid = ?", e)
+		}
+		if f := strings.TrimSpace(c.Query("from")); f != "" {
+			q = q.Where("date >= ?", f)
+		}
+		if u := strings.TrimSpace(c.Query("until")); u != "" {
+			q = q.Where("date <= ?", u)
+		}
+		var rows []models.StaffAttendance
+		q.Order("date DESC").Limit(500).Find(&rows)
+		c.JSON(http.StatusOK, gin.H{"data": rows})
+	}
+}
+
+// countAttendanceDays cuenta los días con asistencia de un profesional en
+// [from, until). 0 = no hay registro (el caller cae a días calendario).
+func countAttendanceDays(db *gorm.DB, tenantID, empID string, from, until time.Time) int {
+	var count int64
+	db.Model(&models.StaffAttendance{}).
+		Where("tenant_id = ? AND employee_uuid = ? AND date >= ? AND date < ?",
+			tenantID, empID, from.In(bogotaLoc).Format("2006-01-02"),
+			until.In(bogotaLoc).Format("2006-01-02")).
+		Count(&count)
+	return int(count)
+}
+
 // ── Liquidación ─────────────────────────────────────────────────────────────
 
 // LiquidationRow — liquidación de un profesional en el periodo (preview).
@@ -275,6 +363,13 @@ func employeeContext(db *gorm.DB, tenantID, empID string, from, until time.Time)
 	rentUnits := days
 	if cfg.RentUnit == models.RentUnitWeekly {
 		rentUnits = days / 7.0
+	}
+	// Backlog #2 — arriendo diario: si hay asistencia registrada, cobrar solo por
+	// los días presentes (más justo). Sin registros, cae a días calendario.
+	if cfg.PayModel == models.PayModelChairRent && cfg.RentUnit == models.RentUnitDaily {
+		if att := countAttendanceDays(db, tenantID, empID, from, until); att > 0 {
+			rentUnits = float64(att)
+		}
 	}
 	ctx := services.PayrollContext{
 		PayModel:    cfg.PayModel,

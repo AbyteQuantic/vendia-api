@@ -446,6 +446,26 @@ func CreateSale(db *gorm.DB, dispatcher *push.Dispatcher) gin.HandlerFunc {
 				// together with the recipe explosion — see below.
 			}
 
+			// Spec 084 (backlog #4) — base de comisión SIN IVA. La comisión se
+			// congeló en el loop sobre el subtotal (gross). Si la venta lleva IVA,
+			// recalculamos sobre el NET (subtotal − IVA prorrateado por línea,
+			// largest-remainder) para que el profesional no cobre comisión sobre el
+			// impuesto. Para tenants exentos (tax=0) este bloque es no-op.
+			if req.TaxAmount > 0 {
+				weights := make([]float64, len(items))
+				for i := range items {
+					weights[i] = items[i].Subtotal
+				}
+				taxParts := services.ProrateLargestRemainder(req.TaxAmount, weights)
+				for i := range items {
+					if items[i].PayBasis == models.PayBasisCommission && items[i].CommissionPct != nil {
+						net := items[i].Subtotal - taxParts[i]
+						items[i].CommissionAmount =
+							float64(int64(net*(*items[i].CommissionPct)/100.0 + 0.5))
+					}
+				}
+			}
+
 			// Spec 049 (IVA): el IVA NO se suma al total — el cliente nunca lo
 			// agrega a lo cobrado (precio inclusivo o base). `tax_amount` es el
 			// DESGLOSE para reportes y se guarda aparte (Sale.TaxAmount, abajo).

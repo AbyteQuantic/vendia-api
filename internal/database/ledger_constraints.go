@@ -188,6 +188,10 @@ func applyStaffCommissionIndexes(db *gorm.DB) error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS uq_payout_liquidacion_period
 		 ON employee_payouts (tenant_id, employee_uuid, period_start, period_end)
 		 WHERE status = 'paid' AND kind = 'liquidacion' AND deleted_at IS NULL`,
+		// Backlog #2 — una asistencia por (tenant, profesional, día).
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_staff_attendance
+		 ON staff_attendances (tenant_id, employee_uuid, date)
+		 WHERE deleted_at IS NULL`,
 	}
 	for _, s := range stmts {
 		if err := db.Exec(s).Error; err != nil {
