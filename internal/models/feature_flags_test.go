@@ -84,6 +84,18 @@ func TestDefaultFeatureFlags(t *testing.T) {
 				EnableCustomBilling: true,
 			},
 		},
+		// Spec 084 — peluquería/barbería: servicios + facturación + comisiones a
+		// profesionales; NO mesas/KDS/tips.
+		{
+			name:  "peluqueria enables services + staff commissions",
+			types: []string{BusinessTypePeluqueria},
+			opts:  CapabilityToggles{},
+			want: FeatureFlags{
+				EnableServices:         true,
+				EnableCustomBilling:    true,
+				EnableStaffCommissions: true,
+			},
+		},
 		// T-01 (a): toggle servicios → enable_services + enable_custom_billing
 		{
 			name:  "T-01a: toggle services on tienda_barrio grants services + billing",

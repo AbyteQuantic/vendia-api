@@ -24,6 +24,10 @@ const (
 	// mayorista = comercializa abarrotes/aceite (no perecedero).
 	BusinessTypeProveedorAgricola  = "proveedor_agricola"
 	BusinessTypeProveedorMayorista = "proveedor_mayorista"
+	// Spec 084 — peluquerías, barberías y salones de belleza: venden SERVICIOS
+	// atendidos por profesionales, con turnos/citas y liquidación por comisión/
+	// arriendo de silla/sueldo. Su tipo implica la capacidad de Servicios.
+	BusinessTypePeluqueria = "peluqueria_barberia"
 )
 
 // ValidBusinessTypes is the canonical whitelist. The register handler
@@ -43,6 +47,7 @@ var ValidBusinessTypes = map[string]struct{}{
 	BusinessTypeAcademias:            {},
 	BusinessTypeProveedorAgricola:    {},
 	BusinessTypeProveedorMayorista:   {},
+	BusinessTypePeluqueria:           {},
 }
 
 // FeatureFlags are per-tenant module toggles derived from business_types.
@@ -64,6 +69,11 @@ type FeatureFlags struct {
 	// para tiendas cercanas, perecederos, difusión. Lo prenden los business_type
 	// proveedor_agricola / proveedor_mayorista.
 	EnableSupplierMode bool `json:"enable_supplier_mode"`
+	// EnableStaffCommissions gatilla la atribución de servicios por profesional y
+	// la liquidación por comisión/arriendo/sueldo (Spec 084). Type-implied para
+	// peluquerías/barberías; cualquier tenant puede activarlo (p. ej. comisión a
+	// meseros). Solo AGREGA capacidad (Art. X).
+	EnableStaffCommissions bool `json:"enable_staff_commissions"`
 }
 
 // CapabilityToggles carries the three optional capability toggles that a
@@ -98,8 +108,10 @@ func DefaultFeatureFlags(types []string, opts CapabilityToggles) FeatureFlags {
 	}
 
 	food := has(BusinessTypeRestaurante, BusinessTypeComidasRapidas, BusinessTypeBar)
-	services := has(BusinessTypeReparacionMuebles, BusinessTypeManufactura, BusinessTypeEmprendimientoGen)
+	services := has(BusinessTypeReparacionMuebles, BusinessTypeManufactura, BusinessTypeEmprendimientoGen, BusinessTypePeluqueria)
 	supplier := has(BusinessTypeProveedorAgricola, BusinessTypeProveedorMayorista)
+	// Spec 084 — peluquería/barbería implica liquidación a profesionales.
+	salon := has(BusinessTypePeluqueria)
 
 	return FeatureFlags{
 		EnableSupplierMode: supplier,
@@ -112,6 +124,9 @@ func DefaultFeatureFlags(types []string, opts CapabilityToggles) FeatureFlags {
 		// F042 — academias/institutos implican Eventos. Otros tipos lo
 		// activan self-service desde el reel (queda false aquí).
 		EnableEvents: has(BusinessTypeAcademias),
+		// Spec 084 — comisiones/liquidación a profesionales (peluquería implica;
+		// otros tipos lo activan self-service más adelante).
+		EnableStaffCommissions: salon,
 	}
 }
 

@@ -199,7 +199,8 @@ BEGIN
                 'emprendimiento_general',
                 'academias_instituciones',
                 'proveedor_agricola',
-                'proveedor_mayorista'
+                'proveedor_mayorista',
+                'peluqueria_barberia'
             )
         )
         FROM jsonb_array_elements_text(val::jsonb) AS v
