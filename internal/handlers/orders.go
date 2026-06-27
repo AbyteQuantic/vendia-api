@@ -218,6 +218,32 @@ func UpdateOrderStatus(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 
+		// MERMA al cancelar un PLATO ya preparado (Spec 083, decisión fundador:
+		// "cancelar una gaseosa ≠ cancelar una hamburguesa"). Si la cuenta ya
+		// estaba en cocina ('preparando'/'listo') y el ítem es una receta, sus
+		// insumos YA se consumieron → se registran como consumo (pérdida real), no
+		// se restauran. Producto directo (gaseosa) = no-op en ExplodeRecipe (se
+		// revende). Plato 'nuevo' (no cocinado) → no entra acá.
+		if req.Status == models.OrderStatusCancelado &&
+			(previousStatus == models.OrderStatusPreparando || previousStatus == models.OrderStatusListo) {
+			rs := services.NewRecipeService(db)
+			for _, item := range order.Items {
+				if item.ProductUUID == "" || item.Quantity <= 0 {
+					continue
+				}
+				// Ancla de idempotencia distinta de una venta real: re-cancelar
+				// no vuelve a descontar insumos.
+				_ = rs.ExplodeRecipe(db, services.ExplodeParams{
+					TenantID:  tenantID,
+					SaleUUID:  "cancel:" + order.ID,
+					ProductID: item.ProductUUID,
+					Quantity:  item.Quantity,
+					BranchID:  order.BranchID,
+					UserID:    middleware.UUIDPtr(middleware.GetUserID(c)),
+				})
+			}
+		}
+
 		order.Status = req.Status
 		c.JSON(http.StatusOK, gin.H{"data": order})
 	}

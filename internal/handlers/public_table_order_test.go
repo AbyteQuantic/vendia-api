@@ -385,3 +385,104 @@ func TestPublicTableOrder_CancelOpenTab_DoesNotInflateStock(t *testing.T) {
 		Where("movement_type = ?", models.MovementOrderCancel).Count(&cancelMovs)
 	assert.Equal(t, int64(0), cancelMovs, "sin movimiento de cancelación fantasma")
 }
+
+// seedRecipeProduct crea un plato (producto receta) con 1 insumo.
+func seedRecipeProduct(t *testing.T, db *gorm.DB, tenantID, branchID string,
+	name string, ingStock, perUnit float64) (productID, ingredientID string) {
+	t.Helper()
+	productID = uuid.NewString()
+	recipeID := uuid.NewString()
+	ingredientID = uuid.NewString()
+	require.NoError(t, db.Create(&models.Ingredient{
+		BaseModel: models.BaseModel{ID: ingredientID},
+		TenantID:  tenantID, Name: "Insumo", Unit: models.UnitKg, Stock: ingStock,
+	}).Error)
+	pid := productID
+	require.NoError(t, db.Create(&models.Recipe{
+		BaseModel: models.BaseModel{ID: recipeID}, TenantID: tenantID,
+		ProductName: name, SalePrice: 12000, ProductID: &pid,
+		Ingredients: []models.RecipeIngredient{
+			{RecipeUUID: recipeID, ProductName: "Insumo", Quantity: perUnit, IngredientID: &ingredientID},
+		},
+	}).Error)
+	require.NoError(t, db.Exec(
+		`INSERT INTO products (id, created_at, updated_at, tenant_id, branch_id, name, price, stock, is_available, is_recipe, recipe_id)
+		 VALUES (?, ?, ?, ?, ?, ?, 12000, 0, 1, 1, ?)`,
+		productID, time.Now(), time.Now(), tenantID, branchID, name, recipeID).Error)
+	return productID, ingredientID
+}
+
+func mountCancelHandler(db *gorm.DB, tenantID string) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) { c.Set(middleware.TenantIDKey, tenantID); c.Next() })
+	r.PATCH("/orders/:uuid", handlers.UpdateOrderStatus(db))
+	return r
+}
+
+func makeTicket(t *testing.T, db *gorm.DB, tenantID, branchID, label string,
+	status models.OrderStatus, productID string, qty int, price float64) string {
+	t.Helper()
+	id := uuid.NewString()
+	bid := branchID
+	require.NoError(t, db.Create(&models.OrderTicket{
+		BaseModel: models.BaseModel{ID: id}, TenantID: tenantID, BranchID: &bid,
+		Label: label, Status: status, Type: models.OrderTypeMesa, Total: price * float64(qty),
+		Items: []models.OrderItem{{OrderUUID: id, ProductUUID: productID,
+			ProductName: "x", Quantity: qty, UnitPrice: price}},
+	}).Error)
+	return id
+}
+
+// Spec 083 (fundador) — cancelar una HAMBURGUESA ya preparada ('listo') registra
+// la merma de sus insumos (se consumieron al cocinar). No se restauran.
+func TestCancelPreparedRecipe_RecordsMerma(t *testing.T) {
+	db := setupPublicTableOrderDB(t)
+	tenantID, branchID := seedTenantSlug(t, db, "rest")
+	prod, ing := seedRecipeProduct(t, db, tenantID, branchID, "Hamburguesa", 10, 0.2)
+	orderID := makeTicket(t, db, tenantID, branchID, "Mesa 1", models.OrderStatusListo, prod, 3, 12000)
+
+	w := doJSON(t, mountCancelHandler(db, tenantID), http.MethodPatch,
+		"/orders/"+orderID, map[string]any{"status": "cancelado"})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var i models.Ingredient
+	require.NoError(t, db.First(&i, "id = ?", ing).Error)
+	assert.InDelta(t, 9.4, i.Stock, 1e-9, "merma: 10 - 3*0.2 = 9.4 (insumos consumidos)")
+	var consumos int64
+	db.Model(&models.InventoryMovement{}).
+		Where("movement_type = ?", models.MovementRecipeConsumption).Count(&consumos)
+	assert.Equal(t, int64(1), consumos, "registra el consumo (merma) del insumo")
+}
+
+// Cancelar una hamburguesa AÚN 'nuevo' (no cocinada) NO registra merma.
+func TestCancelNewRecipe_NoMerma(t *testing.T) {
+	db := setupPublicTableOrderDB(t)
+	tenantID, branchID := seedTenantSlug(t, db, "rest")
+	prod, ing := seedRecipeProduct(t, db, tenantID, branchID, "Hamburguesa", 10, 0.2)
+	orderID := makeTicket(t, db, tenantID, branchID, "Mesa 1", models.OrderStatusNuevo, prod, 3, 12000)
+
+	w := doJSON(t, mountCancelHandler(db, tenantID), http.MethodPatch,
+		"/orders/"+orderID, map[string]any{"status": "cancelado"})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var i models.Ingredient
+	require.NoError(t, db.First(&i, "id = ?", ing).Error)
+	assert.InDelta(t, 10.0, i.Stock, 1e-9, "plato no cocinado: sin merma")
+}
+
+// Cancelar una GASEOSA (producto directo) 'listo' NO afecta inventario (se revende).
+func TestCancelPreparedDirect_NoMerma(t *testing.T) {
+	db := setupPublicTableOrderDB(t)
+	tenantID, branchID := seedTenantSlug(t, db, "rest")
+	soda := seedDirectProduct(t, db, tenantID, branchID, "Gaseosa", 2500, 20)
+	orderID := makeTicket(t, db, tenantID, branchID, "Mesa 1", models.OrderStatusListo, soda, 2, 2500)
+
+	w := doJSON(t, mountCancelHandler(db, tenantID), http.MethodPatch,
+		"/orders/"+orderID, map[string]any{"status": "cancelado"})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var p models.Product
+	require.NoError(t, db.First(&p, "id = ?", soda).Error)
+	assert.Equal(t, 20, p.Stock, "gaseosa cancelada se revende: stock intacto")
+}
