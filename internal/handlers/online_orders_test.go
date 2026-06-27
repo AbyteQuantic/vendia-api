@@ -63,7 +63,17 @@ func setupOnlineOrdersDB(t *testing.T) *gorm.DB {
 			items TEXT DEFAULT '[]',
 			notes TEXT DEFAULT '',
 			customer_birth_date TEXT DEFAULT '',
-			age_confirmed INTEGER DEFAULT 0
+			age_confirmed INTEGER DEFAULT 0,
+			table_id TEXT,
+			table_label TEXT DEFAULT ''
+		)`,
+		// Spec 083 — mesas (para resolver el pedido de mesa por ?mesa=<id>).
+		`CREATE TABLE tables (
+			id TEXT PRIMARY KEY, created_at DATETIME, updated_at DATETIME,
+			deleted_at DATETIME, tenant_id TEXT NOT NULL,
+			label TEXT NOT NULL, area TEXT DEFAULT '',
+			grid_x INTEGER DEFAULT 0, grid_y INTEGER DEFAULT 0,
+			capacity INTEGER DEFAULT 4, is_active INTEGER DEFAULT 1
 		)`,
 		`CREATE TABLE notifications (
 			id TEXT PRIMARY KEY, created_at DATETIME,
@@ -457,6 +467,94 @@ func TestUpdateOnlineOrderStatus_RejectsUnknownStatus(t *testing.T) {
 	var row models.OnlineOrder
 	require.NoError(t, db.First(&row, "id = ?", orderID).Error)
 	assert.Equal(t, "accepted", row.Status)
+}
+
+// ── Spec 083 — pedido de mesa (QR) + info pública de la mesa ────────────────
+
+func seedTable(t *testing.T, db *gorm.DB, tenantID, label, area string) string {
+	t.Helper()
+	id := uuid.NewString()
+	require.NoError(t, db.Exec(
+		`INSERT INTO tables (id, tenant_id, label, area, is_active, created_at) VALUES (?, ?, ?, ?, 1, datetime('now'))`,
+		id, tenantID, label, area,
+	).Error)
+	return id
+}
+
+// AC-01 — un pedido con table_id válido se crea sin teléfono ni pago, con
+// delivery_type="mesa" y el label snapshot-eado (label + área).
+func TestPublicCreateOnlineOrder_Mesa_SinTelefonoNiPago(t *testing.T) {
+	db := setupOnlineOrdersDB(t)
+	tenantID, _ := seedTenantWithBranch(t, db, "rest-mesas")
+	tableID := seedTable(t, db, tenantID, "Mesa 5", "Terraza")
+
+	w := postOnlineOrder(t, db, "rest-mesas", map[string]any{
+		"customer_name": "Mesa 5", // default cuando el comensal no escribe nombre
+		"table_id":      tableID,
+		"items": []map[string]any{{
+			"product_id": uuid.NewString(), "name": "Limonada", "quantity": 2, "price": 6000,
+		}},
+	})
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var row models.OnlineOrder
+	require.NoError(t, db.First(&row).Error)
+	assert.Equal(t, "mesa", row.DeliveryType, "el table_id fuerza delivery=mesa")
+	require.NotNil(t, row.TableID)
+	assert.Equal(t, tableID, *row.TableID)
+	assert.Equal(t, "Mesa 5 · Terraza", row.TableLabel, "label autoritativo desde la mesa (con área)")
+	assert.Equal(t, "", row.CustomerPhone)
+	assert.Equal(t, "", row.PaymentMethod)
+}
+
+// Una mesa de OTRO tenant (o inexistente) no ata el pedido a la mesa: cae a
+// delivery normal sin romper la venta.
+func TestPublicCreateOnlineOrder_Mesa_DeOtroTenant_NoAta(t *testing.T) {
+	db := setupOnlineOrdersDB(t)
+	seedTenantWithBranch(t, db, "rest-a")
+	otherTenant, _ := seedTenantWithBranch(t, db, "rest-b")
+	foreignTable := seedTable(t, db, otherTenant, "Mesa 9", "")
+
+	w := postOnlineOrder(t, db, "rest-a", map[string]any{
+		"customer_name": "Cliente",
+		"table_id":      foreignTable,
+		"items": []map[string]any{{
+			"product_id": uuid.NewString(), "name": "Café", "quantity": 1, "price": 3000,
+		}},
+	})
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var row models.OnlineOrder
+	require.NoError(t, db.Where("tenant_id = (SELECT id FROM tenants WHERE store_slug = 'rest-a')").First(&row).Error)
+	assert.Nil(t, row.TableID, "no debe atar una mesa de otro tenant")
+	assert.NotEqual(t, "mesa", row.DeliveryType)
+}
+
+// AC-02 — GET .../table/:id devuelve label+area; 404 si es de otro tenant.
+func TestPublicTableInfo_ReturnsLabelArea_ScopedToTenant(t *testing.T) {
+	db := setupOnlineOrdersDB(t)
+	tenantID, _ := seedTenantWithBranch(t, db, "rest-info")
+	otherTenant, _ := seedTenantWithBranch(t, db, "rest-otro")
+	tableID := seedTable(t, db, tenantID, "Mesa 3", "Salón")
+	foreignTable := seedTable(t, db, otherTenant, "Mesa 7", "")
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/api/v1/public/catalog/:slug/table/:id", handlers.PublicTableInfo(db))
+
+	// Mesa propia → 200 con label + area.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/public/catalog/rest-info/table/"+tableID, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "Mesa 3")
+	assert.Contains(t, w.Body.String(), "Salón")
+
+	// Mesa de OTRO tenant vía este slug → 404 (no se filtra cross-tenant).
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/public/catalog/rest-info/table/"+foreignTable, nil)
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req2)
+	assert.Equal(t, http.StatusNotFound, w2.Code)
 }
 
 // ── Spec 063 — control de edad en el backend (defensa en profundidad) ───────

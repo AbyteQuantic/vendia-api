@@ -29,6 +29,7 @@ func CreateTable(db *gorm.DB) gin.HandlerFunc {
 	type Request struct {
 		ID       string `json:"id"`
 		Label    string `json:"label" binding:"required"`
+		Area     string `json:"area"` // Spec 083 — zona opcional
 		GridX    int    `json:"grid_x"`
 		GridY    int    `json:"grid_y"`
 		Capacity int    `json:"capacity"`
@@ -56,6 +57,7 @@ func CreateTable(db *gorm.DB) gin.HandlerFunc {
 		table := models.Table{
 			TenantID: tenantID,
 			Label:    req.Label,
+			Area:     req.Area,
 			GridX:    req.GridX,
 			GridY:    req.GridY,
 			Capacity: capacity,
@@ -77,6 +79,7 @@ func CreateTable(db *gorm.DB) gin.HandlerFunc {
 func UpdateTable(db *gorm.DB) gin.HandlerFunc {
 	type Request struct {
 		Label    *string `json:"label"`
+		Area     *string `json:"area"` // Spec 083 — zona opcional
 		GridX    *int    `json:"grid_x"`
 		GridY    *int    `json:"grid_y"`
 		Capacity *int    `json:"capacity"`
@@ -104,6 +107,9 @@ func UpdateTable(db *gorm.DB) gin.HandlerFunc {
 		if req.Label != nil {
 			updates["label"] = *req.Label
 		}
+		if req.Area != nil {
+			updates["area"] = *req.Area
+		}
 		if req.GridX != nil {
 			updates["grid_x"] = *req.GridX
 		}
@@ -126,6 +132,36 @@ func UpdateTable(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// PublicTableInfo — GET /api/v1/public/catalog/:slug/table/:id  (Spec 083)
+// Público (sin auth): el menú online, al abrirse con ?mesa=<id>, resuelve aquí
+// la mesa para mostrar al comensal "Mesa X · Área". Scoped al tenant del slug;
+// 404 si la mesa no existe, está inactiva o es de otro tenant.
+func PublicTableInfo(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		slug := c.Param("slug")
+		tableID := c.Param("id")
+
+		var tenant models.Tenant
+		if err := db.Where("store_slug = ?", slug).First(&tenant).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "tienda no encontrada"})
+			return
+		}
+
+		var table models.Table
+		if err := db.Where("id = ? AND tenant_id = ? AND is_active = ?", tableID, tenant.ID, true).
+			First(&table).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "mesa no encontrada"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{
+			"id":    table.ID,
+			"label": table.Label,
+			"area":  table.Area,
+		}})
+	}
+}
+
 // SyncTables performs a bulk upsert within a transaction.
 // Tables in the array are created or updated. Tables NOT in the array
 // that belong to the tenant are soft-deactivated (is_active = false).
@@ -134,6 +170,7 @@ func SyncTables(db *gorm.DB) gin.HandlerFunc {
 	type TableInput struct {
 		ID       string `json:"id"`
 		Label    string `json:"label" binding:"required"`
+		Area     string `json:"area"` // Spec 083 — zona opcional
 		GridX    int    `json:"grid_x"`
 		GridY    int    `json:"grid_y"`
 		Capacity int    `json:"capacity"`
@@ -168,6 +205,7 @@ func SyncTables(db *gorm.DB) gin.HandlerFunc {
 						Where("id = ? AND tenant_id = ?", t.ID, tenantID).
 						Updates(map[string]any{
 							"label":     t.Label,
+							"area":      t.Area,
 							"grid_x":    t.GridX,
 							"grid_y":    t.GridY,
 							"capacity":  capacity,
@@ -183,6 +221,7 @@ func SyncTables(db *gorm.DB) gin.HandlerFunc {
 				newTable := models.Table{
 					TenantID: tenantID,
 					Label:    t.Label,
+					Area:     t.Area,
 					GridX:    t.GridX,
 					GridY:    t.GridY,
 					Capacity: capacity,

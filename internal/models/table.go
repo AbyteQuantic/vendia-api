@@ -5,6 +5,9 @@ type Table struct {
 
 	TenantID string `gorm:"type:uuid;index;not null" json:"tenant_id"`
 	Label    string `gorm:"not null" json:"label"`
+	// Area — zona OPCIONAL de la mesa (Terraza, Salón, Barra…). Spec 083.
+	// Vacío para negocios pequeños que no agrupan por área.
+	Area     string `gorm:"default:''" json:"area"`
 	GridX    int    `gorm:"default:0" json:"grid_x"`
 	GridY    int    `gorm:"default:0" json:"grid_y"`
 	Capacity int    `gorm:"default:4" json:"capacity"`

@@ -138,18 +138,33 @@ func onlineOrderTasks(db *gorm.DB, tenantID string) []models.Task {
 		if who == "" {
 			who = "un cliente"
 		}
+		// Spec 083 — pedido de mesa: el destino es la MESA, no un cliente. El
+		// personal necesita ver claro a qué mesa va y cuánto lleva esperando
+		// (recordatorio de tiempo de solicitud / demora de entrega).
+		isMesa := o.DeliveryType == "mesa" || o.TableLabel != ""
 		t := models.Task{
 			ID: models.TaskOnlineOrder + ":" + o.ID, Kind: models.TaskOnlineOrder, SourceID: o.ID,
 			DeepLink: "/online-orders/" + o.ID, Amount: o.TotalAmount, CreatedAt: o.CreatedAt,
 		}
 		if o.Status == "pending" {
-			t.Title = "Pedido en línea de " + who
-			t.Subtitle = ago(o.CreatedAt) + " · por aceptar"
+			if isMesa {
+				t.Title = "Pedido · " + o.TableLabel
+				t.Subtitle = ago(o.CreatedAt) + " · por aceptar"
+			} else {
+				t.Title = "Pedido en línea de " + who
+				t.Subtitle = ago(o.CreatedAt) + " · por aceptar"
+			}
 			t.Urgency = models.TaskUrgencyCritical
 			t.ActionLabel = "Aceptar"
 		} else {
-			t.Title = "Entregar pedido de " + who
-			t.Subtitle = "Aceptado · por entregar"
+			if isMesa {
+				t.Title = "Entregar a " + o.TableLabel
+			} else {
+				t.Title = "Entregar pedido de " + who
+			}
+			// Recordatorio de demora: mostramos cuánto lleva "aceptado · por
+			// entregar" para que el personal no lo olvide en la mesa.
+			t.Subtitle = ago(o.CreatedAt) + " · por entregar"
 			t.Urgency = models.TaskUrgencyHigh
 			t.ActionLabel = "Marcar entregado"
 		}

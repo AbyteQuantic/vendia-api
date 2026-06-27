@@ -442,6 +442,10 @@ func main() {
 	// returning, see PublicCustomerOrders for the privacy contract.
 	r.GET("/api/v1/public/catalog/:slug/my-orders", handlers.PublicCustomerOrders(db))
 
+	// Spec 083 — info pública de una mesa (para el menú con ?mesa=<id>):
+	// devuelve label + área para mostrar "Mesa X · Área" al comensal.
+	r.GET("/api/v1/public/catalog/:slug/table/:id", handlers.PublicTableInfo(db))
+
 	// Public "live tab" viewer. The QR printed for each table
 	// encodes only the session_token (not the order id or tenant
 	// id), so the lookup surface is narrow and un-guessable. See

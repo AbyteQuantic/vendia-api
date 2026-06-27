@@ -91,6 +91,11 @@ func PublicCreateOnlineOrder(db *gorm.DB, dispatcher *push.Dispatcher) gin.Handl
 		PaymentMethodID string    `json:"payment_method_id"`
 		Items           []ItemReq `json:"items" binding:"required,min=1"`
 		Notes           string    `json:"notes"`
+		// Spec 083 — pedido desde el QR de una mesa. Cuando viene table_id,
+		// el delivery_type se fuerza a "mesa" y se snapshot-ea el label para
+		// la tarea/recibo. El cliente está sentado: sin teléfono ni pago.
+		TableID    string `json:"table_id"`
+		TableLabel string `json:"table_label"`
 		// AcceptedTerms carries the Habeas-Data checkbox from the
 		// public catalogue. Only `true` triggers a consent flip on
 		// the Customer row (see upsertCustomerFromOrder). Omitted or
@@ -129,6 +134,26 @@ func PublicCreateOnlineOrder(db *gorm.DB, dispatcher *push.Dispatcher) gin.Handl
 		delivery := req.DeliveryType
 		if delivery == "" {
 			delivery = "pickup"
+		}
+
+		// Spec 083 — pedido de mesa: si viene un table_id válido, lo resolvemos
+		// contra las mesas del tenant para tomar el label/área AUTORITATIVOS (no
+		// confiamos en el label del cliente) y forzamos delivery="mesa". Una
+		// mesa inexistente/de otro tenant NO bloquea el pedido: cae a delivery
+		// con el label que mandó el cliente, para no perder la venta.
+		var tablePtr *string
+		tableLabel := strings.TrimSpace(req.TableLabel)
+		if tid := strings.TrimSpace(req.TableID); tid != "" && models.IsValidUUID(tid) {
+			var tbl models.Table
+			if err := db.Where("id = ? AND tenant_id = ? AND is_active = ?", tid, tenant.ID, true).
+				First(&tbl).Error; err == nil {
+				tablePtr = &tbl.ID
+				tableLabel = tbl.Label
+				if tbl.Area != "" {
+					tableLabel = tbl.Label + " · " + tbl.Area
+				}
+				delivery = "mesa"
+			}
 		}
 
 		paymentMethodID := strings.TrimSpace(req.PaymentMethodID)
@@ -180,6 +205,8 @@ func PublicCreateOnlineOrder(db *gorm.DB, dispatcher *push.Dispatcher) gin.Handl
 			Notes:             req.Notes,
 			CustomerBirthDate: birthDate,
 			AgeConfirmed:      ageConfirmed,
+			TableID:           tablePtr,
+			TableLabel:        tableLabel,
 		}
 
 		if err := db.Create(&order).Error; err != nil {

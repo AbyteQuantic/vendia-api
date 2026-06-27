@@ -14,7 +14,15 @@ type OnlineOrder struct {
 	BranchID *string `gorm:"type:uuid;index" json:"branch_id,omitempty"`
 	CustomerName  string    `gorm:"not null" json:"customer_name"`
 	CustomerPhone string    `gorm:"default:''" json:"customer_phone"`
+	// DeliveryType: "pickup" | "delivery" | "mesa" (Spec 083 — pedido desde
+	// el QR de una mesa; el cliente está sentado y paga en el local).
 	DeliveryType  string    `gorm:"default:'pickup'" json:"delivery_type"`
+	// Spec 083 — pedido de mesa. TableID/TableLabel se llenan cuando el pedido
+	// entró por el QR de una mesa (?mesa=<id> en el catálogo). El label se
+	// snapshot-ea para que la tarea/recibo lo muestre aunque la mesa se renombre
+	// o borre. Vacíos para pickup/delivery.
+	TableID    *string `gorm:"type:uuid;index" json:"table_id,omitempty"`
+	TableLabel string  `gorm:"default:''" json:"table_label,omitempty"`
 	// PaymentMethod is the free-form name selected by the customer
 	// in the public catalog ("Efectivo", "Nequi Personal", etc.) —
 	// the ID of the TenantPaymentMethod row is duplicated into
