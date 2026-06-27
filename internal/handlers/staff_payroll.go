@@ -19,6 +19,23 @@ import (
 	"gorm.io/gorm"
 )
 
+// canManagePayroll — operaciones de dinero (config de pago / liquidaciones) solo
+// para dueño y administrador. Bloquea cajero/mesero/inventario. Rol vacío (tokens
+// legacy) se permite para no romper sesiones anteriores (fail-open acotado).
+func canManagePayroll(c *gin.Context) bool {
+	switch middleware.GetRole(c) {
+	case string(models.RoleWSCashier), string(models.RoleWSWaiter), string(models.RoleWSInventoryMgr):
+		return false
+	default:
+		return true
+	}
+}
+
+func forbidPayroll(c *gin.Context) {
+	c.JSON(http.StatusForbidden, gin.H{
+		"error": "Solo el dueño o un administrador puede gestionar pagos y comisiones."})
+}
+
 // ── Config de pago por profesional ──────────────────────────────────────────
 
 // GetEmployeePayConfig — GET /api/v1/employees/:id/pay-config
@@ -58,6 +75,10 @@ func UpsertEmployeePayConfig(db *gorm.DB) gin.HandlerFunc {
 		TipRate       *float64 `json:"tip_rate"`
 	}
 	return func(c *gin.Context) {
+		if !canManagePayroll(c) {
+			forbidPayroll(c)
+			return
+		}
 		tenantID := middleware.GetTenantID(c)
 		empID := c.Param("uuid")
 		var req Request
@@ -328,6 +349,10 @@ func GetLiquidation(db *gorm.DB) gin.HandlerFunc {
 // anticipo/arriendo con su desglose snapshot. Append-only.
 func CreatePayout(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if !canManagePayroll(c) {
+			forbidPayroll(c)
+			return
+		}
 		tenantID := middleware.GetTenantID(c)
 		var p models.EmployeePayout
 		if err := c.ShouldBindJSON(&p); err != nil {
@@ -386,6 +411,10 @@ func ListPayouts(db *gorm.DB) gin.HandlerFunc {
 // VoidPayout — POST /api/v1/payouts/:id/void (admin/owner). Anula sin borrar.
 func VoidPayout(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if !canManagePayroll(c) {
+			forbidPayroll(c)
+			return
+		}
 		tenantID := middleware.GetTenantID(c)
 		id := c.Param("id")
 		res := db.Model(&models.EmployeePayout{}).

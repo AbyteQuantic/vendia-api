@@ -58,9 +58,17 @@ func setupPayrollDB(t *testing.T) *gorm.DB {
 }
 
 func mountPayroll(db *gorm.DB, tenantID string) *gin.Engine {
+	return mountPayrollRole(db, tenantID, "owner")
+}
+
+func mountPayrollRole(db *gorm.DB, tenantID, role string) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(func(c *gin.Context) { c.Set(middleware.TenantIDKey, tenantID); c.Next() })
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.TenantIDKey, tenantID)
+		c.Set(middleware.RoleKey, role)
+		c.Next()
+	})
 	r.GET("/employees/:uuid/pay-config", handlers.GetEmployeePayConfig(db))
 	r.PUT("/employees/:uuid/pay-config", handlers.UpsertEmployeePayConfig(db))
 	r.GET("/payouts/liquidation", handlers.GetLiquidation(db))
@@ -148,6 +156,25 @@ func TestLiquidation_SumsFrozenCommission(t *testing.T) {
 	assert.Contains(t, body, `"commission_amount":6400`) // 4000+2400 congelado
 	assert.Contains(t, body, `"tip_amount":1500`)        // propina prorrateada y sumada
 	assert.Contains(t, body, `"net_payout":7900`)        // 6400 + 1500
+}
+
+// Rol-gating: un cajero NO puede registrar pagos ni cambiar el esquema (403).
+func TestPayroll_CashierForbidden(t *testing.T) {
+	db := setupPayrollDB(t)
+	tenantID := uuid.NewString()
+	empID := uuid.NewString()
+	r := mountPayrollRole(db, tenantID, "cashier")
+
+	cfg := doJSON(t, r, http.MethodPut, "/employees/"+empID+"/pay-config",
+		map[string]any{"pay_model": "commission", "commission_pct": 40})
+	assert.Equal(t, http.StatusForbidden, cfg.Code)
+
+	pay := doJSON(t, r, http.MethodPost, "/payouts", map[string]any{
+		"employee_uuid": empID, "kind": "liquidacion",
+		"period_start": time.Now().Format(time.RFC3339),
+		"period_end":   time.Now().Format(time.RFC3339),
+	})
+	assert.Equal(t, http.StatusForbidden, pay.Code)
 }
 
 // Payout: registrar, listar, idempotencia de liquidación, anular.
