@@ -91,7 +91,8 @@ func setupSaleCreditDB(t *testing.T) *gorm.DB {
 			is_container_charge INTEGER DEFAULT 0,
 			is_service INTEGER DEFAULT 0,
 			custom_description TEXT DEFAULT '',
-			custom_unit_price REAL DEFAULT 0
+			custom_unit_price REAL DEFAULT 0,
+			employee_uuid TEXT, employee_name TEXT DEFAULT '', pay_basis TEXT DEFAULT 'none', commission_pct REAL, commission_amount REAL DEFAULT 0
 		)`,
 		`CREATE TABLE customers (
 			id TEXT PRIMARY KEY, created_at DATETIME, updated_at DATETIME,

@@ -74,6 +74,8 @@ func Migrate(db *gorm.DB) error {
 
 		&models.Sale{},
 		&models.SaleItem{},
+		&models.EmployeePayConfig{}, // Spec 084 — modelo de pago del profesional
+		&models.EmployeePayout{},    // Spec 084 — liquidaciones (append-only)
 		&models.RefreshToken{},
 		&models.Customer{},
 		&models.CreditAccount{},
@@ -242,6 +244,10 @@ func Migrate(db *gorm.DB) error {
 		// Spec 083 — una sola cuenta de mesa ABIERTA por (tenant, label).
 		if err := applyTableAccountIndex(db); err != nil {
 			log.Printf("[bootstrap] table-account unique index: %v", err)
+		}
+		// Spec 084 — índices de comisiones/liquidación (peluquería/barbería).
+		if err := applyStaffCommissionIndexes(db); err != nil {
+			log.Printf("[bootstrap] staff-commission indexes: %v", err)
 		}
 		// F042 — el tipo academias_instituciones debe pasar el CHECK
 		// tenants_business_types_valid. Render solo corre AutoMigrate, no

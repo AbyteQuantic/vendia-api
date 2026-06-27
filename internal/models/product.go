@@ -88,6 +88,11 @@ type Product struct {
 	// reusa para el detalle del servicio.
 	IsService bool `gorm:"default:false;index" json:"is_service"`
 
+	// Spec 084 — comisión por SERVICIO (peluquería/barbería). Tasa por defecto
+	// del servicio para el profesional que lo realiza; nullable = sin tasa propia
+	// (cae a la del profesional o 0). Solo aplica cuando IsService=true.
+	CommissionPct *float64 `gorm:"column:commission_pct;type:numeric(5,2)" json:"commission_pct,omitempty"`
+
 	// ── Spec 063 — venta restringida a mayores de edad ──────────────────
 	// IsAgeRestricted marca productos de venta SOLO para mayores de 18
 	// (licor, cigarrillos, vapeadores…). El catálogo público exige

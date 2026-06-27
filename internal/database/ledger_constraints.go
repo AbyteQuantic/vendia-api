@@ -171,6 +171,32 @@ func applyTableAccountIndex(db *gorm.DB) error {
 	).Error
 }
 
+// applyStaffCommissionIndexes — Spec 084. (1) UNA config de pago ACTIVA por
+// (tenant, empleado, sede); el COALESCE de branch_id permite una config
+// tenant-wide (branch NULL) sin chocar. (2) histórico de payouts por periodo.
+// (3) idempotencia de la LIQUIDACIÓN (no doble-pago del mismo periodo). Todo
+// IF NOT EXISTS / parcial, aditivo e idempotente (Postgres).
+func applyStaffCommissionIndexes(db *gorm.DB) error {
+	stmts := []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_active_pay_config
+		 ON employee_pay_configs (tenant_id, employee_uuid,
+		   COALESCE(branch_id, '00000000-0000-0000-0000-000000000000'::uuid))
+		 WHERE is_active = true AND deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_payouts_tenant_period
+		 ON employee_payouts (tenant_id, period_start DESC)
+		 WHERE deleted_at IS NULL`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_payout_liquidacion_period
+		 ON employee_payouts (tenant_id, employee_uuid, period_start, period_end)
+		 WHERE status = 'paid' AND kind = 'liquidacion' AND deleted_at IS NULL`,
+	}
+	for _, s := range stmts {
+		if err := db.Exec(s).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ensureBusinessTypesWhitelist keeps the Postgres validate_business_types()
 // function in sync with models.ValidBusinessTypes. The CHECK constraint
 // tenants_business_types_valid (migration 020) calls this function, so adding

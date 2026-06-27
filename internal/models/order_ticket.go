@@ -84,4 +84,9 @@ type OrderItem struct {
 	Quantity    int     `gorm:"not null" json:"quantity"`
 	UnitPrice   float64 `gorm:"not null" json:"unit_price"`
 	Emoji       string  `json:"emoji,omitempty"`
+	// Spec 084 — atribución por línea al profesional (espejo de SaleItem). Se
+	// copia al SaleItem al cerrar la comanda (CloseOrder) para no perder la
+	// atribución de la cuenta de mesa/comanda.
+	EmployeeUUID *string `gorm:"type:uuid;index" json:"employee_uuid,omitempty"`
+	EmployeeName string  `gorm:"type:varchar(128);not null;default:''" json:"employee_name,omitempty"`
 }

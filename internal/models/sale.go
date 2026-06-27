@@ -149,4 +149,16 @@ type SaleItem struct {
 	IsService         bool    `gorm:"not null;default:false" json:"is_service"`
 	CustomDescription string  `gorm:"type:varchar(256);not null;default:''" json:"custom_description,omitempty"`
 	CustomUnitPrice   float64 `gorm:"type:numeric(12,2);not null;default:0" json:"custom_unit_price,omitempty"`
+	// ── Spec 084 — atribución del servicio al PROFESIONAL que lo hizo ──────
+	// Por LÍNEA (no por venta): en un salón un ticket puede tener servicios de
+	// distintos profesionales. EmployeeUUID nullable (*string + UUIDPtr; nunca
+	// empty-string → rompe el cast uuid). EmployeeName = snapshot. La comisión se
+	// CONGELA al cobrar (server-authoritative): PayBasis qué modelo aplicó,
+	// CommissionPct la tasa, CommissionAmount el monto (COP). La liquidación es
+	// una SUMA reproducible aunque cambien las tarifas después.
+	EmployeeUUID     *string  `gorm:"type:uuid;index" json:"employee_uuid,omitempty"`
+	EmployeeName     string   `gorm:"type:varchar(128);not null;default:''" json:"employee_name,omitempty"`
+	PayBasis         string   `gorm:"type:varchar(16);not null;default:'none'" json:"pay_basis"`
+	CommissionPct    *float64 `gorm:"type:numeric(5,2)" json:"commission_pct,omitempty"`
+	CommissionAmount float64  `gorm:"type:numeric(12,2);not null;default:0" json:"commission_amount"`
 }

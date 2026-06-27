@@ -98,7 +98,8 @@ func applyMesaSchema(t *testing.T, db *gorm.DB) {
 			name TEXT NOT NULL, price REAL NOT NULL DEFAULT 0, quantity INTEGER NOT NULL,
 			subtotal REAL NOT NULL DEFAULT 0, is_container_charge INTEGER DEFAULT 0,
 			is_service INTEGER DEFAULT 0, custom_description TEXT DEFAULT '',
-			custom_unit_price REAL DEFAULT 0
+			custom_unit_price REAL DEFAULT 0,
+			employee_uuid TEXT, employee_name TEXT DEFAULT '', pay_basis TEXT DEFAULT 'none', commission_pct REAL, commission_amount REAL DEFAULT 0
 		)`,
 		// gen_random_uuid() default rompe AutoMigrate en sqlite → DDL crudo.
 		`CREATE TABLE notifications (
