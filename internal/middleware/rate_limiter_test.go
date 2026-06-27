@@ -29,6 +29,31 @@ func TestRateLimiter_AllowsWithinLimit(t *testing.T) {
 	}
 }
 
+// Spec 083 — bajo CGNAT (móvil/5G) muchos usuarios comparten IP. El limiter debe
+// aislar por TOKEN cuando hay sesión: dos dispositivos (tokens distintos) no se
+// 429-ean entre sí aunque vengan del mismo IP; el mismo token sí respeta el cupo.
+func TestRateLimiter_KeysByToken_NotByIP(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(middleware.NewRateLimiter(1, 1*time.Minute))
+	r.GET("/test", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
+
+	do := func(token string) int {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest(http.MethodGet, "/test", nil)
+		if token != "" {
+			req.Header.Set("Authorization", token)
+		}
+		r.ServeHTTP(w, req)
+		return w.Code
+	}
+
+	assert.Equal(t, http.StatusOK, do("Bearer A"), "1er request del token A pasa")
+	assert.Equal(t, http.StatusTooManyRequests, do("Bearer A"), "2º del MISMO token excede el cupo")
+	assert.Equal(t, http.StatusOK, do("Bearer B"),
+		"otro token (otro dispositivo) NO comparte cupo aunque venga del mismo IP")
+}
+
 func TestRateLimiter_BlocksOverLimit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

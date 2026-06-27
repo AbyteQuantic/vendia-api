@@ -32,14 +32,27 @@ func NewRateLimiter(limit int, window time.Duration) gin.HandlerFunc {
 	return rl.handler
 }
 
+// rateKey decide el cubo del limitador. CRÍTICO para móvil/5G: bajo CGNAT
+// (carrier-grade NAT) miles de usuarios comparten UNA IP pública, así que limitar
+// por IP castiga a usuarios legítimos con tráfico ajeno (429 espurios). Cuando hay
+// sesión (header Authorization), limitamos por TOKEN — aísla cada dispositivo/
+// cuenta. Las rutas anónimas (login, catálogo público) siguen por IP, que es lo
+// correcto para frenar abuso desde una sola fuente.
+func rateKey(c *gin.Context) string {
+	if auth := c.GetHeader("Authorization"); auth != "" {
+		return "tok:" + auth
+	}
+	return "ip:" + c.ClientIP()
+}
+
 func (rl *rateLimiter) handler(c *gin.Context) {
-	ip := c.ClientIP()
+	key := rateKey(c)
 
 	rl.mu.Lock()
-	v, exists := rl.visitors[ip]
+	v, exists := rl.visitors[key]
 	now := time.Now()
 	if !exists || now.Sub(v.windowAt) > rl.window {
-		rl.visitors[ip] = &visitor{count: 1, windowAt: now}
+		rl.visitors[key] = &visitor{count: 1, windowAt: now}
 		rl.mu.Unlock()
 		c.Next()
 		return
@@ -63,9 +76,9 @@ func (rl *rateLimiter) cleanup() {
 	for range ticker.C {
 		rl.mu.Lock()
 		now := time.Now()
-		for ip, v := range rl.visitors {
+		for key, v := range rl.visitors {
 			if now.Sub(v.windowAt) > rl.window*2 {
-				delete(rl.visitors, ip)
+				delete(rl.visitors, key)
 			}
 		}
 		rl.mu.Unlock()

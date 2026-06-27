@@ -295,7 +295,9 @@ func main() {
 	}))
 
 	loginLimiter := middleware.NewRateLimiter(cfg.RateLimitLogin, 1*time.Minute)
-	globalLimiter := middleware.NewRateLimiter(100, 1*time.Minute)
+	// 300/min por TOKEN (no por IP — ver rateKey): holgura para un POS activo que
+	// hace polling (tareas/mesas/sync) sin 429 espurios; sigue frenando abuso.
+	globalLimiter := middleware.NewRateLimiter(300, 1*time.Minute)
 
 	// ── Public routes ────────────────────────────────────────────────────────
 	r.GET("/ping", handlers.Ping)
