@@ -64,6 +64,15 @@ jobs:
           cat /tmp/out.json; echo
           [ "$code" = "200" ] || { echo "::error::event-reminders HTTP $code"; exit 1; }
 
+      - name: agenda-reminders (Spec 084 — turnos de hoy, 08:00 COT)
+        if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 13 * * *'
+        run: |
+          code=$(curl -sS -o /tmp/out.json -w '%{http_code}' --retry 3 --retry-delay 10 \
+            -X POST "$API/api/v1/internal/jobs/agenda-reminders" \
+            -H "Authorization: Bearer ${{ secrets.CRON_TOKEN }}")
+          cat /tmp/out.json; echo
+          [ "$code" = "200" ] || { echo "::error::agenda-reminders HTTP $code"; exit 1; }
+
       - name: scrape-chains (Spec 077 — semanal)
         # always(): no lo bloquea un fallo de un job anterior en pruebas manuales.
         if: always() && (github.event_name == 'workflow_dispatch' || github.event.schedule == '0 9 * * 1')
