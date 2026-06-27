@@ -1033,6 +1033,13 @@ func main() {
 		// GTM 073 — Tablero de activación (embudo + desglose por tienda)
 		admin.GET("/activation", handlers.AdminActivationFunnel(db))
 
+		// Spec 086 — branding estacional (CRUD de campañas).
+		admin.GET("/seasonal-campaigns", handlers.AdminListSeasonalCampaigns(db))
+		admin.POST("/seasonal-campaigns", handlers.AdminCreateSeasonalCampaign(db))
+		admin.PATCH("/seasonal-campaigns/:id", handlers.AdminUpdateSeasonalCampaign(db))
+		admin.DELETE("/seasonal-campaigns/:id", handlers.AdminDeleteSeasonalCampaign(db))
+		admin.POST("/seasonal-campaigns/:id/activate", handlers.AdminActivateSeasonalCampaign(db))
+
 		// Phase 3 — Support hub (super-admin side)
 		admin.GET("/support/tickets", handlers.AdminListSupportTickets(db))
 		admin.GET("/support/tickets/:id", handlers.AdminGetSupportTicket(db))
