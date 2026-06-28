@@ -301,6 +301,7 @@ func main() {
 
 	// ── Public routes ────────────────────────────────────────────────────────
 	r.GET("/ping", handlers.Ping)
+	r.GET("/healthz/db", handlers.HealthDB(db)) // Spec 089 — keep-alive DB (anti pausa Supabase)
 
 	// F024: si el captcha está habilitado, el middleware se inserta entre
 	// el rate-limiter y el handler. En modo deshabilitado captchaMiddleware

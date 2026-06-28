@@ -1,0 +1,45 @@
+# Spec 089 — Keep-alive del free tier.
+#   - warmup: golpea /ping cada ~10 min en horario comercial Colombia para que la
+#     instancia Render no haga spin-down (~15 min idle) → sin cold-start en la
+#     primera venta del día. Repo PÚBLICO ⇒ Actions ilimitado, no cuesta minutos.
+#   - dbkeepalive: golpea /healthz/db una vez al día (SELECT 1) para que Supabase
+#     free NO se pause por ~7 días de inactividad.
+#
+# Horario Colombia = UTC-5. Comercial 06:00–22:00 COT ⇒ UTC 11:00–23:59 y 00:00–03:59.
+name: keepalive
+
+on:
+  schedule:
+    - cron: '*/10 11-23 * * *' # 06:00–18:59 COT (warmup Render)
+    - cron: '*/10 0-3 * * *'   # 19:00–22:59 COT (warmup Render)
+    - cron: '30 8 * * *'       # 03:30 COT — keep-alive DB (anti pausa Supabase)
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: true
+
+env:
+  API: https://api.vendia.store
+
+jobs:
+  warmup:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.schedule, '*/10')
+    runs-on: ubuntu-latest
+    steps:
+      - name: ping (mantener Render caliente)
+        run: |
+          curl -sS --max-time 70 --retry 2 -o /dev/null \
+            -w 'warmup /ping %{http_code} en %{time_total}s\n' "$API/ping" || true
+
+  dbkeepalive:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '30 8 * * *'
+    runs-on: ubuntu-latest
+    steps:
+      - name: ping DB (anti pausa Supabase)
+        run: |
+          code=$(curl -sS --max-time 70 -o /tmp/o -w '%{http_code}' --retry 3 --retry-delay 10 "$API/healthz/db")
+          cat /tmp/o; echo
+          [ "$code" = "200" ] || echo "::warning::healthz/db HTTP $code"
