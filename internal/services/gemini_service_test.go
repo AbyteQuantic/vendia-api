@@ -218,6 +218,22 @@ func TestBuildEnhancePhotoPrompt_FidelityAnchors(t *testing.T) {
 	// "When in doubt, keep exactly what the photo shows."
 	assert.Contains(t, prompt, "When in doubt",
 		"doubt-resolution anchor missing")
+
+	// Mejora de imperfecciones + calidad SIN tocar el producto (pedido del
+	// fundador 2026-06-28): limpiar foto/suciedad y subir calidad, pero la
+	// distinción crítica protege que no se rediseñe el producto.
+	qualityAnchors := []string{
+		"remove dust, dirt",      // imperfecciones de superficie
+		"glare",                  // reflejos molestos
+		"remove blur",            // nitidez
+		"noise",                  // ruido digital
+		"HIGH-RESOLUTION",        // calidad de salida
+		"WITHOUT inventing any detail", // no alucinar detalles
+		"CRITICAL DISTINCTION",   // foto sí / producto no
+	}
+	for _, s := range qualityAnchors {
+		assert.Contains(t, prompt, s, "quality/imperfection anchor missing: %q", s)
+	}
 }
 
 // FR-04: productInfo must be a CONTEXT HINT only — never a generation

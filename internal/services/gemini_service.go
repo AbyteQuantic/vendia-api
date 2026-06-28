@@ -597,12 +597,15 @@ func buildEnhancePhotoPrompt(productInfo string) string {
 
 THE ATTACHED IMAGE IS THE PRODUCT. It is the one and only source of truth for the object's shape, silhouette, proportions, colours, materials, decorative details, accessories, printed text and brand. You are retouching THIS exact object — you are not designing a product.%s
 
-YOUR ONLY ALLOWED EDITS:
+YOUR ONLY ALLOWED EDITS (improve the PHOTO, never the product):
 - Cut the product out of its current background (table, hands, clutter, environment shadows) and place it on a pure white background (#FFFFFF), clean and seamless.
 - Light it with soft, even studio lighting, as in a professional e-commerce product shoot.
 - Add one subtle, soft contact shadow beneath the product so it sits naturally on the white surface.
 - Center the product in the frame with comfortable margin around it, square 1:1 framing, catalog composition.
-- Gently clean the product's surface (dust, smudges, fingerprints) WITHOUT changing its shape, and refine exposure/saturation WITHOUT shifting any hue.
+- Make the product look clean and new: remove dust, dirt, lint, smudges, fingerprints, water drops, and distracting glare or harsh reflections on its surface — WITHOUT changing its shape, design, printed text or colours.
+- Maximize photographic quality: sharpen soft focus, remove blur and digital noise/grain, straighten a tilted or skewed angle into a clean catalog view, and correct white balance, exposure and contrast — WITHOUT shifting any hue and WITHOUT inventing any detail that is not already visible in the photo.
+
+CRITICAL DISTINCTION: you may fix PHOTOGRAPHIC and surface-dirt imperfections (blur, noise, bad lighting, glare, dust, smudges, fingerprints) so it looks like a clean, professional, high-resolution shot. You may NOT touch the PRODUCT itself — its real shape, parts, proportions, materials, decorations, characters, figures, logos, labels and text must stay EXACTLY as in the photo. Cleaning the photo is allowed; redesigning the product is not.
 
 STRICTLY FORBIDDEN (these cause the exact bug we are fixing):
 - DO NOT replace the product with a different object, a "cleaner" version, or a stock/official version of what you think it is.
@@ -616,7 +619,7 @@ If you recognise the product (a known character, a famous brand, a typical packa
 
 The product in your result MUST be recognisably the same product as in the original photo: a person comparing both images must say "it is the same product, just photographed better." Same object, same identity — only the background, lighting and framing improve.
 
-Output: a clean, professional e-commerce catalog photo of the SAME product on a pure white background, centered, with soft studio lighting and a subtle shadow. No extra text, no added logos, no watermarks.`, contextHint)
+Output: a clean, professional, HIGH-RESOLUTION e-commerce catalog photo of the SAME product on a pure white background — centered, sharp and crisp, with soft studio lighting and a subtle contact shadow. No extra text, no added logos, no watermarks.`, contextHint)
 }
 
 // EnhancePhoto generates a professional e-commerce product photo.
