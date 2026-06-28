@@ -155,7 +155,7 @@ func EnhanceTenantLogo(db *gorm.DB, geminiSvc *services.GeminiService, storageSv
 		db.Where("id = ?", tenantID).First(&tenant)
 
 		enhanced, err := geminiSvc.EnhancePhoto(
-			c.Request.Context(), data, mimeType, "logo de la tienda "+tenant.BusinessName)
+			c.Request.Context(), data, mimeType, "logo de la tienda "+tenant.BusinessName, "")
 		if err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": "no se pudo mejorar el logo", "detail": err.Error()})
 			return

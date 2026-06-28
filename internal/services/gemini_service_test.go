@@ -253,6 +253,32 @@ func TestBuildEnhancePhotoPrompt_ProductInfoIsHintOnly(t *testing.T) {
 		"productInfo must not be a generation target")
 }
 
+// Spec 017 FR-05: el tendero puede escribir una indicación para corregir un
+// resultado alterado. Debe incluirse, NUNCA poder saltarse la fidelidad, y ser
+// segura ante % (no romper Sprintf) ya que es texto libre del usuario.
+func TestBuildEnhancePhotoPrompt_OwnerInstruction(t *testing.T) {
+	// Sin instrucción → no aparece el bloque del dueño.
+	base := buildEnhancePhotoPromptWithInstruction("", "")
+	assert.NotContains(t, base, "Owner's instruction")
+
+	// Con instrucción → se incluye textual + el candado de fidelidad.
+	p := buildEnhancePhotoPromptWithInstruction("",
+		"deja la tapa roja y no borres el código de barras")
+	assert.Contains(t, p, "deja la tapa roja y no borres el código de barras")
+	assert.Contains(t, p, "Owner's instruction")
+	assert.Contains(t, p, "can NEVER")          // no puede saltarse las reglas
+	assert.Contains(t, p, "never redesign, replace, invent")
+	// Las anclas de fidelidad siguen presentes con instrucción.
+	assert.Contains(t, p, "THE ATTACHED IMAGE IS THE PRODUCT")
+	assert.Contains(t, p, "DO NOT replace")
+
+	// Seguridad: instrucción con % no rompe el formato ni se pierde.
+	pct := buildEnhancePhotoPromptWithInstruction("Gaseosa 100%", "subir 50% el brillo %s")
+	assert.Contains(t, pct, "subir 50% el brillo %s")
+	assert.Contains(t, pct, "Gaseosa 100%")
+	assert.NotContains(t, pct, "%!")            // sin verbos de formato mal resueltos
+}
+
 func TestBuildEnhancePhotoPrompt_EmptyProductInfoStillBuilds(t *testing.T) {
 	// Empty productInfo is a valid input — the call sites pass "" when
 	// the merchant hasn't filled in the product name yet. The prompt

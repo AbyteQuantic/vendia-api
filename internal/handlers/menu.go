@@ -255,7 +255,7 @@ func EnhanceMenuImage(geminiSvc *services.GeminiService, storageSvc services.Fil
 
 		// name como contexto (productInfo): pista de qué es el objeto, NUNCA un
 		// objetivo de generación — la foto adjunta manda (FR-017, fidelidad).
-		img, err := geminiSvc.EnhancePhoto(ctx, data, mimeType, name)
+		img, err := geminiSvc.EnhancePhoto(ctx, data, mimeType, name, "")
 		if err != nil || len(img) == 0 {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{
 				"error": "No pudimos mejorar la foto. Intenta de nuevo.",

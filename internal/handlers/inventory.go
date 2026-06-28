@@ -576,6 +576,14 @@ func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, storage
 		}
 		productInfo := buildProductInfo(c, product)
 
+		// Spec 017 FR-05: indicación opcional escrita por el tendero para
+		// corregir un resultado alterado. Query ?instruction=... (igual que
+		// name/presentation/content). Se acota para evitar abuso.
+		instruction := strings.TrimSpace(c.Query("instruction"))
+		if len(instruction) > 500 {
+			instruction = instruction[:500]
+		}
+
 		job, err := createAIJob(db, tenantID, productUUID, models.AIJobTypeEnhance)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo iniciar el trabajo de IA"})
@@ -585,7 +593,7 @@ func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, storage
 		// The real work runs in the background with context.Background()
 		// — see runAIJob. The request context dies with this 202 reply.
 		worker := enhancePhotoWorker(db, geminiSvc, storageSvc, catalogSvc,
-			product, tenantID, productUUID, sourceURL, productInfo)
+			product, tenantID, productUUID, sourceURL, productInfo, instruction)
 		launchAIJob(db, job.ID, productUUID, tenantID, worker)
 
 		respondAIJobAccepted(c, job.ID)
@@ -598,14 +606,14 @@ func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, storage
 // mirror it into the catalog. It returns the new photo URL.
 //
 // Spec: specs/016-ia-foto-async-polling/spec.md — §3, FR-01.
-func enhancePhotoWorker(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage, catalogSvc *services.CatalogService, product models.Product, tenantID, productUUID, sourceURL, productInfo string) aiPhotoWorker {
+func enhancePhotoWorker(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage, catalogSvc *services.CatalogService, product models.Product, tenantID, productUUID, sourceURL, productInfo, instruction string) aiPhotoWorker {
 	return func(ctx context.Context) (string, error) {
 		imageData, contentType, err := downloadSourceImage(ctx, sourceURL)
 		if err != nil {
 			return "", err
 		}
 
-		enhanced, err := geminiSvc.EnhancePhoto(ctx, imageData, contentType, productInfo)
+		enhanced, err := geminiSvc.EnhancePhoto(ctx, imageData, contentType, productInfo, instruction)
 		if err != nil {
 			return "", fmt.Errorf("error al mejorar foto: %w", err)
 		}
