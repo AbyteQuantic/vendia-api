@@ -39,46 +39,11 @@ func maskLuminance(c color.NRGBA) float64 {
 	return float64(c.R)*0.299 + float64(c.G)*0.587 + float64(c.B)*0.114
 }
 
-// dilateBool crece la región true en radio r (separable: horizontal + vertical).
-// Sirve para que la máscara no corte los bordes del producto.
-func dilateBool(g []bool, w, h, r int) []bool {
-	if r <= 0 {
-		return g
-	}
-	tmp := make([]bool, w*h)
-	for y := 0; y < h; y++ {
-		base := y * w
-		for x := 0; x < w; x++ {
-			on := false
-			for dx := -r; dx <= r && !on; dx++ {
-				nx := x + dx
-				if nx >= 0 && nx < w && g[base+nx] {
-					on = true
-				}
-			}
-			tmp[base+x] = on
-		}
-	}
-	out := make([]bool, w*h)
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			on := false
-			for dy := -r; dy <= r && !on; dy++ {
-				ny := y + dy
-				if ny >= 0 && ny < h && tmp[ny*w+x] {
-					on = true
-				}
-			}
-			out[y*w+x] = on
-		}
-	}
-	return out
-}
-
-// fillHoles rellena los huecos INTERIORES (puntos pequeños que el modelo dejó como
-// fondo dentro del producto): marca el fondo alcanzable desde los bordes; todo lo que
-// no se alcanza es producto (hueco) → se rellena. Devuelve la silueta sin huecos.
-func fillHoles(g []bool, w, h int) []bool {
+// fillSmallHoles rellena SOLO los huecos interiores PEQUEÑOS (los "puntos" que el
+// modelo dejó como fondo dentro del producto), dejando intactos los huecos grandes
+// reales (p. ej. el centro de una argolla). No crece el contorno → no genera halo.
+// maxArea = tamaño máximo de hueco a rellenar (en píxeles).
+func fillSmallHoles(g []bool, w, h, maxArea int) []bool {
 	reach := make([]bool, w*h) // fondo conectado al borde
 	stack := make([]int, 0, w*h/4)
 	push := func(i int) {
@@ -95,32 +60,62 @@ func fillHoles(g []bool, w, h int) []bool {
 		push(y * w)
 		push(y*w + w - 1)
 	}
+	neigh := func(i int) [4]int {
+		x, y := i%w, i/w
+		n := [4]int{-1, -1, -1, -1}
+		if x > 0 {
+			n[0] = i - 1
+		}
+		if x < w-1 {
+			n[1] = i + 1
+		}
+		if y > 0 {
+			n[2] = i - w
+		}
+		if y < h-1 {
+			n[3] = i + w
+		}
+		return n
+	}
 	for len(stack) > 0 {
 		i := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		x, y := i%w, i/w
-		if x > 0 {
-			push(i - 1)
-		}
-		if x < w-1 {
-			push(i + 1)
-		}
-		if y > 0 {
-			push(i - w)
-		}
-		if y < h-1 {
-			push(i + w)
+		for _, ni := range neigh(i) {
+			if ni >= 0 {
+				push(ni)
+			}
 		}
 	}
+
 	out := make([]bool, w*h)
-	for i := range out {
-		out[i] = !reach[i] // todo lo no-alcanzable como fondo = producto (rellena huecos)
+	copy(out, g)
+	seen := make([]bool, w*h)
+	// Recorrer componentes de hueco (fondo NO alcanzable) y rellenar los pequeños.
+	for start := 0; start < w*h; start++ {
+		if g[start] || reach[start] || seen[start] {
+			continue
+		}
+		comp := []int{start}
+		seen[start] = true
+		for qi := 0; qi < len(comp); qi++ {
+			for _, ni := range neigh(comp[qi]) {
+				if ni >= 0 && !g[ni] && !reach[ni] && !seen[ni] {
+					seen[ni] = true
+					comp = append(comp, ni)
+				}
+			}
+		}
+		if len(comp) <= maxArea { // hueco pequeño → rellenar
+			for _, c := range comp {
+				out[c] = true
+			}
+		}
 	}
 	return out
 }
 
-// cleanMask limpia la máscara reescalada: binariza, rellena huecos pequeños y dilata
-// un poco para no cortar bordes; luego un leve desenfoque para bordes suaves. Spec 094:
+// cleanMask limpia la máscara reescalada: binariza y rellena los huecos PEQUEÑOS
+// (sin dilatar → sin halo), luego un leve desenfoque para bordes suaves. Spec 094:
 // solo opera sobre la MÁSCARA, jamás sobre los píxeles del producto.
 func cleanMask(mask *image.NRGBA) *image.NRGBA {
 	b := mask.Bounds()
@@ -131,12 +126,8 @@ func cleanMask(mask *image.NRGBA) *image.NRGBA {
 			g[y*w+x] = maskLuminance(mask.NRGBAAt(x, y)) > 40
 		}
 	}
-	r := int(math.Round(float64(min(w, h)) * 0.006))
-	if r < 1 {
-		r = 1
-	}
-	g = dilateBool(g, w, h, r) // no cortar bordes
-	g = fillHoles(g, w, h)     // completar puntos/huecos interiores
+	maxHole := int(math.Round(float64(w*h) * 0.004)) // ~0.4% del área = "punto pequeño"
+	g = fillSmallHoles(g, w, h, maxHole)
 
 	out := imaging.New(w, h, color.NRGBA{0, 0, 0, 255})
 	for y := 0; y < h; y++ {
@@ -146,7 +137,7 @@ func cleanMask(mask *image.NRGBA) *image.NRGBA {
 			}
 		}
 	}
-	return imaging.Blur(out, 1.0) // bordes suaves (anti-alias)
+	return imaging.Blur(out, 0.6) // bordes suaves, sin engordar el contorno
 }
 
 // cutoutWithAlpha recorta el fondo: deja el producto real con TRANSPARENCIA (alfa =
