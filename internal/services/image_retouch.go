@@ -29,9 +29,52 @@ import (
 // applyRealce mejora cómo se ve la FOTO sin inventar nada: leve contraste, brillo y
 // nitidez sobre los píxeles reales. Valores conservadores para no "quemar" la imagen.
 func applyRealce(img image.Image) *image.NRGBA {
-	out := imaging.AdjustContrast(img, 8)  // +8% contraste
+	out := imaging.AdjustContrast(img, 9)  // +9% contraste
 	out = imaging.AdjustBrightness(out, 3) // +3% brillo
-	out = imaging.Sharpen(out, 0.8)        // nitidez suave (unsharp)
+	out = imaging.AdjustSaturation(out, 6) // +6% color (punch de estudio, sin cambiar tono)
+	out = imaging.Sharpen(out, 0.9)        // nitidez suave (unsharp)
+	return out
+}
+
+// studioBackdrop crea un fondo de estudio: degradado vertical muy sutil de blanco
+// (arriba) a gris claro (abajo), como un ciclorama/seamless. Da profundidad sin que
+// se sienta plano. No toca el producto.
+func studioBackdrop(side int) *image.NRGBA {
+	c := imaging.New(side, side, color.NRGBA{255, 255, 255, 255})
+	for y := 0; y < side; y++ {
+		t := float64(y) / float64(side)
+		t2 := t * t
+		r := uint8(255 - t2*19)
+		g := uint8(255 - t2*17)
+		b := uint8(255 - t2*14)
+		for x := 0; x < side; x++ {
+			c.SetNRGBA(x, y, color.NRGBA{r, g, b, 255})
+		}
+	}
+	return c
+}
+
+// makeReflection genera un reflejo del producto (espejo vertical) que se desvanece
+// hacia abajo — el look "piso brillante" de catálogo. Usa el alfa real del producto.
+func makeReflection(prod *image.NRGBA, maxAlpha, heightFrac float64) *image.NRGBA {
+	flipped := imaging.FlipV(prod)
+	b := flipped.Bounds()
+	w, h := b.Dx(), b.Dy()
+	rh := int(float64(h) * heightFrac)
+	if rh < 1 {
+		rh = 1
+	}
+	out := imaging.New(w, rh, color.NRGBA{0, 0, 0, 0})
+	for y := 0; y < rh; y++ {
+		fade := maxAlpha * (1 - float64(y)/float64(rh))
+		for x := 0; x < w; x++ {
+			pc := flipped.NRGBAAt(x, y)
+			if pc.A == 0 {
+				continue
+			}
+			out.SetNRGBA(x, y, color.NRGBA{pc.R, pc.G, pc.B, uint8(float64(pc.A) * fade)})
+		}
+	}
 	return out
 }
 
@@ -161,10 +204,11 @@ func cutoutWithAlpha(src image.Image, mask *image.NRGBA) *image.NRGBA {
 	return out
 }
 
-// centerProductOnSquare recorta al contorno real del producto (bounding box de la
-// máscara), lo centra en un lienzo CUADRADO blanco con margen y le pone una SOMBRA
-// suave. Devuelve nil si no halla producto (el caller usa el fail-safe).
-func centerProductOnSquare(product *image.NRGBA, mask *image.NRGBA, margin float64) *image.NRGBA {
+// studioCompose monta el producto real (recortado al contorno de la máscara) en una
+// ESCENA de estudio: fondo degradado + sombra de contacto + reflejo sutil + producto.
+// Todo es composición alrededor de los PÍXELES REALES — el producto no se redibuja ni
+// cambia de ángulo. Devuelve nil si no halla producto (el caller usa el fail-safe).
+func studioCompose(product *image.NRGBA, mask *image.NRGBA, margin float64) *image.NRGBA {
 	b := mask.Bounds()
 	w, h := b.Dx(), b.Dy()
 	minX, minY, maxX, maxY := w, h, -1, -1
@@ -192,32 +236,49 @@ func centerProductOnSquare(product *image.NRGBA, mask *image.NRGBA, margin float
 
 	prodCrop := imaging.Crop(product, image.Rect(minX, minY, maxX+1, maxY+1))
 	bw, bh := maxX-minX+1, maxY-minY+1
+
+	// Reservar espacio para el reflejo debajo del producto.
+	reflH := int(float64(bh) * 0.45)
+	gap := int(float64(bh) * 0.015)
+	if gap < 1 {
+		gap = 1
+	}
+	contentH := bh + gap + reflH
 	frac := 1 - 2*margin
 	if frac < 0.5 {
 		frac = 0.5
 	}
-	side := int(float64(max(bw, bh)) / frac)
+	side := int(float64(max(bw, contentH)) / frac)
 	if side < 1 {
-		side = max(bw, bh)
+		side = max(bw, contentH)
 	}
-	canvas := imaging.New(side, side, color.NRGBA{255, 255, 255, 255})
-	offX, offY := (side-bw)/2, (side-bh)/2
 
-	// Sombra: silueta del producto en gris oscuro, difuminada y semitransparente,
-	// desplazada hacia abajo (sombra de contacto). Deriva de la forma real.
+	canvas := studioBackdrop(side)
+	offX := (side - bw) / 2
+	top := (side - contentH) / 2
+	if top < 0 {
+		top = 0
+	}
+
+	// Sombra de contacto (silueta difuminada) justo bajo el producto.
 	shadow := imaging.New(bw, bh, color.NRGBA{0, 0, 0, 0})
 	for y := 0; y < bh; y++ {
 		for x := 0; x < bw; x++ {
 			if prodCrop.NRGBAAt(x, y).A > 40 {
-				shadow.SetNRGBA(x, y, color.NRGBA{40, 40, 40, 255})
+				shadow.SetNRGBA(x, y, color.NRGBA{30, 30, 35, 255})
 			}
 		}
 	}
-	shadow = imaging.Blur(shadow, float64(side)*0.02+1)
-	dy := int(float64(side) * 0.04) // hacia abajo
+	shadow = imaging.Blur(shadow, float64(side)*0.018+1)
+	canvas = imaging.Overlay(canvas, shadow,
+		image.Pt(offX, top+int(float64(bh)*0.03)), 0.22)
 
-	canvas = imaging.Overlay(canvas, shadow, image.Pt(offX, offY+dy), 0.28)
-	canvas = imaging.Overlay(canvas, prodCrop, image.Pt(offX, offY), 1.0)
+	// Reflejo sutil debajo del producto (look de catálogo).
+	refl := makeReflection(prodCrop, 0.22, 0.45)
+	canvas = imaging.Overlay(canvas, refl, image.Pt(offX, top+bh+gap), 1.0)
+
+	// Producto real encima.
+	canvas = imaging.Overlay(canvas, prodCrop, image.Pt(offX, top), 1.0)
 	return canvas
 }
 
@@ -237,10 +298,10 @@ func FaithfulRetouch(originalBytes, maskBytes []byte) ([]byte, error) {
 		if mask, _, mErr := image.Decode(bytes.NewReader(maskBytes)); mErr == nil {
 			b := realced.Bounds()
 			maskR := imaging.Resize(mask, b.Dx(), b.Dy(), imaging.Linear)
-			cleaned := cleanMask(maskR) // completar puntos + no cortar bordes
+			cleaned := cleanMask(maskR) // completar puntos pequeños, sin halo
 			cut := cutoutWithAlpha(realced, cleaned)
-			if centered := centerProductOnSquare(cut, cleaned, 0.12); centered != nil {
-				result = centered
+			if studio := studioCompose(cut, cleaned, 0.12); studio != nil {
+				result = studio
 			}
 			// bbox vacío o máscara no decodifica → fail-safe: solo realce.
 		}
