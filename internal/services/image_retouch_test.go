@@ -20,6 +20,25 @@ func pngBytes(t *testing.T, img image.Image) []byte {
 	return b.Bytes()
 }
 
+func TestCleanMask_RellenaHuecosInteriores(t *testing.T) {
+	// Máscara: cuadrado blanco (producto) con un hueco negro interior (un "punto"
+	// que el modelo dejó como fondo dentro del producto).
+	m := imaging.New(24, 24, color.NRGBA{0, 0, 0, 255})
+	for y := 4; y < 20; y++ {
+		for x := 4; x < 20; x++ {
+			m.SetNRGBA(x, y, color.NRGBA{255, 255, 255, 255})
+		}
+	}
+	m.SetNRGBA(11, 11, color.NRGBA{0, 0, 0, 255}) // hueco interior
+	m.SetNRGBA(12, 12, color.NRGBA{0, 0, 0, 255})
+
+	cleaned := cleanMask(m)
+	// El hueco interior quedó relleno (producto) → luminancia alta en el centro.
+	assert.Greater(t, maskLuminance(cleaned.NRGBAAt(11, 11)), 200.0,
+		"el hueco interior se completa")
+	assert.Greater(t, maskLuminance(cleaned.NRGBAAt(12, 12)), 200.0)
+}
+
 func TestFaithfulRetouch_RealceOnly_PreservaTamano(t *testing.T) {
 	src := imaging.New(16, 16, color.NRGBA{200, 60, 60, 255})
 	out, err := FaithfulRetouch(pngBytes(t, src), nil)

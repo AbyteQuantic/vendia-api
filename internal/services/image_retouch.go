@@ -4,10 +4,12 @@
 // PÍXELES REALES de la foto del tendero, nunca redibujan el producto. Garantía de
 // fidelidad (Spec 094):
 //   - applyRealce: filtros de foto (contraste, brillo, nitidez) — embellece sin alterar.
-//   - cutoutWithAlpha: usa la máscara (producto vs fondo) para dejar el producto real
-//     con transparencia (fondo recortado).
+//   - cleanMask: rellena huecos pequeños y dilata levemente la máscara para NO cortar
+//     bordes ni dejar "puntos" recortados del producto (morfología sobre la máscara,
+//     no sobre el producto).
+//   - cutoutWithAlpha: deja el producto real con transparencia (fondo recortado).
 //   - centerProductOnSquare: recorta al contorno, centra en cuadrado blanco con margen
-//     y agrega una SOMBRA suave (derivada de la silueta) para mejor aspecto.
+//     y agrega una SOMBRA suave para mejor aspecto.
 // Si no hay máscara, se devuelve solo el realce (fail-safe).
 package services
 
@@ -19,6 +21,7 @@ import (
 	_ "image/jpeg" // decode jpeg
 	"image/jpeg"
 	_ "image/png" // decode png
+	"math"
 
 	"github.com/disintegration/imaging"
 )
@@ -36,18 +39,127 @@ func maskLuminance(c color.NRGBA) float64 {
 	return float64(c.R)*0.299 + float64(c.G)*0.587 + float64(c.B)*0.114
 }
 
+// dilateBool crece la región true en radio r (separable: horizontal + vertical).
+// Sirve para que la máscara no corte los bordes del producto.
+func dilateBool(g []bool, w, h, r int) []bool {
+	if r <= 0 {
+		return g
+	}
+	tmp := make([]bool, w*h)
+	for y := 0; y < h; y++ {
+		base := y * w
+		for x := 0; x < w; x++ {
+			on := false
+			for dx := -r; dx <= r && !on; dx++ {
+				nx := x + dx
+				if nx >= 0 && nx < w && g[base+nx] {
+					on = true
+				}
+			}
+			tmp[base+x] = on
+		}
+	}
+	out := make([]bool, w*h)
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			on := false
+			for dy := -r; dy <= r && !on; dy++ {
+				ny := y + dy
+				if ny >= 0 && ny < h && tmp[ny*w+x] {
+					on = true
+				}
+			}
+			out[y*w+x] = on
+		}
+	}
+	return out
+}
+
+// fillHoles rellena los huecos INTERIORES (puntos pequeños que el modelo dejó como
+// fondo dentro del producto): marca el fondo alcanzable desde los bordes; todo lo que
+// no se alcanza es producto (hueco) → se rellena. Devuelve la silueta sin huecos.
+func fillHoles(g []bool, w, h int) []bool {
+	reach := make([]bool, w*h) // fondo conectado al borde
+	stack := make([]int, 0, w*h/4)
+	push := func(i int) {
+		if !g[i] && !reach[i] {
+			reach[i] = true
+			stack = append(stack, i)
+		}
+	}
+	for x := 0; x < w; x++ {
+		push(x)
+		push((h-1)*w + x)
+	}
+	for y := 0; y < h; y++ {
+		push(y * w)
+		push(y*w + w - 1)
+	}
+	for len(stack) > 0 {
+		i := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		x, y := i%w, i/w
+		if x > 0 {
+			push(i - 1)
+		}
+		if x < w-1 {
+			push(i + 1)
+		}
+		if y > 0 {
+			push(i - w)
+		}
+		if y < h-1 {
+			push(i + w)
+		}
+	}
+	out := make([]bool, w*h)
+	for i := range out {
+		out[i] = !reach[i] // todo lo no-alcanzable como fondo = producto (rellena huecos)
+	}
+	return out
+}
+
+// cleanMask limpia la máscara reescalada: binariza, rellena huecos pequeños y dilata
+// un poco para no cortar bordes; luego un leve desenfoque para bordes suaves. Spec 094:
+// solo opera sobre la MÁSCARA, jamás sobre los píxeles del producto.
+func cleanMask(mask *image.NRGBA) *image.NRGBA {
+	b := mask.Bounds()
+	w, h := b.Dx(), b.Dy()
+	g := make([]bool, w*h)
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			g[y*w+x] = maskLuminance(mask.NRGBAAt(x, y)) > 40
+		}
+	}
+	r := int(math.Round(float64(min(w, h)) * 0.006))
+	if r < 1 {
+		r = 1
+	}
+	g = dilateBool(g, w, h, r) // no cortar bordes
+	g = fillHoles(g, w, h)     // completar puntos/huecos interiores
+
+	out := imaging.New(w, h, color.NRGBA{0, 0, 0, 255})
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			if g[y*w+x] {
+				out.SetNRGBA(x, y, color.NRGBA{255, 255, 255, 255})
+			}
+		}
+	}
+	return imaging.Blur(out, 1.0) // bordes suaves (anti-alias)
+}
+
 // cutoutWithAlpha recorta el fondo: deja el producto real con TRANSPARENCIA (alfa =
-// luminancia de la máscara), sin tocar sus colores. Devuelve también la máscara
-// reescalada (para hallar el bounding box al centrar).
-func cutoutWithAlpha(src image.Image, mask image.Image) (*image.NRGBA, *image.NRGBA) {
+// luminancia de la máscara ya limpia), sin tocar sus colores. mask debe ser del mismo
+// tamaño que src.
+func cutoutWithAlpha(src image.Image, mask *image.NRGBA) *image.NRGBA {
 	b := src.Bounds()
 	w, h := b.Dx(), b.Dy()
 	srcN := imaging.Clone(src)
-	maskR := imaging.Resize(mask, w, h, imaging.Linear)
-	out := imaging.New(w, h, color.NRGBA{0, 0, 0, 0}) // transparente
+	out := imaging.New(w, h, color.NRGBA{0, 0, 0, 0})
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
-			a := maskLuminance(maskR.NRGBAAt(x, y))
+			a := maskLuminance(mask.NRGBAAt(x, y))
 			if a <= 5 {
 				continue // fondo → transparente
 			}
@@ -55,14 +167,12 @@ func cutoutWithAlpha(src image.Image, mask image.Image) (*image.NRGBA, *image.NR
 			out.SetNRGBA(x, y, color.NRGBA{sc.R, sc.G, sc.B, uint8(a)})
 		}
 	}
-	return out, maskR
+	return out
 }
 
 // centerProductOnSquare recorta al contorno real del producto (bounding box de la
 // máscara), lo centra en un lienzo CUADRADO blanco con margen y le pone una SOMBRA
-// suave. Spec 094: solo mueve/encuadra los píxeles reales y agrega una sombra a la
-// COMPOSICIÓN — no redibuja ni inventa nada del producto. Devuelve nil si no halla
-// producto (para que el caller use el fail-safe).
+// suave. Devuelve nil si no halla producto (el caller usa el fail-safe).
 func centerProductOnSquare(product *image.NRGBA, mask *image.NRGBA, margin float64) *image.NRGBA {
 	b := mask.Bounds()
 	w, h := b.Dx(), b.Dy()
@@ -112,8 +222,7 @@ func centerProductOnSquare(product *image.NRGBA, mask *image.NRGBA, margin float
 			}
 		}
 	}
-	sigma := float64(side)*0.02 + 1
-	shadow = imaging.Blur(shadow, sigma)
+	shadow = imaging.Blur(shadow, float64(side)*0.02+1)
 	dy := int(float64(side) * 0.04) // hacia abajo
 
 	canvas = imaging.Overlay(canvas, shadow, image.Pt(offX, offY+dy), 0.28)
@@ -121,9 +230,9 @@ func centerProductOnSquare(product *image.NRGBA, mask *image.NRGBA, margin float
 	return canvas
 }
 
-// FaithfulRetouch aplica el pipeline fiel: realce siempre; recorte de fondo + centrado
-// + sombra si hay máscara. NUNCA regenera el producto. maskBytes puede ser nil
-// (fail-safe → solo realce). Devuelve JPEG (el upload a R2 lo convierte a WebP).
+// FaithfulRetouch aplica el pipeline fiel: realce siempre; limpieza de máscara +
+// recorte + centrado + sombra si hay máscara. NUNCA regenera el producto. maskBytes
+// puede ser nil (fail-safe → solo realce). Devuelve JPEG (R2 lo pasa a WebP).
 func FaithfulRetouch(originalBytes, maskBytes []byte) ([]byte, error) {
 	src, _, err := image.Decode(bytes.NewReader(originalBytes))
 	if err != nil {
@@ -135,8 +244,11 @@ func FaithfulRetouch(originalBytes, maskBytes []byte) ([]byte, error) {
 
 	if len(maskBytes) > 0 {
 		if mask, _, mErr := image.Decode(bytes.NewReader(maskBytes)); mErr == nil {
-			cut, maskR := cutoutWithAlpha(realced, mask)
-			if centered := centerProductOnSquare(cut, maskR, 0.10); centered != nil {
+			b := realced.Bounds()
+			maskR := imaging.Resize(mask, b.Dx(), b.Dy(), imaging.Linear)
+			cleaned := cleanMask(maskR) // completar puntos + no cortar bordes
+			cut := cutoutWithAlpha(realced, cleaned)
+			if centered := centerProductOnSquare(cut, cleaned, 0.12); centered != nil {
 				result = centered
 			}
 			// bbox vacío o máscara no decodifica → fail-safe: solo realce.
