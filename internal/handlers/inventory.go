@@ -584,6 +584,11 @@ func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, storage
 			instruction = instruction[:500]
 		}
 
+		// Spec 094: ?mode=studio → "Foto de estudio" generativa (re-dibuja en un
+		// ángulo de catálogo usando la foto como referencia; PUEDE estilizar, no es
+		// 100% fiel). Sin mode → modo fiel (recorte + realce sin alterar).
+		mode := strings.TrimSpace(c.Query("mode"))
+
 		job, err := createAIJob(db, tenantID, productUUID, models.AIJobTypeEnhance)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo iniciar el trabajo de IA"})
@@ -593,7 +598,7 @@ func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, storage
 		// The real work runs in the background with context.Background()
 		// — see runAIJob. The request context dies with this 202 reply.
 		worker := enhancePhotoWorker(db, geminiSvc, storageSvc, catalogSvc,
-			product, tenantID, productUUID, sourceURL, productInfo, instruction)
+			product, tenantID, productUUID, sourceURL, productInfo, instruction, mode)
 		launchAIJob(db, job.ID, productUUID, tenantID, worker)
 
 		respondAIJobAccepted(c, job.ID)
@@ -606,7 +611,7 @@ func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, storage
 // mirror it into the catalog. It returns the new photo URL.
 //
 // Spec: specs/016-ia-foto-async-polling/spec.md — §3, FR-01.
-func enhancePhotoWorker(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage, catalogSvc *services.CatalogService, product models.Product, tenantID, productUUID, sourceURL, productInfo, instruction string) aiPhotoWorker {
+func enhancePhotoWorker(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage, catalogSvc *services.CatalogService, product models.Product, tenantID, productUUID, sourceURL, productInfo, instruction, mode string) aiPhotoWorker {
 	return func(ctx context.Context) (string, error) {
 		imageData, contentType, err := downloadSourceImage(ctx, sourceURL)
 		if err != nil {
@@ -618,9 +623,15 @@ func enhancePhotoWorker(db *gorm.DB, geminiSvc *services.GeminiService, storageS
 		// (FR-05, "dar indicaciones") se usa el camino generativo, a sabiendas.
 		var enhanced []byte
 		outMime, ext := "image/jpeg", "jpg"
-		if instruction == "" {
+		switch {
+		case mode == "studio":
+			// "Foto de estudio" generativa: re-dibuja en mejor ángulo usando la foto
+			// como referencia (puede estilizar; no es 100% fiel).
+			enhanced, err = geminiSvc.StudioShot(ctx, imageData, contentType, productInfo)
+			outMime, ext = "image/png", "png"
+		case instruction == "":
 			enhanced, err = geminiSvc.EnhancePhotoFaithful(ctx, imageData, contentType)
-		} else {
+		default:
 			enhanced, err = geminiSvc.EnhancePhoto(ctx, imageData, contentType, productInfo, instruction)
 			outMime, ext = "image/png", "png"
 		}

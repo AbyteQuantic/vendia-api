@@ -686,6 +686,23 @@ func (s *GeminiService) EnhancePhotoFaithful(ctx context.Context, imageData []by
 	return FaithfulRetouch(imageData, mask)
 }
 
+// StudioShot — modo "Foto de estudio" (Spec 094): re-dibuja el producto de la foto
+// adjunta en un ángulo de catálogo agradable (3/4), con fondo blanco y sombra suave.
+// Es GENERATIVO (usa la foto como referencia) → puede estilizar; NO garantiza fidelidad
+// como EnhancePhotoFaithful. Temperatura moderada: suficiente para re-encuadrar el
+// ángulo, anclado a la identidad real del producto.
+func (s *GeminiService) StudioShot(ctx context.Context, imageData []byte, mimeType, productInfo string) ([]byte, error) {
+	prompt := `Eres un FOTÓGRAFO DE PRODUCTO. Toma el producto EXACTO de la imagen adjunta y crea una foto de catálogo profesional: muéstralo en un ángulo ligeramente en 3/4 (más atractivo y vendedor), bien iluminado, centrado, sobre fondo BLANCO puro con una sombra de contacto suave y realista. Alta resolución, nítido.
+
+MANTÉN LA IDENTIDAD REAL del producto: el MISMO objeto, colores, materiales, forma, logos, texto y detalles de diseño que en la foto. No lo reemplaces por otro, no inventes elementos que no existen, no cambies marca ni texto. Solo mejora el ángulo, la luz, el fondo y la presentación.`
+	if productInfo != "" {
+		prompt += "\n\nComo contexto, el producto es: " + productInfo + ". Úsalo solo para entenderlo, NO para inventar un producto distinto."
+	}
+	return s.enhanceImagesWithPrompt(ctx,
+		[]ReferenceImage{{MimeType: mimeType, Data: imageData}},
+		prompt, models.AIFeatureEnhancePhoto, 0.4)
+}
+
 // enhanceImagesWithPrompt edits attached image(s) with a free-form instruction
 // (image-to-image). Shared by the product retoucher and the event-asset
 // improver. Multiple images let the caller pass a base piece + a face/scene
