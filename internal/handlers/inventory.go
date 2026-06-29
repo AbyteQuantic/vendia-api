@@ -613,13 +613,23 @@ func enhancePhotoWorker(db *gorm.DB, geminiSvc *services.GeminiService, storageS
 			return "", err
 		}
 
-		enhanced, err := geminiSvc.EnhancePhoto(ctx, imageData, contentType, productInfo, instruction)
+		// Spec 094: "Mejorar foto con IA" = modo FIEL (quita fondo + realce, NUNCA
+		// altera el producto). Solo cuando el tendero escribe una indicación
+		// (FR-05, "dar indicaciones") se usa el camino generativo, a sabiendas.
+		var enhanced []byte
+		outMime, ext := "image/jpeg", "jpg"
+		if instruction == "" {
+			enhanced, err = geminiSvc.EnhancePhotoFaithful(ctx, imageData, contentType)
+		} else {
+			enhanced, err = geminiSvc.EnhancePhoto(ctx, imageData, contentType, productInfo, instruction)
+			outMime, ext = "image/png", "png"
+		}
 		if err != nil {
 			return "", fmt.Errorf("error al mejorar foto: %w", err)
 		}
 
-		key := fmt.Sprintf("products/%s/%s-enhanced.png", tenantID, productUUID)
-		newURL, err := storageSvc.Upload(ctx, "product-photos", key, enhanced, "image/png")
+		key := fmt.Sprintf("products/%s/%s-enhanced.%s", tenantID, productUUID, ext)
+		newURL, err := storageSvc.Upload(ctx, "product-photos", key, enhanced, outMime)
 		if err != nil {
 			return "", fmt.Errorf("error al guardar foto mejorada: %w", err)
 		}

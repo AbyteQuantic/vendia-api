@@ -663,6 +663,29 @@ func (s *GeminiService) CleanSignature(ctx context.Context, imageData []byte, mi
 		prompt, models.AIFeatureEnhancePhoto, 0.2)
 }
 
+// SegmentProductMask pide a Gemini una MÁSCARA en blanco/negro del producto (Spec
+// 094): blanco = producto, negro = fondo. NO devuelve el producto (eso saldría de
+// los píxeles reales en el composite), solo la silueta — así el resultado no se
+// puede alterar. temperature 0 para una máscara estable.
+func (s *GeminiService) SegmentProductMask(ctx context.Context, imageData []byte, mimeType string) ([]byte, error) {
+	const prompt = `Genera una MÁSCARA en blanco y negro, del MISMO tamaño, encuadre y proporción que la imagen adjunta. Pinta de BLANCO PURO (#FFFFFF) EXACTAMENTE los píxeles del PRODUCTO principal en primer plano, y de NEGRO PURO (#000000) absolutamente todo lo demás (fondo, superficie, mesa, sombras, manos). No dibujes el producto ni agregues nada: SOLO la silueta blanca sobre fondo negro, con bordes precisos siguiendo el contorno real. Conserva la misma resolución y proporción que la foto.`
+	return s.enhanceImagesWithPrompt(ctx,
+		[]ReferenceImage{{MimeType: mimeType, Data: imageData}},
+		prompt, models.AIFeatureEnhancePhoto, 0.0)
+}
+
+// EnhancePhotoFaithful es el modo FIEL (Spec 094): quita el fondo y realza la foto
+// SIN alterar el producto. Pide la máscara, y compone los PÍXELES REALES sobre blanco
+// + realce no generativo. Fail-safe: si la segmentación falla, devuelve solo el realce
+// sobre la foto original — NUNCA un producto alterado.
+func (s *GeminiService) EnhancePhotoFaithful(ctx context.Context, imageData []byte, mimeType string) ([]byte, error) {
+	mask, err := s.SegmentProductMask(ctx, imageData, mimeType)
+	if err != nil {
+		mask = nil // fail-safe: solo realce, sin recorte
+	}
+	return FaithfulRetouch(imageData, mask)
+}
+
 // enhanceImagesWithPrompt edits attached image(s) with a free-form instruction
 // (image-to-image). Shared by the product retoucher and the event-asset
 // improver. Multiple images let the caller pass a base piece + a face/scene
