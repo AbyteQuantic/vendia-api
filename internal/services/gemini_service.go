@@ -668,7 +668,7 @@ func (s *GeminiService) CleanSignature(ctx context.Context, imageData []byte, mi
 // los píxeles reales en el composite), solo la silueta — así el resultado no se
 // puede alterar. temperature 0 para una máscara estable.
 func (s *GeminiService) SegmentProductMask(ctx context.Context, imageData []byte, mimeType string) ([]byte, error) {
-	const prompt = `Genera una MÁSCARA en blanco y negro, del MISMO tamaño, encuadre y proporción que la imagen adjunta. Pinta de BLANCO PURO (#FFFFFF) EXACTAMENTE los píxeles del PRODUCTO principal en primer plano, y de NEGRO PURO (#000000) absolutamente todo lo demás (fondo, superficie, mesa, sombras, manos). No dibujes el producto ni agregues nada: SOLO la silueta blanca sobre fondo negro, con bordes precisos siguiendo el contorno real. Conserva la misma resolución y proporción que la foto.`
+	const prompt = `Genera una MÁSCARA en blanco y negro, del MISMO tamaño, encuadre y proporción que la imagen adjunta. Pinta de BLANCO PURO (#FFFFFF) EXACTAMENTE los píxeles del PRODUCTO principal en primer plano —y TODAS sus partes (correa, cadena, argolla, llavero, etiqueta, tapa, accesorios que sean parte del producto), sin recortar ninguna— y de NEGRO PURO (#000000) absolutamente todo lo demás (fondo, superficie, mesa, sombras, manos). No dibujes el producto ni agregues nada: SOLO la silueta blanca sobre fondo negro, con bordes precisos siguiendo el contorno real y el producto COMPLETO. Conserva la misma resolución y proporción que la foto.`
 	return s.enhanceImagesWithPrompt(ctx,
 		[]ReferenceImage{{MimeType: mimeType, Data: imageData}},
 		prompt, models.AIFeatureEnhancePhoto, 0.0)

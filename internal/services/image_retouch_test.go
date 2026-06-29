@@ -45,16 +45,19 @@ func TestFaithfulRetouch_Composite_FondoBlanco_ProductoReal(t *testing.T) {
 	img, _, err := image.Decode(bytes.NewReader(out))
 	require.NoError(t, err)
 
-	// Lado derecho (fondo) → blanco.
-	rr, rg, rb, _ := img.At(13, 8).RGBA()
-	assert.Greater(t, rr>>8, uint32(240))
-	assert.Greater(t, rg>>8, uint32(240))
-	assert.Greater(t, rb>>8, uint32(240))
+	// Tras centrar: el resultado es CUADRADO.
+	bw, bh := img.Bounds().Dx(), img.Bounds().Dy()
+	assert.Equal(t, bw, bh, "el encuadre queda cuadrado")
 
-	// Lado izquierdo (producto) → conserva el rojo real (R alto, G/B bajos),
-	// NO se vuelve blanco → el producto no se borra ni se altera.
-	lr, lg, lb, _ := img.At(3, 8).RGBA()
-	assert.Greater(t, lr>>8, uint32(150), "producto conserva rojo")
-	assert.Less(t, lg>>8, uint32(150))
-	assert.Less(t, lb>>8, uint32(150))
+	// Esquina = margen blanco.
+	cr, cg, cb, _ := img.At(0, 0).RGBA()
+	assert.Greater(t, cr>>8, uint32(240))
+	assert.Greater(t, cg>>8, uint32(240))
+	assert.Greater(t, cb>>8, uint32(240))
+
+	// Centro = producto real (rojo conservado, no borrado ni alterado).
+	mr, mg, mb, _ := img.At(bw/2, bh/2).RGBA()
+	assert.Greater(t, mr>>8, uint32(150), "producto conserva rojo en el centro")
+	assert.Less(t, mg>>8, uint32(150))
+	assert.Less(t, mb>>8, uint32(150))
 }

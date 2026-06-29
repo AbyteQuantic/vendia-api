@@ -30,7 +30,8 @@ func applyRealce(img image.Image) *image.NRGBA {
 
 // compositeOnWhite coloca el producto (donde la máscara es clara) sobre fondo blanco.
 // mask se reescala al tamaño de src; su luminancia funciona como alfa del producto.
-func compositeOnWhite(src image.Image, mask image.Image) *image.NRGBA {
+// Devuelve también la máscara reescalada (para centrar luego con su bounding box).
+func compositeOnWhite(src image.Image, mask image.Image) (*image.NRGBA, *image.NRGBA) {
 	b := src.Bounds()
 	w, h := b.Dx(), b.Dy()
 	srcN := imaging.Clone(src)
@@ -57,7 +58,49 @@ func compositeOnWhite(src image.Image, mask image.Image) *image.NRGBA {
 			out.SetNRGBA(x, y, color.NRGBA{blend(sc.R), blend(sc.G), blend(sc.B), 255})
 		}
 	}
-	return out
+	return out, maskR
+}
+
+// centerProductOnSquare recorta al contorno real del producto (bounding box de la
+// máscara) y lo centra en un lienzo CUADRADO blanco con un margen. Spec 094: solo
+// mueve/encuadra los píxeles reales — no redibuja ni inventa nada. margin = fracción
+// de borde a cada lado (0.10 = 10%). Si no halla producto, devuelve la imagen igual.
+func centerProductOnSquare(img *image.NRGBA, mask *image.NRGBA, margin float64) *image.NRGBA {
+	b := mask.Bounds()
+	w, h := b.Dx(), b.Dy()
+	minX, minY, maxX, maxY := w, h, -1, -1
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			mc := mask.NRGBAAt(x, y)
+			lum := float64(mc.R)*0.299 + float64(mc.G)*0.587 + float64(mc.B)*0.114
+			if lum > 40 { // pertenece al producto
+				if x < minX {
+					minX = x
+				}
+				if y < minY {
+					minY = y
+				}
+				if x > maxX {
+					maxX = x
+				}
+				if y > maxY {
+					maxY = y
+				}
+			}
+		}
+	}
+	if maxX < minX || maxY < minY {
+		return img // máscara vacía → no centrar
+	}
+	product := imaging.Crop(img, image.Rect(minX, minY, maxX+1, maxY+1))
+	bw, bh := maxX-minX+1, maxY-minY+1
+	frac := 1 - 2*margin
+	if frac < 0.5 {
+		frac = 0.5
+	}
+	side := int(float64(max(bw, bh)) / frac)
+	canvas := imaging.New(side, side, color.NRGBA{255, 255, 255, 255})
+	return imaging.PasteCenter(canvas, product)
 }
 
 // FaithfulRetouch aplica el pipeline fiel: realce siempre; recorte de fondo si hay
@@ -73,8 +116,9 @@ func FaithfulRetouch(originalBytes, maskBytes []byte) ([]byte, error) {
 
 	if len(maskBytes) > 0 {
 		if mask, _, mErr := image.Decode(bytes.NewReader(maskBytes)); mErr == nil {
-			// Componer el producto realzado sobre blanco usando la máscara.
-			result = compositeOnWhite(result, mask)
+			// Componer el producto realzado sobre blanco + centrar en cuadrado.
+			comp, maskR := compositeOnWhite(result, mask)
+			result = centerProductOnSquare(comp, maskR, 0.10)
 		}
 		// Si la máscara no decodifica → fail-safe: queda solo el realce.
 	}
