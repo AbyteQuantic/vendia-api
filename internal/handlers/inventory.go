@@ -633,6 +633,9 @@ func enhancePhotoWorker(db *gorm.DB, geminiSvc *services.GeminiService, storageS
 		if err != nil {
 			return "", fmt.Errorf("error al guardar foto mejorada: %w", err)
 		}
+		// Cache-bust: la clave es determinista; sin ?v el cliente muestra la
+		// versión vieja en caché al re-mejorar el mismo producto. Spec 094.
+		newURL = fmt.Sprintf("%s?v=%d", newURL, time.Now().UnixNano())
 
 		if err := db.Model(&models.Product{}).
 			Where("id = ? AND tenant_id = ?", productUUID, tenantID).
@@ -709,6 +712,9 @@ func generateImageWorker(db *gorm.DB, geminiSvc *services.GeminiService, storage
 		if err != nil {
 			return "", fmt.Errorf("error al guardar imagen: %w", err)
 		}
+		// Cache-bust: clave determinista → sin ?v el cliente muestra la versión
+		// vieja en caché al regenerar el mismo producto. Spec 094.
+		newURL = fmt.Sprintf("%s?v=%d", newURL, time.Now().UnixNano())
 
 		if err := db.Model(&models.Product{}).
 			Where("id = ? AND tenant_id = ?", productUUID, tenantID).
