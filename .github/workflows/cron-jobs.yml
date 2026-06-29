@@ -22,6 +22,7 @@ on:
     - cron: '10 5 * * *'
     - cron: '0 13 * * *'
     - cron: '0 9 * * 1' # scrape-chains semanal (lunes 04:00 COT) — Spec 077
+    - cron: '0 12 * * 1' # capacity-check semanal (lunes 07:00 COT) — Spec 093/091
   workflow_dispatch:
 
 permissions: {}
@@ -82,3 +83,18 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.CRON_TOKEN }}")
           cat /tmp/out.json; echo
           [ "$code" = "200" ] || { echo "::error::scrape-chains HTTP $code"; exit 1; }
+
+      - name: capacity-check (Spec 093/091 — semanal, avisa al rozar umbral DB)
+        # always(): se corre aunque otro paso falle. HTTP 507 = umbral superado →
+        # este paso FALLA a propósito → GitHub envía correo al dueño del workflow.
+        if: always() && (github.event_name == 'workflow_dispatch' || github.event.schedule == '0 12 * * 1')
+        run: |
+          code=$(curl -sS -o /tmp/out.json -w '%{http_code}' --max-time 60 --retry 2 --retry-delay 10 \
+            -X POST "$API/api/v1/internal/jobs/capacity-check" \
+            -H "Authorization: Bearer ${{ secrets.CRON_TOKEN }}")
+          cat /tmp/out.json; echo
+          if [ "$code" = "507" ]; then
+            echo "::error::Capacidad: la DB superó el umbral (70%). Ejecutar retención/archivado (Spec 091)."
+            exit 1
+          fi
+          [ "$code" = "200" ] || { echo "::error::capacity-check HTTP $code"; exit 1; }

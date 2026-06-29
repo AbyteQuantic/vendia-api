@@ -3,6 +3,7 @@ package handlers
 
 import (
 	"crypto/subtle"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -132,6 +133,56 @@ func EventRemindersJob(db *gorm.DB, dispatcher *push.Dispatcher, emailSvc *email
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"data": result})
+	}
+}
+
+// CapacityCheckJob — POST /api/v1/internal/jobs/capacity-check (Spec 093/091).
+// Monitoreo de capacidad: mide el tamaño de la DB (Supabase free ~500MB) y avisa
+// al rozar el umbral (70% = 350MB) para disparar la retención (Spec 091) ANTES de
+// llegar al límite. Mismo gate CRON_TOKEN, fail-closed. Devuelve `warn:true` y
+// HTTP 507 (Insufficient Storage) cuando se pasa el umbral → el cron falla y
+// GitHub envía correo al dueño del workflow ("avísame"). Las tablas top ayudan a
+// decidir qué archivar.
+func CapacityCheckJob(db *gorm.DB) gin.HandlerFunc {
+	const freeMB = 500
+	const warnMB = 350 // 70% de 500
+	return func(c *gin.Context) {
+		if !cronAuthOK(c) {
+			return
+		}
+		var bytes int64
+		if err := db.Raw("SELECT pg_database_size(current_database())").
+			Scan(&bytes).Error; err != nil {
+			c.JSON(http.StatusInternalServerError,
+				gin.H{"error": "no se pudo medir el tamaño de la DB"})
+			return
+		}
+		type tbl struct {
+			Table string `json:"table"`
+			Bytes int64  `json:"bytes"`
+		}
+		var tables []tbl
+		db.Raw(`SELECT relname AS table, pg_total_relation_size(relid) AS bytes
+		        FROM pg_catalog.pg_statio_user_tables
+		        ORDER BY pg_total_relation_size(relid) DESC LIMIT 8`).Scan(&tables)
+
+		mb := float64(bytes) / (1024 * 1024)
+		pct := mb / freeMB * 100
+		warn := mb >= warnMB
+		body := gin.H{
+			"db_mb":        math.Round(mb*10) / 10,
+			"pct_of_free":  math.Round(pct*10) / 10,
+			"threshold_mb": warnMB,
+			"free_mb":      freeMB,
+			"warn":         warn,
+			"top_tables":   tables,
+		}
+		if warn {
+			// 507 → el cron falla → notificación de GitHub. Spec 091 a ejecutar.
+			c.JSON(http.StatusInsufficientStorage, body)
+			return
+		}
+		c.JSON(http.StatusOK, body)
 	}
 }
 

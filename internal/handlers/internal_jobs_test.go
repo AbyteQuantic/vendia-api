@@ -20,6 +20,32 @@ import (
 //   - no CRON_TOKEN configured  → 503 (fail closed)
 //   - wrong / missing Bearer    → 401
 //   - correct Bearer            → 200, runs the job
+// Spec 093/091 — el monitoreo de capacidad respeta el gate CRON_TOKEN. La
+// consulta pg_database_size es de Postgres (se verifica en prod, Art. XII); aquí
+// solo se prueba el candado de auth con sqlite.
+func TestCapacityCheckJob_AuthGate(t *testing.T) {
+	db := setupQuoteDB(t)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/api/v1/internal/jobs/capacity-check", handlers.CapacityCheckJob(db))
+	call := func(h string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest(http.MethodPost,
+			"/api/v1/internal/jobs/capacity-check", nil)
+		if h != "" {
+			req.Header.Set("Authorization", h)
+		}
+		r.ServeHTTP(w, req)
+		return w
+	}
+	t.Setenv("CRON_TOKEN", "")
+	assert.Equal(t, http.StatusServiceUnavailable, call("Bearer x").Code,
+		"sin CRON_TOKEN → 503 fail-closed")
+	t.Setenv("CRON_TOKEN", "tok")
+	assert.Equal(t, http.StatusUnauthorized, call("Bearer wrong").Code,
+		"token incorrecto → 401")
+}
+
 func TestExpireQuotesJob_AuthAndRun(t *testing.T) {
 	db := setupQuoteDB(t)
 
