@@ -663,27 +663,28 @@ func (s *GeminiService) CleanSignature(ctx context.Context, imageData []byte, mi
 		prompt, models.AIFeatureEnhancePhoto, 0.2)
 }
 
-// SegmentProductMask pide a Gemini una MÁSCARA en blanco/negro del producto (Spec
-// 094): blanco = producto, negro = fondo. NO devuelve el producto (eso saldría de
-// los píxeles reales en el composite), solo la silueta — así el resultado no se
-// puede alterar. temperature 0 para una máscara estable.
-func (s *GeminiService) SegmentProductMask(ctx context.Context, imageData []byte, mimeType string) ([]byte, error) {
-	const prompt = `Genera una MÁSCARA en blanco y negro, del MISMO tamaño, encuadre y proporción que la imagen adjunta. Pinta de BLANCO PURO (#FFFFFF) EXACTAMENTE los píxeles del PRODUCTO principal en primer plano —y TODAS sus partes (correa, cadena, argolla, llavero, etiqueta, tapa, accesorios que sean parte del producto), sin recortar ninguna— y de NEGRO PURO (#000000) absolutamente todo lo demás (fondo, superficie, mesa, sombras, manos). No dibujes el producto ni agregues nada: SOLO la silueta blanca sobre fondo negro, con bordes precisos siguiendo el contorno real y el producto COMPLETO. Conserva la misma resolución y proporción que la foto.`
+// EnhancePhotoFaithful — modo "Mejorar foto" (Spec 094): deja que Nano Banana
+// (gemini-3-pro-image-preview) edite DIRECTAMENTE la foto adjunta como una foto de
+// estudio (fondo blanco + sombra suave), manteniendo el producto IDÉNTICO y COMPLETO
+// y el MISMO ángulo. Edición image-to-image (no segmentación + recorte propio, que
+// cortaba partes). Aprovecha la preservación de identidad del modelo. temp 0.25 = alta
+// fidelidad con suficiente libertad para limpiar el fondo y la luz.
+func (s *GeminiService) EnhancePhotoFaithful(ctx context.Context, imageData []byte, mimeType, productInfo string) ([]byte, error) {
+	prompt := `You are a PROFESSIONAL PRODUCT PHOTOGRAPHER. The attached image shows a REAL product. Re-stage it as a clean studio/catalog photo:
+- Place it on a pure WHITE seamless studio background.
+- Add soft, even professional lighting and a subtle, realistic soft contact shadow beneath the product.
+- Center it with comfortable margins and show the COMPLETE product — NEVER crop or cut off any part (include straps, cords, chains, keyrings, tags).
+- Keep the SAME viewing angle and orientation as in the photo.
+
+CRITICAL — DO NOT ALTER THE PRODUCT. It must stay 100% identical to the attached image: exact same shape, proportions, colors, materials, textures, text, logos and design details. Do NOT redraw it as a different item, do NOT invent, add or remove parts, do NOT change any text or color. You are ONLY replacing the background and improving the lighting and presentation of the REAL product.
+
+Output a single high-resolution, sharp, professional product photo.`
+	if productInfo != "" {
+		prompt += "\n\nContext only (never use it to invent a different product): the product is " + productInfo + "."
+	}
 	return s.enhanceImagesWithPrompt(ctx,
 		[]ReferenceImage{{MimeType: mimeType, Data: imageData}},
-		prompt, models.AIFeatureEnhancePhoto, 0.0)
-}
-
-// EnhancePhotoFaithful es el modo FIEL (Spec 094): quita el fondo y realza la foto
-// SIN alterar el producto. Pide la máscara, y compone los PÍXELES REALES sobre blanco
-// + realce no generativo. Fail-safe: si la segmentación falla, devuelve solo el realce
-// sobre la foto original — NUNCA un producto alterado.
-func (s *GeminiService) EnhancePhotoFaithful(ctx context.Context, imageData []byte, mimeType string) ([]byte, error) {
-	mask, err := s.SegmentProductMask(ctx, imageData, mimeType)
-	if err != nil {
-		mask = nil // fail-safe: solo realce, sin recorte
-	}
-	return FaithfulRetouch(imageData, mask)
+		prompt, models.AIFeatureEnhancePhoto, 0.25)
 }
 
 // StudioShot — modo "Foto de estudio" (Spec 094): re-dibuja el producto de la foto

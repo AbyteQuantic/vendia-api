@@ -621,19 +621,20 @@ func enhancePhotoWorker(db *gorm.DB, geminiSvc *services.GeminiService, storageS
 		// Spec 094: "Mejorar foto con IA" = modo FIEL (quita fondo + realce, NUNCA
 		// altera el producto). Solo cuando el tendero escribe una indicación
 		// (FR-05, "dar indicaciones") se usa el camino generativo, a sabiendas.
+		// Todos los caminos editan con Nano Banana (gemini-3-pro-image-preview) y
+		// devuelven PNG. Spec 094.
 		var enhanced []byte
-		outMime, ext := "image/jpeg", "jpg"
+		outMime, ext := "image/png", "png"
 		switch {
 		case mode == "studio":
-			// "Foto de estudio" generativa: re-dibuja en mejor ángulo usando la foto
-			// como referencia (puede estilizar; no es 100% fiel).
+			// "Foto de estudio": puede probar otro ángulo (más libertad, puede estilizar).
 			enhanced, err = geminiSvc.StudioShot(ctx, imageData, contentType, productInfo)
-			outMime, ext = "image/png", "png"
 		case instruction == "":
-			enhanced, err = geminiSvc.EnhancePhotoFaithful(ctx, imageData, contentType)
+			// "Mejorar foto": estudio fiel — fondo blanco + sombra, producto idéntico.
+			enhanced, err = geminiSvc.EnhancePhotoFaithful(ctx, imageData, contentType, productInfo)
 		default:
+			// "Dar indicaciones" del tendero (FR-05).
 			enhanced, err = geminiSvc.EnhancePhoto(ctx, imageData, contentType, productInfo, instruction)
-			outMime, ext = "image/png", "png"
 		}
 		if err != nil {
 			return "", fmt.Errorf("error al mejorar foto: %w", err)
