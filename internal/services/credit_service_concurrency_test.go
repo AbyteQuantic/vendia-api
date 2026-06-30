@@ -36,7 +36,7 @@ func setupCreditPostgres(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Skip("Skipping: Docker PostgreSQL not available")
 	}
-	require.NoError(t, db.AutoMigrate(&models.CreditAccount{}, &models.CreditPayment{}))
+	require.NoError(t, db.AutoMigrate(&models.Customer{}, &models.CreditAccount{}, &models.CreditPayment{}))
 	return db
 }
 
@@ -60,6 +60,11 @@ func TestRegisterPaymentWithActor_Concurrent_NeverOverpays(t *testing.T) {
 	customerID := "77777777-7777-7777-7777-777777777777"
 
 	require.NoError(t, db.Where("tenant_id = ?", tenantID).Delete(&models.CreditAccount{}).Error)
+	require.NoError(t, db.Where("tenant_id = ?", tenantID).Delete(&models.Customer{}).Error)
+	require.NoError(t, db.Exec(`
+		INSERT INTO customers (id, created_at, updated_at, tenant_id, name)
+		VALUES (?, ?, ?, ?, ?)`,
+		customerID, time.Now(), time.Now(), tenantID, "Cliente de prueba").Error)
 	require.NoError(t, db.Exec(`
 		INSERT INTO credit_accounts
 			(id, created_at, updated_at, tenant_id, customer_id, total_amount, paid_amount, status)
