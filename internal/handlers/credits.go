@@ -277,7 +277,7 @@ func CancelCredit(db *gorm.DB) gin.HandlerFunc {
 						continue
 					}
 					pid := *item.ProductID
-					services.LogInventoryMovement(tx, services.MovementParams{
+					if err := services.LogInventoryMovement(tx, services.MovementParams{
 						TenantID:      tenantID,
 						ProductID:     pid,
 						ProductName:   item.Name,
@@ -286,7 +286,9 @@ func CancelCredit(db *gorm.DB) gin.HandlerFunc {
 						ReferenceID:   &credit.ID,
 						ReferenceType: "credit",
 						UserID:        middleware.UUIDPtr(middleware.GetUserID(c)),
-					})
+					}); err != nil {
+						return fmt.Errorf("log kardex product=%s: %w", pid, err)
+					}
 					if err := tx.Model(&models.Product{}).
 						Where("id = ? AND tenant_id = ?", pid, tenantID).
 						UpdateColumn("stock", gorm.Expr("stock + ?", item.Quantity)).Error; err != nil {

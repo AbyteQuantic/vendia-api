@@ -205,9 +205,15 @@ func UpdateOrderStatus(db *gorm.DB) gin.HandlerFunc {
 		// únicamente al COBRAR (close); una cuenta abierta nunca tocó inventario,
 		// así que restaurarla lo INFLARÍA (council BUG-CANCEL-INFLATE Spec 083).
 		if req.Status == models.OrderStatusCancelado && previousStatus == models.OrderStatusCobrado {
-			for _, item := range order.Items {
-				if item.ProductUUID != "" && item.Quantity > 0 {
-					services.LogInventoryMovement(db, services.MovementParams{
+			// Kardex movement + stock restore run inside one transaction:
+			// a kardex write failure must roll back the stock restore
+			// instead of inflating stock with no audit trail (Art. VII).
+			if err := db.Transaction(func(tx *gorm.DB) error {
+				for _, item := range order.Items {
+					if item.ProductUUID == "" || item.Quantity <= 0 {
+						continue
+					}
+					if err := services.LogInventoryMovement(tx, services.MovementParams{
 						TenantID:      tenantID,
 						ProductID:     item.ProductUUID,
 						ProductName:   item.ProductName,
@@ -216,11 +222,19 @@ func UpdateOrderStatus(db *gorm.DB) gin.HandlerFunc {
 						ReferenceID:   &order.ID,
 						ReferenceType: "order",
 						UserID:        middleware.UUIDPtr(middleware.GetUserID(c)),
-					})
-					db.Model(&models.Product{}).
+					}); err != nil {
+						return err
+					}
+					if err := tx.Model(&models.Product{}).
 						Where("id = ? AND tenant_id = ?", item.ProductUUID, tenantID).
-						UpdateColumn("stock", gorm.Expr("stock + ?", item.Quantity))
+						UpdateColumn("stock", gorm.Expr("stock + ?", item.Quantity)).Error; err != nil {
+						return err
+					}
 				}
+				return nil
+			}); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "error al restaurar inventario"})
+				return
 			}
 		}
 

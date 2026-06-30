@@ -337,30 +337,39 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			product.ID = req.ID
 		}
 
-		if err := db.Create(&product).Error; err != nil {
+		// Create + kardex movement run inside one transaction: a kardex
+		// write failure must roll back the product creation instead of
+		// leaving a product row with no audit trail (Art. VII) and a 201
+		// response that silently hid the error.
+		if err := db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Create(&product).Error; err != nil {
+				return err
+			}
+
+			if product.Stock > 0 {
+				// FR-03 — the product row already carries stock_inicial, so
+				// LogInventoryMovement's self-read would record
+				// stock_before=stock_inicial / stock_after=2×stock_inicial.
+				// An initial_stock movement always goes from 0 to the full
+				// starting quantity: pass that snapshot explicitly.
+				zero := float64(0)
+				initial := float64(product.Stock)
+				return services.LogInventoryMovement(tx, services.MovementParams{
+					TenantID:            tenantID,
+					BranchID:            middleware.UUIDPtr(branchID),
+					ProductID:           product.ID,
+					ProductName:         product.Name,
+					MovementType:        models.MovementInitialStock,
+					Quantity:            product.Stock,
+					UserID:              middleware.UUIDPtr(userID),
+					StockBeforeOverride: &zero,
+					StockAfterOverride:  &initial,
+				})
+			}
+			return nil
+		}); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al crear producto"})
 			return
-		}
-
-		if product.Stock > 0 {
-			// FR-03 — the product row already carries stock_inicial, so
-			// LogInventoryMovement's self-read would record
-			// stock_before=stock_inicial / stock_after=2×stock_inicial.
-			// An initial_stock movement always goes from 0 to the full
-			// starting quantity: pass that snapshot explicitly.
-			zero := float64(0)
-			initial := float64(product.Stock)
-			services.LogInventoryMovement(db, services.MovementParams{
-				TenantID:            tenantID,
-				BranchID:            middleware.UUIDPtr(branchID),
-				ProductID:           product.ID,
-				ProductName:         product.Name,
-				MovementType:        models.MovementInitialStock,
-				Quantity:            product.Stock,
-				UserID:              middleware.UUIDPtr(userID),
-				StockBeforeOverride: &zero,
-				StockAfterOverride:  &initial,
-			})
 		}
 
 		// Accept catalog image if provided
@@ -561,21 +570,38 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			updates["price_tier_3"] = *req.PriceTier3
 		}
 
-		if err := db.Model(&product).Updates(updates).Error; err != nil {
+		// Update + kardex movement run inside one transaction. The kardex
+		// snapshot is passed explicitly (oldStock → *req.Stock) instead of
+		// letting LogInventoryMovement self-read the stock column: by the
+		// time it would read, the Updates() above already wrote the NEW
+		// value, so a self-read recorded stock_before=new/stock_after=new+
+		// delta — a fabricated pair that never existed. The override keeps
+		// the audit trail correct regardless of statement order, and the
+		// transaction ensures a kardex failure rolls back the stock edit
+		// instead of mutating stock with no audit trail (Art. VII).
+		if err := db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Model(&product).Updates(updates).Error; err != nil {
+				return err
+			}
+			if req.Stock != nil && *req.Stock != oldStock {
+				before := float64(oldStock)
+				after := float64(*req.Stock)
+				return services.LogInventoryMovement(tx, services.MovementParams{
+					TenantID:            tenantID,
+					ProductID:           product.ID,
+					ProductName:         product.Name,
+					MovementType:        models.MovementManualAdjust,
+					Quantity:            *req.Stock - oldStock,
+					UserID:              middleware.UUIDPtr(middleware.GetUserID(c)),
+					Notes:               "ajuste manual desde edición de producto",
+					StockBeforeOverride: &before,
+					StockAfterOverride:  &after,
+				})
+			}
+			return nil
+		}); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al actualizar producto"})
 			return
-		}
-
-		if req.Stock != nil && *req.Stock != oldStock {
-			services.LogInventoryMovement(db, services.MovementParams{
-				TenantID:     tenantID,
-				ProductID:    product.ID,
-				ProductName:  product.Name,
-				MovementType: models.MovementManualAdjust,
-				Quantity:     *req.Stock - oldStock,
-				UserID:       middleware.UUIDPtr(middleware.GetUserID(c)),
-				Notes:        "ajuste manual desde edición de producto",
-			})
 		}
 
 		// Accept catalog image if provided
@@ -617,7 +643,7 @@ func RestockProduct(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		err := db.Transaction(func(tx *gorm.DB) error {
-			services.LogInventoryMovement(tx, services.MovementParams{
+			if err := services.LogInventoryMovement(tx, services.MovementParams{
 				TenantID:      tenantID,
 				ProductID:     product.ID,
 				ProductName:   product.Name,
@@ -625,7 +651,9 @@ func RestockProduct(db *gorm.DB) gin.HandlerFunc {
 				Quantity:      req.Quantity,
 				ReferenceType: "invoice",
 				UserID:        middleware.UUIDPtr(userID),
-			})
+			}); err != nil {
+				return err
+			}
 
 			updates := map[string]any{
 				"stock": gorm.Expr("stock + ?", req.Quantity),
