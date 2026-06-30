@@ -637,9 +637,15 @@ func enhancePhotoWorker(db *gorm.DB, geminiSvc *services.GeminiService, storageS
 		case mode == "studio":
 			enhanced, err = geminiSvc.StudioShot(ctx, imageData, contentType, productInfo)
 		default:
-			// "Quitar fondo": Nano Banana reemplaza el fondo por blanco, conservando el
-			// producto lo más idéntico posible.
-			enhanced, err = geminiSvc.RemoveBackgroundNano(ctx, imageData, contentType)
+			// "Quitar fondo" FIEL (Opción A): Gemini da una MÁSCARA; pegamos los
+			// PÍXELES REALES del producto sobre fondo de estudio. NUNCA lo regenera.
+			// Si la máscara falla → fail-safe: solo realce de la foto original.
+			mask, mErr := geminiSvc.SegmentProductMask(ctx, imageData, contentType)
+			if mErr != nil {
+				mask = nil
+			}
+			enhanced, err = services.ComposeFaithful(imageData, mask)
+			outMime, ext = "image/jpeg", "jpg"
 		}
 		if err != nil {
 			return "", fmt.Errorf("error al mejorar foto: %w", err)

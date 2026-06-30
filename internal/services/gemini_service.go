@@ -663,18 +663,15 @@ func (s *GeminiService) CleanSignature(ctx context.Context, imageData []byte, mi
 		prompt, models.AIFeatureEnhancePhoto, 0.2)
 }
 
-// RemoveBackgroundNano — modo "Quitar fondo" con Nano Banana (Spec 094). Pide SOLO
-// reemplazar el fondo por blanco, conservando el producto lo más idéntico posible.
-// OJO: es generativo → no es pixel-perfect (puede cambiar detalles finos). Para recorte
-// 100% fiel, el worker prefiere remove.bg si hay REMOVEBG_API_KEY; esto es el camino sin
-// key. temp 0.1 = mínima libertad.
-func (s *GeminiService) RemoveBackgroundNano(ctx context.Context, imageData []byte, mimeType string) ([]byte, error) {
-	const prompt = `Your ONLY job is to REPLACE THE BACKGROUND of the attached product photo with a pure WHITE seamless studio background, and add a subtle realistic soft contact shadow under the product. NOTHING ELSE.
-
-Keep the PRODUCT exactly as it is in the photo — same shape, proportions, angle, position, colors, materials, surface texture, printed/embossed text, logos and every detail. Do NOT repaint, redraw, restyle, move, rotate, resize, add, remove or crop any part (keep straps, cords, chains, keyrings, tags complete). If unsure, keep the original pixels. Output one high-resolution sharp photo of the SAME product on a clean white background.`
+// SegmentProductMask — modo FIEL "Quitar fondo" (Spec 094, Opción A). Pide a Gemini
+// SOLO una MÁSCARA en blanco/negro (no el producto): blanco = producto, negro = fondo.
+// El producto final sale de los PÍXELES REALES vía composite (services.ComposeFaithful),
+// así NUNCA se regenera ni cambia. temp 0 para una máscara estable.
+func (s *GeminiService) SegmentProductMask(ctx context.Context, imageData []byte, mimeType string) ([]byte, error) {
+	const prompt = `Output a black-and-white MASK image, the SAME size, framing and proportions as the attached photo. Paint PURE WHITE (#FFFFFF) exactly the pixels that belong to the MAIN PRODUCT in the foreground — INCLUDING every thin part (straps, cords, chains, keyrings, tags, handles) — and PURE BLACK (#000000) everything else (background, surface, table, shadows, hands). Do NOT draw the product or add anything: ONLY the white silhouette on black, with precise edges following the real outline and the COMPLETE product (never leave out the straps/chains). Keep the same resolution and proportions as the photo.`
 	return s.enhanceImagesWithPrompt(ctx,
 		[]ReferenceImage{{MimeType: mimeType, Data: imageData}},
-		prompt, models.AIFeatureEnhancePhoto, 0.1)
+		prompt, models.AIFeatureEnhancePhoto, 0.0)
 }
 
 // StudioShot — modo "Foto de estudio" (Spec 094): re-dibuja el producto de la foto
