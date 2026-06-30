@@ -7,6 +7,7 @@ import (
 	"vendia-backend/internal/models"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var (
@@ -35,27 +36,32 @@ func (s *CreditService) RegisterPayment(tenantID, creditID string, amount int64,
 // confirmation; pass "" for cash abonos that don't carry one (the
 // Mandatory Image Receipts epic enforces it on the frontend, not here).
 func (s *CreditService) RegisterPaymentWithActor(tenantID, creditID, userID, branchID string, amount int64, method, note, receiptImageURL string) (*models.CreditPayment, error) {
-	var credit models.CreditAccount
-	if err := s.db.Where("id = ? AND tenant_id = ?", creditID, tenantID).
-		First(&credit).Error; err != nil {
-		return nil, ErrCreditNotFound
-	}
-
-	if credit.Status == "paid" {
-		return nil, ErrCreditAlreadyPaid
-	}
-
-	remaining := credit.TotalAmount - credit.PaidAmount
-	if amount > remaining {
-		return nil, ErrPaymentExceeds
-	}
-
 	if method == "" {
 		method = "cash"
 	}
 
 	var payment models.CreditPayment
 	err := s.db.Transaction(func(tx *gorm.DB) error {
+		// Row lock: re-read the account FOR UPDATE inside the transaction
+		// so two concurrent abonos on the same credit (e.g. an offline-sync
+		// replay racing a live POS payment) serialize instead of both
+		// reading the same stale paid_amount and producing a lost update.
+		var credit models.CreditAccount
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND tenant_id = ?", creditID, tenantID).
+			First(&credit).Error; err != nil {
+			return ErrCreditNotFound
+		}
+
+		if credit.Status == "paid" {
+			return ErrCreditAlreadyPaid
+		}
+
+		remaining := credit.TotalAmount - credit.PaidAmount
+		if amount > remaining {
+			return ErrPaymentExceeds
+		}
+
 		payment = models.CreditPayment{
 			CreditAccountID: creditID,
 			CreatedBy:       middleware.UUIDPtr(userID),
