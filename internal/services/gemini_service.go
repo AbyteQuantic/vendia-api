@@ -663,37 +663,16 @@ func (s *GeminiService) CleanSignature(ctx context.Context, imageData []byte, mi
 		prompt, models.AIFeatureEnhancePhoto, 0.2)
 }
 
-// EnhancePhotoFaithful — modo "Mejorar foto" (Spec 094): deja que Nano Banana
-// (gemini-3-pro-image-preview) edite DIRECTAMENTE la foto adjunta como una foto de
-// estudio (fondo blanco + sombra suave), manteniendo el producto IDÉNTICO y COMPLETO
-// y el MISMO ángulo. Edición image-to-image (no segmentación + recorte propio, que
-// cortaba partes). Aprovecha la preservación de identidad del modelo. temp 0.25 = alta
-// fidelidad con suficiente libertad para limpiar el fondo y la luz.
-func (s *GeminiService) EnhancePhotoFaithful(ctx context.Context, imageData []byte, mimeType, productInfo string) ([]byte, error) {
-	prompt := `Your ONLY job is to replace the BACKGROUND of the attached product photo with a clean studio background — NOTHING ELSE.
-
-Treat the PRODUCT as a CUT-AND-PASTE of the real pixels: keep it EXACTLY as it is in the photo, pixel for pixel. Its shape, proportions, angle, position, face/eyes/expression, colors, materials, surface texture, embossed or printed text, logos, seams and every small detail must remain IDENTICAL. Do NOT repaint, smooth, re-draw, re-style, re-shade or re-interpret the product in any way. Do NOT move, rotate, resize, add or remove any part (keep straps, cords, chains, keyrings, tags complete — never crop them).
-
-ONLY allowed changes:
-- Replace the background with a pure WHITE seamless studio backdrop.
-- Add a subtle, realistic soft contact shadow beneath the product.
-- Gentle, even studio lighting on the SCENE (do not alter the product's own colors).
-
-If you are unsure, KEEP the original pixels of the product. The result must look like the SAME real product, only with a clean studio background. Output one high-resolution, sharp photo.`
-	if productInfo != "" {
-		prompt += "\n\nContext only (never use it to invent a different product): the product is " + productInfo + "."
-	}
-	// temp 0.1: mínima libertad → máxima fidelidad al producto real.
-	return s.enhanceImagesWithPrompt(ctx,
-		[]ReferenceImage{{MimeType: mimeType, Data: imageData}},
-		prompt, models.AIFeatureEnhancePhoto, 0.1)
-}
+// NOTA (Spec 094): el modo FIEL "Quitar fondo" YA NO usa Gemini. Se probó editar con
+// Nano Banana directo, pero al ser generativo re-dibujaba el producto (figura 3D →
+// llavero plano). El modo fiel ahora recorta con remove.bg (services.RemoveBackground)
+// + escena de estudio (services.ComposeStudioFromCutout). Gemini se reserva para las
+// opciones GENERATIVAS a sabiendas: StudioShot (otro ángulo) y EnhancePhoto (indicaciones).
 
 // StudioShot — modo "Foto de estudio" (Spec 094): re-dibuja el producto de la foto
 // adjunta en un ángulo de catálogo agradable (3/4), con fondo blanco y sombra suave.
-// Es GENERATIVO (usa la foto como referencia) → puede estilizar; NO garantiza fidelidad
-// como EnhancePhotoFaithful. Temperatura moderada: suficiente para re-encuadrar el
-// ángulo, anclado a la identidad real del producto.
+// Es GENERATIVO (usa la foto como referencia) → puede estilizar; NO es fiel. Temperatura
+// moderada: suficiente para re-encuadrar el ángulo, anclado a la identidad real.
 func (s *GeminiService) StudioShot(ctx context.Context, imageData []byte, mimeType, productInfo string) ([]byte, error) {
 	prompt := `Eres un FOTÓGRAFO DE PRODUCTO. Toma el producto EXACTO de la imagen adjunta y crea una foto de catálogo profesional: muéstralo en un ángulo ligeramente en 3/4 (más atractivo y vendedor), bien iluminado, centrado, sobre fondo BLANCO puro con una sombra de contacto suave y realista. Alta resolución, nítido.
 

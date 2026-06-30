@@ -627,14 +627,23 @@ func enhancePhotoWorker(db *gorm.DB, geminiSvc *services.GeminiService, storageS
 		outMime, ext := "image/png", "png"
 		switch {
 		case mode == "studio":
-			// "Foto de estudio": puede probar otro ángulo (más libertad, puede estilizar).
+			// "Foto de estudio": GENERATIVO (Nano Banana), puede probar otro ángulo /
+			// estilizar. Para quien quiera un render de catálogo a sabiendas.
 			enhanced, err = geminiSvc.StudioShot(ctx, imageData, contentType, productInfo)
-		case instruction == "":
-			// "Mejorar foto": estudio fiel — fondo blanco + sombra, producto idéntico.
-			enhanced, err = geminiSvc.EnhancePhotoFaithful(ctx, imageData, contentType, productInfo)
-		default:
-			// "Dar indicaciones" del tendero (FR-05).
+		case instruction != "":
+			// "Dar indicaciones" del tendero (FR-05): edición generativa guiada.
 			enhanced, err = geminiSvc.EnhancePhoto(ctx, imageData, contentType, productInfo, instruction)
+		default:
+			// "Mejorar foto" = modo FIEL "Quitar fondo": recorte al pixel del producto
+			// REAL (remove.bg) + escena de estudio. Si no hay key o falla → fail-safe:
+			// realce de la foto original (no altera, no recorta). Spec 094.
+			if cut, rerr := services.RemoveBackground(ctx, imageData); rerr == nil {
+				enhanced, err = services.ComposeStudioFromCutout(cut)
+			} else {
+				err = nil
+				enhanced, err = services.RealceOnly(imageData)
+			}
+			outMime, ext = "image/jpeg", "jpg"
 		}
 		if err != nil {
 			return "", fmt.Errorf("error al mejorar foto: %w", err)
