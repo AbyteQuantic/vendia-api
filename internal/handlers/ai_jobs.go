@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"vendia-backend/internal/aiusage"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
 
@@ -90,6 +91,10 @@ var launchAIJob = func(db *gorm.DB, jobID, productID, tenantID string, worker ai
 func runAIJob(db *gorm.DB, jobID, productID, tenantID string, worker aiPhotoWorker) {
 	ctx, cancel := context.WithTimeout(context.Background(), aiJobBackgroundTimeout)
 	defer cancel()
+	// El worker corre con context.Background() (sin el ctx del request). Inyectamos el
+	// tenant para que recordTokenUsage SÍ registre el uso de IA (model_name) de los jobs
+	// de foto — antes se perdía (tenant vacío → no se logueaba el modelo usado).
+	ctx = aiusage.WithTenantID(ctx, tenantID)
 
 	photoURL, err := func() (url string, runErr error) {
 		defer func() {

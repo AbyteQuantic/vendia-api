@@ -739,6 +739,9 @@ func (s *GeminiService) enhanceImagesWithPrompt(ctx context.Context, images []Re
 
 	body, _ := json.Marshal(payload)
 	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", s.imageModel, s.apiKey)
+	// Certificación en logs: cada edición de imagen registra qué modelo se llamó.
+	log.Printf("[NANO-BANANA] image edit → model=%s feature=%s refImages=%d temp=%.2f",
+		s.imageModel, feature, len(images), temperature)
 
 	reqCtx, cancel := s.requestContext(ctx)
 	defer cancel()
