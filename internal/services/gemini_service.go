@@ -670,21 +670,23 @@ func (s *GeminiService) CleanSignature(ctx context.Context, imageData []byte, mi
 // cortaba partes). Aprovecha la preservación de identidad del modelo. temp 0.25 = alta
 // fidelidad con suficiente libertad para limpiar el fondo y la luz.
 func (s *GeminiService) EnhancePhotoFaithful(ctx context.Context, imageData []byte, mimeType, productInfo string) ([]byte, error) {
-	prompt := `You are a PROFESSIONAL PRODUCT PHOTOGRAPHER. The attached image shows a REAL product. Re-stage it as a clean studio/catalog photo:
-- Place it on a pure WHITE seamless studio background.
-- Add soft, even professional lighting and a subtle, realistic soft contact shadow beneath the product.
-- Center it with comfortable margins and show the COMPLETE product — NEVER crop or cut off any part (include straps, cords, chains, keyrings, tags).
-- Keep the SAME viewing angle and orientation as in the photo.
+	prompt := `Your ONLY job is to replace the BACKGROUND of the attached product photo with a clean studio background — NOTHING ELSE.
 
-CRITICAL — DO NOT ALTER THE PRODUCT. It must stay 100% identical to the attached image: exact same shape, proportions, colors, materials, textures, text, logos and design details. Do NOT redraw it as a different item, do NOT invent, add or remove parts, do NOT change any text or color. You are ONLY replacing the background and improving the lighting and presentation of the REAL product.
+Treat the PRODUCT as a CUT-AND-PASTE of the real pixels: keep it EXACTLY as it is in the photo, pixel for pixel. Its shape, proportions, angle, position, face/eyes/expression, colors, materials, surface texture, embossed or printed text, logos, seams and every small detail must remain IDENTICAL. Do NOT repaint, smooth, re-draw, re-style, re-shade or re-interpret the product in any way. Do NOT move, rotate, resize, add or remove any part (keep straps, cords, chains, keyrings, tags complete — never crop them).
 
-Output a single high-resolution, sharp, professional product photo.`
+ONLY allowed changes:
+- Replace the background with a pure WHITE seamless studio backdrop.
+- Add a subtle, realistic soft contact shadow beneath the product.
+- Gentle, even studio lighting on the SCENE (do not alter the product's own colors).
+
+If you are unsure, KEEP the original pixels of the product. The result must look like the SAME real product, only with a clean studio background. Output one high-resolution, sharp photo.`
 	if productInfo != "" {
 		prompt += "\n\nContext only (never use it to invent a different product): the product is " + productInfo + "."
 	}
+	// temp 0.1: mínima libertad → máxima fidelidad al producto real.
 	return s.enhanceImagesWithPrompt(ctx,
 		[]ReferenceImage{{MimeType: mimeType, Data: imageData}},
-		prompt, models.AIFeatureEnhancePhoto, 0.25)
+		prompt, models.AIFeatureEnhancePhoto, 0.1)
 }
 
 // StudioShot — modo "Foto de estudio" (Spec 094): re-dibuja el producto de la foto
