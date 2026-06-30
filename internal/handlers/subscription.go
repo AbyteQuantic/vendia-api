@@ -15,6 +15,7 @@ package handlers
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -378,19 +379,86 @@ func EpaycoConfirmation(db *gorm.DB, epayco *services.EpaycoService) gin.Handler
 			return
 		}
 
-		// 5. Resolver plan/interval (extra2/extra3). Si vienen vacíos o
-		//    inválidos, default a PRO mensual — una transacción aceptada
-		//    sin metadatos sigue siendo dinero recibido.
+		// 5. Reconciliación anti-manipulación (Art. VI).
+		//
+		//    El widget de ePayco se arma y se abre CLIENT-SIDE
+		//    (RenderCheckoutPage → ePayco.checkout.open({amount, extra2,
+		//    extra3})) y la firma de ePayco solo cubre
+		//    ref_payco^tx_id^amount^currency — NO cubre extra2 (plan) ni
+		//    extra3 (interval). Un usuario con devtools podría pagar el
+		//    precio mensual pero declarar el intervalo anual, o forzar un
+		//    monto arbitrario, y la confirmación seguiría firmada
+		//    válidamente sobre lo realmente cobrado. Por eso el
+		//    monto/plan/intervalo se contrastan contra la fila
+		//    SubscriptionCheckout que el backend persistió al cotizar
+		//    (x_id_invoice == Reference): esa fila es la fuente de verdad y
+		//    toda compra real la crea.
+		amount := parseAmount(conf.Amount)
 		plan := conf.Extra2
 		interval := conf.Extra3
-		if !billing.IsValidPlan(plan) || plan == billing.PlanFree {
-			plan = billing.PlanPro
-		}
-		if !billing.IsValidInterval(interval) {
-			interval = billing.IntervalMonthly
+		reference := strings.TrimSpace(conf.Invoice)
+
+		var checkout models.SubscriptionCheckout
+		checkoutErr := db.Where("reference = ?", reference).First(&checkout).Error
+		switch {
+		case checkoutErr == nil:
+			// Hay fila: es la fuente de verdad. Cualquier divergencia en
+			// tenant, monto, plan o intervalo es manipulación → rechazo sin
+			// promover ni registrar pago.
+			if checkout.TenantID != tenantID ||
+				int(amount) != checkout.Amount ||
+				conf.Extra2 != checkout.Plan ||
+				conf.Extra3 != checkout.Interval {
+				log.Printf("[epayco-confirm] ANOMALIA: confirmacion no coincide con el checkout "+
+					"ref=%s tenant_conf=%s tenant_row=%s amount_conf=%v amount_row=%d "+
+					"plan_conf=%q plan_row=%q interval_conf=%q interval_row=%q",
+					reference, tenantID, checkout.TenantID, amount, checkout.Amount,
+					conf.Extra2, checkout.Plan, conf.Extra3, checkout.Interval)
+				c.JSON(http.StatusBadRequest, gin.H{
+					"error": "la confirmación no coincide con el cobro registrado",
+				})
+				return
+			}
+			// Promover SIEMPRE con los valores persistidos, nunca con los
+			// extra* del cliente.
+			plan = checkout.Plan
+			interval = checkout.Interval
+
+		case errors.Is(checkoutErr, gorm.ErrRecordNotFound):
+			// Sin fila: confirmación legada o referencia no emitida por
+			// nosotros. No hay cotización contra la cual contrastar, así
+			// que validamos el monto contra el precio de catálogo del
+			// plan/intervalo declarado — borrar o alterar el x_id_invoice
+			// no puede ser una vía para evadir la reconciliación. Un monto
+			// no numérico (0) conserva el comportamiento defensivo
+			// histórico: se registra igual (no se pierde el dinero) y
+			// FinOps reconcilia.
+			if !billing.IsValidPlan(plan) || plan == billing.PlanFree {
+				plan = billing.PlanPro
+			}
+			if !billing.IsValidInterval(interval) {
+				interval = billing.IntervalMonthly
+			}
+			if amount > 0 {
+				if price, perr := billing.LookupPrice(plan, interval); perr == nil &&
+					int(amount) != price.Amount {
+					log.Printf("[epayco-confirm] ANOMALIA: monto sin checkout no coincide con catalogo "+
+						"tenant=%s amount=%v plan=%q interval=%q precio=%d",
+						tenantID, amount, plan, interval, price.Amount)
+					c.JSON(http.StatusBadRequest, gin.H{
+						"error": "la confirmación no coincide con el cobro registrado",
+					})
+					return
+				}
+			}
+
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "error al procesar la confirmación",
+			})
+			return
 		}
 
-		amount := parseAmount(conf.Amount)
 		now := time.Now()
 
 		// 6. Escritura atómica: insertar el pago + promover. El insert

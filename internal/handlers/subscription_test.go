@@ -819,3 +819,237 @@ func TestSubscriptionResponse_RendersLanding(t *testing.T) {
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 }
+
+// ── Anti-tamper: la confirmación debe coincidir con el checkout ─────
+//
+// El widget de ePayco se arma y se abre CLIENT-SIDE
+// (RenderCheckoutPage → ePayco.checkout.open({amount, extra2, extra3})).
+// La firma de ePayco solo cubre p_cust_id^p_key^ref_payco^tx_id^amount^
+// currency — NO cubre extra2 (plan) ni extra3 (interval). Un usuario con
+// devtools podría pagar el precio mensual pero declarar el intervalo
+// anual, o pagar un monto arbitrariamente bajo, y la confirmación
+// (válidamente firmada por ePayco sobre lo realmente cobrado) promovería
+// al plan/intervalo equivocado. La fila SubscriptionCheckout que el
+// backend persistió al cotizar (por Reference == x_id_invoice) es la
+// fuente de verdad del monto/plan/intervalo.
+
+// seedCheckout persiste un SubscriptionCheckout como lo haría
+// CreateSubscriptionCheckout: es el puente que toda compra real crea.
+func seedCheckout(t *testing.T, db *gorm.DB, tenantID, reference, plan, interval string, amount int) {
+	t.Helper()
+	require.NoError(t, db.Create(&models.SubscriptionCheckout{
+		TenantID:        tenantID,
+		Reference:       reference,
+		Plan:            plan,
+		Interval:        interval,
+		Amount:          amount,
+		Description:     "VendIA Pro",
+		ResponseURL:     "https://api.test/api/v1/subscription/response",
+		ConfirmationURL: "https://api.test/api/v1/subscription/epayco/confirmation",
+	}).Error)
+}
+
+// Pagar el precio mensual pero declarar intervalo anual (extra3 alterado
+// en el navegador) → la confirmación NO debe promover a anual.
+func TestEpaycoConfirmation_TamperedIntervalRejected(t *testing.T) {
+	db := setupSubscriptionDB(t)
+	tenantID := uuid.NewString()
+	require.NoError(t, db.Create(&models.TenantSubscription{
+		TenantID: tenantID, Status: models.SubscriptionStatusFree,
+		Plan: models.SubscriptionPlanFree,
+	}).Error)
+
+	// El backend cotizó PRO mensual ($29.900) y lo persistió.
+	ref := "vendia-sub-" + tenantID + "-tamper-int"
+	seedCheckout(t, db, tenantID, ref, billing.PlanPro, billing.IntervalMonthly, 29900)
+
+	r := mountSubscriptionRoutes(db, subTestEpayco(), tenantID)
+	txID := "tx-tamper-int-" + uuid.NewString()[:8]
+	refPayco := "epayco-ref-" + txID
+	amount := "29900" // se pagó el precio MENSUAL
+	form := url.Values{}
+	form.Set("x_ref_payco", refPayco)
+	form.Set("x_transaction_id", txID)
+	form.Set("x_amount", amount)
+	form.Set("x_currency_code", "COP")
+	form.Set("x_cod_response", "1")
+	form.Set("x_id_invoice", ref)
+	form.Set("x_extra1", tenantID)
+	form.Set("x_extra2", billing.PlanPro)
+	form.Set("x_extra3", billing.IntervalYearly) // ← ALTERADO a anual
+	form.Set("x_signature", signConfirmation(refPayco, txID, amount, "COP"))
+
+	w := postConfirmation(r, form)
+	assert.Equal(t, http.StatusBadRequest, w.Code,
+		"intervalo alterado respecto al checkout → rechazo")
+
+	var sub models.TenantSubscription
+	require.NoError(t, db.Where("tenant_id = ?", tenantID).First(&sub).Error)
+	assert.Equal(t, models.SubscriptionStatusFree, sub.Status,
+		"un intervalo alterado NO promueve el tenant")
+
+	var count int64
+	db.Model(&models.SubscriptionPayment{}).
+		Where("epayco_transaction_id = ?", txID).Count(&count)
+	assert.Zero(t, count, "una confirmación que no cuadra NO registra pago")
+}
+
+// Pagar un monto inferior al cotizado (amount alterado en el navegador)
+// → la confirmación NO debe promover.
+func TestEpaycoConfirmation_TamperedAmountRejected(t *testing.T) {
+	db := setupSubscriptionDB(t)
+	tenantID := uuid.NewString()
+	require.NoError(t, db.Create(&models.TenantSubscription{
+		TenantID: tenantID, Status: models.SubscriptionStatusFree,
+		Plan: models.SubscriptionPlanFree,
+	}).Error)
+
+	ref := "vendia-sub-" + tenantID + "-tamper-amt"
+	seedCheckout(t, db, tenantID, ref, billing.PlanPro, billing.IntervalMonthly, 29900)
+
+	r := mountSubscriptionRoutes(db, subTestEpayco(), tenantID)
+	txID := "tx-tamper-amt-" + uuid.NewString()[:8]
+	refPayco := "epayco-ref-" + txID
+	amount := "1000" // ← se cobró mucho menos de lo cotizado
+	form := url.Values{}
+	form.Set("x_ref_payco", refPayco)
+	form.Set("x_transaction_id", txID)
+	form.Set("x_amount", amount)
+	form.Set("x_currency_code", "COP")
+	form.Set("x_cod_response", "1")
+	form.Set("x_id_invoice", ref)
+	form.Set("x_extra1", tenantID)
+	form.Set("x_extra2", billing.PlanPro)
+	form.Set("x_extra3", billing.IntervalMonthly)
+	form.Set("x_signature", signConfirmation(refPayco, txID, amount, "COP"))
+
+	w := postConfirmation(r, form)
+	assert.Equal(t, http.StatusBadRequest, w.Code,
+		"monto cobrado distinto al cotizado → rechazo")
+
+	var sub models.TenantSubscription
+	require.NoError(t, db.Where("tenant_id = ?", tenantID).First(&sub).Error)
+	assert.Equal(t, models.SubscriptionStatusFree, sub.Status,
+		"un monto alterado NO promueve el tenant")
+}
+
+// Caso sano: la confirmación coincide con el checkout persistido →
+// promueve usando el plan/intervalo de la fila (fuente de verdad).
+func TestEpaycoConfirmation_MatchingCheckoutPromotes(t *testing.T) {
+	db := setupSubscriptionDB(t)
+	tenantID := uuid.NewString()
+	require.NoError(t, db.Create(&models.TenantSubscription{
+		TenantID: tenantID, Status: models.SubscriptionStatusFree,
+		Plan: models.SubscriptionPlanFree,
+	}).Error)
+
+	ref := "vendia-sub-" + tenantID + "-ok-year"
+	seedCheckout(t, db, tenantID, ref, billing.PlanPro, billing.IntervalYearly, 299000)
+
+	r := mountSubscriptionRoutes(db, subTestEpayco(), tenantID)
+	txID := "tx-ok-year-" + uuid.NewString()[:8]
+	refPayco := "epayco-ref-" + txID
+	amount := "299000"
+	form := url.Values{}
+	form.Set("x_ref_payco", refPayco)
+	form.Set("x_transaction_id", txID)
+	form.Set("x_amount", amount)
+	form.Set("x_currency_code", "COP")
+	form.Set("x_cod_response", "1")
+	form.Set("x_id_invoice", ref)
+	form.Set("x_extra1", tenantID)
+	form.Set("x_extra2", billing.PlanPro)
+	form.Set("x_extra3", billing.IntervalYearly)
+	form.Set("x_signature", signConfirmation(refPayco, txID, amount, "COP"))
+
+	w := postConfirmation(r, form)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var sub models.TenantSubscription
+	require.NoError(t, db.Where("tenant_id = ?", tenantID).First(&sub).Error)
+	assert.Equal(t, models.SubscriptionStatusProActive, sub.Status)
+	assert.Equal(t, billing.IntervalYearly, sub.Interval,
+		"promueve con el intervalo del checkout persistido")
+	require.NotNil(t, sub.CurrentPeriodEnd)
+	assert.True(t, sub.CurrentPeriodEnd.After(time.Now().Add(360*24*time.Hour)),
+		"anual extiende ~1 año")
+}
+
+// El tenant del checkout manda: extra1 no puede reasignar el pago a otro
+// tenant distinto del que cotizó esa referencia.
+func TestEpaycoConfirmation_TamperedTenantRejected(t *testing.T) {
+	db := setupSubscriptionDB(t)
+	buyer := uuid.NewString()
+	victim := uuid.NewString()
+	require.NoError(t, db.Create(&models.TenantSubscription{
+		TenantID: victim, Status: models.SubscriptionStatusFree,
+		Plan: models.SubscriptionPlanFree,
+	}).Error)
+
+	// El checkout lo cotizó el comprador.
+	ref := "vendia-sub-" + buyer + "-tenant"
+	seedCheckout(t, db, buyer, ref, billing.PlanPro, billing.IntervalMonthly, 29900)
+
+	r := mountSubscriptionRoutes(db, subTestEpayco(), "")
+	txID := "tx-tenant-" + uuid.NewString()[:8]
+	refPayco := "epayco-ref-" + txID
+	amount := "29900"
+	form := url.Values{}
+	form.Set("x_ref_payco", refPayco)
+	form.Set("x_transaction_id", txID)
+	form.Set("x_amount", amount)
+	form.Set("x_currency_code", "COP")
+	form.Set("x_cod_response", "1")
+	form.Set("x_id_invoice", ref)
+	form.Set("x_extra1", victim) // ← intenta promover a otro tenant
+	form.Set("x_extra2", billing.PlanPro)
+	form.Set("x_extra3", billing.IntervalMonthly)
+	form.Set("x_signature", signConfirmation(refPayco, txID, amount, "COP"))
+
+	w := postConfirmation(r, form)
+	assert.Equal(t, http.StatusBadRequest, w.Code,
+		"el tenant del checkout no coincide con extra1 → rechazo")
+
+	var sub models.TenantSubscription
+	require.NoError(t, db.Where("tenant_id = ?", victim).First(&sub).Error)
+	assert.Equal(t, models.SubscriptionStatusFree, sub.Status,
+		"no se promueve a un tenant que no cotizó el checkout")
+}
+
+// Hardening del camino sin fila de checkout (legado / referencia no
+// emitida por nosotros): un monto positivo que no cuadra con el precio
+// de catálogo del plan/intervalo declarado se rechaza, de modo que
+// borrar/alterar el x_id_invoice no sea una vía para evadir la
+// reconciliación.
+func TestEpaycoConfirmation_NoCheckoutMismatchedCatalogPriceRejected(t *testing.T) {
+	db := setupSubscriptionDB(t)
+	tenantID := uuid.NewString()
+	require.NoError(t, db.Create(&models.TenantSubscription{
+		TenantID: tenantID, Status: models.SubscriptionStatusFree,
+		Plan: models.SubscriptionPlanFree,
+	}).Error)
+
+	r := mountSubscriptionRoutes(db, subTestEpayco(), tenantID)
+	txID := "tx-nocheckout-" + uuid.NewString()[:8]
+	refPayco := "epayco-ref-" + txID
+	amount := "29900" // pagó el mensual...
+	form := url.Values{}
+	form.Set("x_ref_payco", refPayco)
+	form.Set("x_transaction_id", txID)
+	form.Set("x_amount", amount)
+	form.Set("x_currency_code", "COP")
+	form.Set("x_cod_response", "1")
+	form.Set("x_id_invoice", "ref-inexistente-borrada") // sin fila
+	form.Set("x_extra1", tenantID)
+	form.Set("x_extra2", billing.PlanPro)
+	form.Set("x_extra3", billing.IntervalYearly) // ...pero declara anual
+	form.Set("x_signature", signConfirmation(refPayco, txID, amount, "COP"))
+
+	w := postConfirmation(r, form)
+	assert.Equal(t, http.StatusBadRequest, w.Code,
+		"sin checkout, un monto que no es el de catálogo del plan/intervalo → rechazo")
+
+	var sub models.TenantSubscription
+	require.NoError(t, db.Where("tenant_id = ?", tenantID).First(&sub).Error)
+	assert.Equal(t, models.SubscriptionStatusFree, sub.Status)
+}
