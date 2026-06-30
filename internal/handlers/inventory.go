@@ -623,33 +623,23 @@ func enhancePhotoWorker(db *gorm.DB, geminiSvc *services.GeminiService, storageS
 		// (FR-05, "dar indicaciones") se usa el camino generativo, a sabiendas.
 		// Todos los caminos editan con Nano Banana (gemini-3-pro-image-preview) y
 		// devuelven PNG. Spec 094.
-		// El tendero elige (Spec 094): "Quitar fondo" (default) vs "Mejorar con IA"
-		// (mode=improve). Además: indicaciones (FR-05) y estudio (otro ángulo).
+		// El tendero elige (Spec 094) — TODO con Nano Banana:
+		//   "Quitar fondo" (default) · "Mejorar con IA" (mode=improve) ·
+		//   "Foto de estudio" (mode=studio) · "Dar indicaciones" (FR-05).
 		var enhanced []byte
 		outMime, ext := "image/png", "png"
 		switch {
 		case instruction != "":
-			// "Dar indicaciones": edición generativa guiada por el tendero.
 			enhanced, err = geminiSvc.EnhancePhoto(ctx, imageData, contentType, productInfo, instruction)
 		case mode == "improve":
-			// "Mejorar con IA": Nano Banana limpia imperfecciones + fondo (generativo).
+			// "Mejorar con IA": Nano Banana limpia imperfecciones + fondo (puede estilizar).
 			enhanced, err = geminiSvc.EnhancePhoto(ctx, imageData, contentType, productInfo, "")
 		case mode == "studio":
-			// "Foto de estudio": Nano Banana, puede probar otro ángulo (estiliza).
 			enhanced, err = geminiSvc.StudioShot(ctx, imageData, contentType, productInfo)
 		default:
-			// "Quitar fondo": si hay REMOVEBG_API_KEY → recorte al pixel (remove.bg) +
-			// escena de estudio (100% fiel). Si no → Nano Banana solo-fondo.
-			if services.RemoveBackgroundConfigured() {
-				if cut, rerr := services.RemoveBackground(ctx, imageData); rerr == nil {
-					enhanced, err = services.ComposeStudioFromCutout(cut)
-					outMime, ext = "image/jpeg", "jpg"
-				} else {
-					enhanced, err = geminiSvc.RemoveBackgroundNano(ctx, imageData, contentType)
-				}
-			} else {
-				enhanced, err = geminiSvc.RemoveBackgroundNano(ctx, imageData, contentType)
-			}
+			// "Quitar fondo": Nano Banana reemplaza el fondo por blanco, conservando el
+			// producto lo más idéntico posible.
+			enhanced, err = geminiSvc.RemoveBackgroundNano(ctx, imageData, contentType)
 		}
 		if err != nil {
 			return "", fmt.Errorf("error al mejorar foto: %w", err)
