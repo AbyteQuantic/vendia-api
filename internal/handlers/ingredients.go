@@ -129,33 +129,42 @@ func CreateIngredient(db *gorm.DB) gin.HandlerFunc {
 			ingredient.ID = req.ID
 		}
 
-		if err := db.Create(&ingredient).Error; err != nil {
+		// Create + kardex movement run inside one transaction: a kardex
+		// write failure must roll back the ingredient creation instead of
+		// leaving a row with no audit trail (Art. VII) and a 201 response
+		// that silently hid the error.
+		if err := db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Create(&ingredient).Error; err != nil {
+				return err
+			}
+
+			// FR-05 — a freshly created insumo with stock inicial > 0 must
+			// enter the kardex with an `initial_stock` movement, exactly as
+			// products do (CreateProduct). Without it the invariant
+			// `stock = Σ movimientos` (Constitución Art. VII) never held for
+			// insumos. This runs only on a real insert: the idempotent
+			// re-sync path above returns before reaching here, so a re-sent
+			// UUID never double-logs. stock_before/stock_after are passed
+			// explicitly (0 → stock_inicial) because LogInventoryMovement's
+			// self-read targets the products table, not ingredients.
+			if ingredient.Stock > 0 {
+				zero := float64(0)
+				initial := ingredient.Stock
+				return services.LogInventoryMovement(tx, services.MovementParams{
+					TenantID:            tenantID,
+					ProductID:           ingredient.ID,
+					ProductName:         ingredient.Name,
+					MovementType:        models.MovementInitialStock,
+					ReferenceType:       "ingredient",
+					StockBeforeOverride: &zero,
+					StockAfterOverride:  &initial,
+					QuantityOverride:    &initial,
+				})
+			}
+			return nil
+		}); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al crear insumo"})
 			return
-		}
-
-		// FR-05 — a freshly created insumo with stock inicial > 0 must
-		// enter the kardex with an `initial_stock` movement, exactly as
-		// products do (CreateProduct). Without it the invariant
-		// `stock = Σ movimientos` (Constitución Art. VII) never held for
-		// insumos. This runs only on a real insert: the idempotent
-		// re-sync path above returns before reaching here, so a re-sent
-		// UUID never double-logs. stock_before/stock_after are passed
-		// explicitly (0 → stock_inicial) because LogInventoryMovement's
-		// self-read targets the products table, not ingredients.
-		if ingredient.Stock > 0 {
-			zero := float64(0)
-			initial := ingredient.Stock
-			services.LogInventoryMovement(db, services.MovementParams{
-				TenantID:            tenantID,
-				ProductID:           ingredient.ID,
-				ProductName:         ingredient.Name,
-				MovementType:        models.MovementInitialStock,
-				ReferenceType:       "ingredient",
-				StockBeforeOverride: &zero,
-				StockAfterOverride:  &initial,
-				QuantityOverride:    &initial,
-			})
 		}
 
 		c.JSON(http.StatusCreated, gin.H{"data": ingredient})

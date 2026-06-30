@@ -160,7 +160,7 @@ func CloseTab(db *gorm.DB) gin.HandlerFunc {
 					Subtotal:  subtotal,
 				})
 
-				services.LogInventoryMovement(tx, services.MovementParams{
+				if err := services.LogInventoryMovement(tx, services.MovementParams{
 					TenantID:      tenantID,
 					ProductID:     item.ProductID,
 					ProductName:   item.Name,
@@ -168,10 +168,14 @@ func CloseTab(db *gorm.DB) gin.HandlerFunc {
 					Quantity:      -item.Quantity,
 					ReferenceType: "tab",
 					UserID:        middleware.UUIDPtr(middleware.GetUserID(c)),
-				})
-				tx.Model(&models.Product{}).
+				}); err != nil {
+					return err
+				}
+				if err := tx.Model(&models.Product{}).
 					Where("id = ? AND tenant_id = ? AND stock > 0", item.ProductID, tenantID).
-					UpdateColumn("stock", gorm.Expr("stock - ?", item.Quantity))
+					UpdateColumn("stock", gorm.Expr("stock - ?", item.Quantity)).Error; err != nil {
+					return err
+				}
 			}
 
 			sale = models.Sale{

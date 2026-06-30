@@ -21,11 +21,15 @@ import (
 // schema migrated. The Ingredient struct carries no Postgres-only
 // defaults, so AutoMigrate works directly on sqlite (unlike the
 // hand-crafted schema branch_isolation_test needs for Product/Sale).
+//
+// InventoryMovement is migrated too: CreateIngredient logs an
+// initial_stock kardex movement inside the same transaction as the
+// insert (Art. VII), so the table must exist or the whole create fails.
 func setupIngredientDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&models.Ingredient{}))
+	require.NoError(t, db.AutoMigrate(&models.Ingredient{}, &models.InventoryMovement{}))
 	return db
 }
 
