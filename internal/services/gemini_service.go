@@ -663,11 +663,19 @@ func (s *GeminiService) CleanSignature(ctx context.Context, imageData []byte, mi
 		prompt, models.AIFeatureEnhancePhoto, 0.2)
 }
 
-// NOTA (Spec 094): el modo FIEL "Quitar fondo" YA NO usa Gemini. Se probó editar con
-// Nano Banana directo, pero al ser generativo re-dibujaba el producto (figura 3D →
-// llavero plano). El modo fiel ahora recorta con remove.bg (services.RemoveBackground)
-// + escena de estudio (services.ComposeStudioFromCutout). Gemini se reserva para las
-// opciones GENERATIVAS a sabiendas: StudioShot (otro ángulo) y EnhancePhoto (indicaciones).
+// RemoveBackgroundNano — modo "Quitar fondo" con Nano Banana (Spec 094). Pide SOLO
+// reemplazar el fondo por blanco, conservando el producto lo más idéntico posible.
+// OJO: es generativo → no es pixel-perfect (puede cambiar detalles finos). Para recorte
+// 100% fiel, el worker prefiere remove.bg si hay REMOVEBG_API_KEY; esto es el camino sin
+// key. temp 0.1 = mínima libertad.
+func (s *GeminiService) RemoveBackgroundNano(ctx context.Context, imageData []byte, mimeType string) ([]byte, error) {
+	const prompt = `Your ONLY job is to REPLACE THE BACKGROUND of the attached product photo with a pure WHITE seamless studio background, and add a subtle realistic soft contact shadow under the product. NOTHING ELSE.
+
+Keep the PRODUCT exactly as it is in the photo — same shape, proportions, angle, position, colors, materials, surface texture, printed/embossed text, logos and every detail. Do NOT repaint, redraw, restyle, move, rotate, resize, add, remove or crop any part (keep straps, cords, chains, keyrings, tags complete). If unsure, keep the original pixels. Output one high-resolution sharp photo of the SAME product on a clean white background.`
+	return s.enhanceImagesWithPrompt(ctx,
+		[]ReferenceImage{{MimeType: mimeType, Data: imageData}},
+		prompt, models.AIFeatureEnhancePhoto, 0.1)
+}
 
 // StudioShot — modo "Foto de estudio" (Spec 094): re-dibuja el producto de la foto
 // adjunta en un ángulo de catálogo agradable (3/4), con fondo blanco y sombra suave.

@@ -150,22 +150,3 @@ func ComposeStudioFromCutout(cutoutPNG []byte) ([]byte, error) {
 	}
 	return buf.Bytes(), nil
 }
-
-// RealceOnly es el FALLBACK cuando no hay recorte (sin REMOVEBG_API_KEY o si la API
-// falla): mejora luz/color/nitidez de la foto completa, conservando el fondo original.
-// Nunca altera ni recorta el producto. Devuelve JPEG.
-func RealceOnly(originalBytes []byte) ([]byte, error) {
-	src, _, err := image.Decode(bytes.NewReader(originalBytes))
-	if err != nil {
-		return nil, fmt.Errorf("no se pudo decodificar la foto: %w", err)
-	}
-	out := imaging.AdjustContrast(src, 8)
-	out = imaging.AdjustBrightness(out, 3)
-	out = imaging.AdjustSaturation(out, 5)
-	out = imaging.Sharpen(out, 0.8)
-	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, out, &jpeg.Options{Quality: 92}); err != nil {
-		return nil, fmt.Errorf("no se pudo codificar el resultado: %w", err)
-	}
-	return buf.Bytes(), nil
-}

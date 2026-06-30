@@ -57,14 +57,3 @@ func TestRemoveBackground_SinKey_Error(t *testing.T) {
 	require.Error(t, err, "sin REMOVEBG_API_KEY debe fallar (el worker hace fallback)")
 }
 
-func TestRealceOnly_DevuelveJPEGValido(t *testing.T) {
-	src := imaging.New(20, 20, color.NRGBA{120, 130, 140, 255})
-	var b bytes.Buffer
-	require.NoError(t, png.Encode(&b, src))
-	out, err := RealceOnly(b.Bytes())
-	require.NoError(t, err)
-	img, format, err := image.Decode(bytes.NewReader(out))
-	require.NoError(t, err)
-	assert.Equal(t, "jpeg", format)
-	assert.Equal(t, 20, img.Bounds().Dx())
-}
