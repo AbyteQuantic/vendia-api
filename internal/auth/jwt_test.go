@@ -64,3 +64,23 @@ func TestGenerateAdminToken_HasSuperAdminClaim(t *testing.T) {
 	assert.True(t, claims.IsSuperAdmin)
 	assert.Equal(t, "admin-uuid", claims.TenantID)
 }
+
+func TestGenerateAdminToken_ExpiresInAdminAccessTokenDuration(t *testing.T) {
+	token, err := GenerateAdminToken("admin-uuid", "admin@vendia.co", "Admin", testSecret)
+	require.NoError(t, err)
+
+	claims, err := ValidateToken(token, testSecret)
+	require.NoError(t, err)
+
+	expiry := claims.ExpiresAt.Time
+	expectedMin := time.Now().Add(AdminAccessTokenDuration - 1*time.Minute)
+	expectedMax := time.Now().Add(AdminAccessTokenDuration + 1*time.Minute)
+	assert.True(t, expiry.After(expectedMin),
+		"el token admin debe expirar ~%s en el futuro", AdminAccessTokenDuration)
+	assert.True(t, expiry.Before(expectedMax),
+		"el token admin no debe expirar más allá de ~%s", AdminAccessTokenDuration)
+
+	// Debe ser mucho más corto que el TTL de 7 días de los tenderos:
+	// un token admin da poder god-mode sobre todos los tenants.
+	assert.Less(t, AdminAccessTokenDuration, AccessTokenDuration)
+}

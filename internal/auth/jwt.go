@@ -12,6 +12,17 @@ import (
 const AccessTokenDuration = 7 * 24 * time.Hour   // 7 days — zero friction for tiendas
 const RefreshTokenDuration = 90 * 24 * time.Hour  // 90 days
 
+// AdminAccessTokenDuration is intentionally much shorter than
+// AccessTokenDuration: an admin token grants god-mode over every
+// tenant, and super-admin/support staff work from a desk with a
+// live connection — the "zero friction for tiendas" rationale for
+// the 7-day tenant TTL does not apply to them. A stolen laptop or
+// shared session should not grant up to 7 days of full platform
+// access with no revocation path short of rotating JWT_SECRET for
+// every tenant. 4 hours is a reasonable security/friction trade-off
+// for connected support staff (H10).
+const AdminAccessTokenDuration = 4 * time.Hour
+
 type Claims struct {
 	TenantID     string `json:"tenant_id"`
 	Phone        string `json:"phone"`
@@ -65,7 +76,7 @@ func GenerateAdminToken(adminID, email, name, secret string) (string, error) {
 		BusinessName: name,
 		IsSuperAdmin: true,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(AccessTokenDuration)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(AdminAccessTokenDuration)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			Issuer:    "vendia-backend",
 		},
