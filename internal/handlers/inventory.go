@@ -618,34 +618,46 @@ func enhancePhotoWorker(db *gorm.DB, geminiSvc *services.GeminiService, storageS
 			return "", err
 		}
 
-		// Spec 094: "Mejorar foto con IA" = modo FIEL (quita fondo + realce, NUNCA
-		// altera el producto). Solo cuando el tendero escribe una indicación
-		// (FR-05, "dar indicaciones") se usa el camino generativo, a sabiendas.
-		// Todos los caminos editan con Nano Banana (gemini-3-pro-image-preview) y
-		// devuelven PNG. Spec 094.
-		// El tendero elige (Spec 094) — TODO con Nano Banana:
-		//   "Quitar fondo" (default) · "Mejorar con IA" (mode=improve) ·
-		//   "Foto de estudio" (mode=studio) · "Dar indicaciones" (FR-05).
+		// Spec 094: "Quitar fondo" y "Mejorar con IA" son AMBOS modo FIEL (Opción
+		// A) — Gemini solo aporta la MÁSCARA (SegmentProductMask, nunca dibuja el
+		// producto) y el resultado final son los PÍXELES REALES de la foto,
+		// recortados y realzados en Go (ComposeFaithful/ComposeFaithfulEnhanced).
+		// Antes "Mejorar con IA" editaba con Nano Banana de forma generativa
+		// (EnhancePhoto) — pese al prompt anti-alucinación, el modelo podía
+		// "reconocer" el producto y redibujarlo distinto (caso real: un llavero
+		// de goma azul salió como un llavero metálico plateado de otro
+		// personaje). Con la máscara, esto es estructuralmente imposible: Gemini
+		// nunca toca los píxeles del producto.
+		// Solo cuando el tendero escribe una indicación explícita (FR-05, "dar
+		// indicaciones") se usa el camino generativo (EnhancePhoto), a sabiendas
+		// — es una corrección puntual que el tendero pide y revisa, no el
+		// comportamiento por defecto de ningún botón.
 		var enhanced []byte
-		outMime, ext := "image/png", "png"
+		outMime, ext := "image/jpeg", "jpg"
 		switch {
 		case instruction != "":
 			enhanced, err = geminiSvc.EnhancePhoto(ctx, imageData, contentType, productInfo, instruction)
-		case mode == "improve":
-			// "Mejorar con IA": Nano Banana limpia imperfecciones + fondo (puede estilizar).
-			enhanced, err = geminiSvc.EnhancePhoto(ctx, imageData, contentType, productInfo, "")
+			outMime, ext = "image/png", "png"
 		case mode == "studio":
 			enhanced, err = geminiSvc.StudioShot(ctx, imageData, contentType, productInfo)
+			outMime, ext = "image/png", "png"
+		case mode == "improve":
+			// "Mejorar con IA" FIEL: máscara + realce MÁS FUERTE que "Quitar
+			// fondo" (contraste/brillo/saturación/nitidez), pero sigue siendo
+			// 100% filtros de píxeles — nunca puede cambiar el producto.
+			mask, mErr := geminiSvc.SegmentProductMask(ctx, imageData, contentType)
+			if mErr != nil {
+				mask = nil
+			}
+			enhanced, err = services.ComposeFaithfulEnhanced(imageData, mask)
 		default:
-			// "Quitar fondo" FIEL (Opción A): Gemini da una MÁSCARA; pegamos los
-			// PÍXELES REALES del producto sobre fondo de estudio. NUNCA lo regenera.
-			// Si la máscara falla → fail-safe: solo realce de la foto original.
+			// "Quitar fondo" FIEL (Opción A): realce suave. Si la máscara falla →
+			// fail-safe: solo realce de la foto original.
 			mask, mErr := geminiSvc.SegmentProductMask(ctx, imageData, contentType)
 			if mErr != nil {
 				mask = nil
 			}
 			enhanced, err = services.ComposeFaithful(imageData, mask)
-			outMime, ext = "image/jpeg", "jpg"
 		}
 		if err != nil {
 			return "", fmt.Errorf("error al mejorar foto: %w", err)
