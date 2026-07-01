@@ -46,6 +46,45 @@ func TestComposeFaithful_PegaProductoRealSobreEstudio(t *testing.T) {
 	assert.Less(t, mb>>8, uint32(160))
 }
 
+// Bug real reportado: la correa/cordón de un llavero quedaba cortada del
+// resultado. El bbox del recorte usaba un umbral (a>30, "cuerpo sólido") más
+// estricto que el de inclusión en el pegado (a>8) — una parte delgada del
+// producto con alfa entre 9 y 30 SÍ se pintaba en el buffer intermedio pero
+// el Crop final (acotado al bbox viejo, más chico) la descartaba antes de
+// llegar al canvas. Este test construye una máscara con un "cuerpo sólido"
+// en una esquina y una "correa" tenue (alfa ~20, fuera del cuerpo sólido)
+// lejos de esa esquina — el canvas final debe ser lo bastante grande para
+// contener AMBAS partes, no solo el cuerpo sólido.
+func TestComposeFaithful_NoRecortaPartesDelgadasDelProducto(t *testing.T) {
+	src := imaging.New(30, 30, color.NRGBA{80, 90, 100, 255})
+	mask := imaging.New(30, 30, color.NRGBA{0, 0, 0, 255})
+	// Cuerpo sólido: blanco puro (alfa ~255), esquina superior-izquierda.
+	for y := 2; y <= 9; y++ {
+		for x := 2; x <= 9; x++ {
+			mask.SetNRGBA(x, y, color.NRGBA{255, 255, 255, 255})
+		}
+	}
+	// "Correa" tenue: gris (luminancia ~20, entre el umbral de inclusión
+	// a>8 y el viejo umbral de bbox a>30), lejos del cuerpo sólido.
+	for y := 20; y <= 24; y++ {
+		for x := 20; x <= 24; x++ {
+			mask.SetNRGBA(x, y, color.NRGBA{20, 20, 20, 255})
+		}
+	}
+
+	out, err := ComposeFaithful(pngOf(t, src), pngOf(t, mask))
+	require.NoError(t, err)
+	img, _, err := image.Decode(bytes.NewReader(out))
+	require.NoError(t, err)
+
+	w := img.Bounds().Dx()
+	// bbox completo (2..24 en ambos ejes) = 23px + margen 10% por lado →
+	// side ≈ 23/0.8 ≈ 28. Con el bug viejo (bbox solo del cuerpo sólido
+	// 2..9 = 8px) el canvas habría salido de ~10px — muy por debajo de 20.
+	assert.Greater(t, w, 20,
+		"el canvas debe ser lo bastante grande para incluir la correa tenue, no solo el cuerpo sólido")
+}
+
 func TestComposeFaithful_SinMascara_FailsafeRealce(t *testing.T) {
 	src := imaging.New(20, 20, color.NRGBA{120, 130, 140, 255})
 	out, err := ComposeFaithful(pngOf(t, src), nil)
