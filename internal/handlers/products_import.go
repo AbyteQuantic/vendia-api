@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
 	"vendia-backend/internal/services"
 
@@ -93,8 +94,9 @@ func ImportProducts(db *gorm.DB) gin.HandlerFunc {
 			Failed: []importFailedRow{},
 		}
 
+		userID := middleware.GetUserIDPtr(c)
 		for i, row := range req.Rows {
-			fail := processProductImportRow(db, tenantID, i, row, &result)
+			fail := processProductImportRow(db, tenantID, userID, i, row, &result)
 			if fail != nil {
 				result.Failed = append(result.Failed, *fail)
 			}
@@ -107,7 +109,14 @@ func ImportProducts(db *gorm.DB) gin.HandlerFunc {
 // processProductImportRow sanitizes, validates, and upserts one product row.
 // Returns a *importFailedRow when the row must be counted as failed, nil
 // on success. Updates result.Created / result.Updated in place.
-func processProductImportRow(db *gorm.DB, tenantID string, idx int, row productImportRow, result *productImportResult) *importFailedRow {
+//
+// Every branch (create / update-by-barcode / update-by-name) runs inside a
+// transaction that also writes the matching kardex movement (Art. VII):
+// a stock change that lands in `products` without a paired
+// `inventory_movements` row breaks the audit trail the same way it would
+// for the manual create/edit flow in products.go — CSV import is just
+// another entry channel for the same invariant.
+func processProductImportRow(db *gorm.DB, tenantID string, userID *string, idx int, row productImportRow, result *productImportResult) *importFailedRow {
 	// ── Sanitize ─────────────────────────────────────────────────────────
 	row.Name = normalizeWhitespace(row.Name)
 	row.Barcode = strings.TrimSpace(row.Barcode)
@@ -167,9 +176,16 @@ func processProductImportRow(db *gorm.DB, tenantID string, idx int, row productI
 			First(&existing).Error
 		if err == nil {
 			// ── UPDATE (barcode match) ─────────────────────────────────
+			oldStock := existing.Stock
 			updates := buildProductUpdateMap(row, price, stock, minStock, purchasePrice)
-			if dbErr := db.Model(&existing).Updates(updates).Error; dbErr != nil {
-				return &importFailedRow{RowIndex: idx, Reason: "error al actualizar: " + dbErr.Error()}
+			txErr := db.Transaction(func(tx *gorm.DB) error {
+				if err := tx.Model(&existing).Updates(updates).Error; err != nil {
+					return err
+				}
+				return logImportStockAdjustment(tx, tenantID, userID, existing.ID, existing.Name, oldStock, stock)
+			})
+			if txErr != nil {
+				return &importFailedRow{RowIndex: idx, Reason: "error al actualizar: " + txErr.Error()}
 			}
 			result.Updated++
 			return nil
@@ -191,9 +207,16 @@ func processProductImportRow(db *gorm.DB, tenantID string, idx int, row productI
 			Find(&products).Error; dbErr == nil {
 			for _, p := range products {
 				if services.NormalizeText(p.Name) == normalizedName {
+					oldStock := p.Stock
 					updates := buildProductUpdateMap(row, price, stock, minStock, purchasePrice)
-					if dbErr := db.Model(&p).Updates(updates).Error; dbErr != nil {
-						return &importFailedRow{RowIndex: idx, Reason: "error al actualizar: " + dbErr.Error()}
+					txErr := db.Transaction(func(tx *gorm.DB) error {
+						if err := tx.Model(&p).Updates(updates).Error; err != nil {
+							return err
+						}
+						return logImportStockAdjustment(tx, tenantID, userID, p.ID, p.Name, oldStock, stock)
+					})
+					if txErr != nil {
+						return &importFailedRow{RowIndex: idx, Reason: "error al actualizar: " + txErr.Error()}
 					}
 					result.Updated++
 					return nil
@@ -224,11 +247,73 @@ func processProductImportRow(db *gorm.DB, tenantID string, idx int, row productI
 		product.ExpiryDate = &row.ExpiryDate
 	}
 
-	if dbErr := db.Create(&product).Error; dbErr != nil {
-		return &importFailedRow{RowIndex: idx, Reason: "error al crear: " + dbErr.Error()}
+	// Create + kardex movement run inside one transaction, mirroring
+	// CreateProduct in products.go: a kardex write failure must roll back
+	// the insert instead of leaving a product row with stock but no audit
+	// trail (Art. VII).
+	txErr := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&product).Error; err != nil {
+			return err
+		}
+		if product.Stock <= 0 {
+			return nil
+		}
+		// Same StockBeforeOverride/StockAfterOverride pattern as
+		// CreateProduct: the row already carries the starting stock, so a
+		// self-read would fabricate stock_before=stock_inicial /
+		// stock_after=2×stock_inicial instead of 0 → stock_inicial.
+		zero := float64(0)
+		initial := float64(product.Stock)
+		return services.LogInventoryMovement(tx, services.MovementParams{
+			TenantID:            tenantID,
+			ProductID:           product.ID,
+			ProductName:         product.Name,
+			MovementType:        models.MovementInitialStock,
+			Quantity:            product.Stock,
+			UserID:              userID,
+			Notes:               "alta por importación masiva (CSV)",
+			StockBeforeOverride: &zero,
+			StockAfterOverride:  &initial,
+		})
+	})
+	if txErr != nil {
+		return &importFailedRow{RowIndex: idx, Reason: "error al crear: " + txErr.Error()}
 	}
 	result.Created++
 	return nil
+}
+
+// logImportStockAdjustment logs a manual_adjust kardex movement for an
+// import row that updated an existing product's stock (barcode or
+// name-fallback dedup branch). No-ops when the CSV row didn't actually
+// change stock, so a re-import of the same file (idempotent re-run,
+// FR test (f)) doesn't create noise movements with quantity 0.
+//
+// MovementManualAdjust is reused rather than inventing a new
+// MovementType: a bulk CSV update is, from the kardex's point of view,
+// the same kind of event as a tendero manually correcting the stock
+// column on the edit screen — an out-of-band quantity correction with no
+// PO/sale/recipe backing it. The row's ingestion_method='import' column
+// already records which channel produced the correction; the movement
+// type only needs to capture "this was a manual correction, not a sale
+// or a scanned invoice".
+func logImportStockAdjustment(tx *gorm.DB, tenantID string, userID *string, productID, productName string, oldStock, newStock int) error {
+	if newStock == oldStock {
+		return nil
+	}
+	before := float64(oldStock)
+	after := float64(newStock)
+	return services.LogInventoryMovement(tx, services.MovementParams{
+		TenantID:            tenantID,
+		ProductID:           productID,
+		ProductName:         productName,
+		MovementType:        models.MovementManualAdjust,
+		Quantity:            newStock - oldStock,
+		UserID:              userID,
+		Notes:               "ajuste por importación masiva (CSV)",
+		StockBeforeOverride: &before,
+		StockAfterOverride:  &after,
+	})
 }
 
 // buildProductUpdateMap constructs the map of fields to update for an existing
