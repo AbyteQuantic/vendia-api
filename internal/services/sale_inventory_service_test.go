@@ -2,6 +2,8 @@
 package services
 
 import (
+	"bytes"
+	"log"
 	"testing"
 
 	"vendia-backend/internal/models"
@@ -248,4 +250,61 @@ func TestApplyPostSale_GlobalProduct_DecrementsFromAnySede(t *testing.T) {
 	var product models.Product
 	require.NoError(t, db.First(&product, "id = ?", productID).Error)
 	assert.Equal(t, 6, product.Stock, "global vendido desde sede A: 10 - 4 = 6")
+}
+
+// M14 — a kardex write failure on the direct-product path must NOT abort
+// the sale (Constitución Art. I: la venta nunca se pierde por un hiccup
+// de kardex), but it must leave a trace in the logs so a real failure is
+// diagnosable after the fact. Simulated by dropping inventory_movements
+// out from under LogInventoryMovement so its tx.Create call errors.
+func TestApplyPostSale_KardexWriteFails_LogsButDoesNotAbort(t *testing.T) {
+	db := setupSaleInventoryDB(t)
+	tenantID := "tenant-spk"
+	productID := "a0000000-0000-4000-8000-000000000035"
+	saleUUID := "5a1e0000-0000-4000-8000-000000000035"
+
+	require.NoError(t, db.Create(&models.Product{
+		BaseModel: models.BaseModel{ID: productID},
+		TenantID:  tenantID, Name: "Gaseosa", Price: 2500, Stock: 20,
+		IsAvailable: true, IsRecipe: false,
+	}).Error)
+
+	// Drop the inventory_movements table so LogInventoryMovement's
+	// tx.Create(&mov) errors out — simulates a real kardex hiccup
+	// (constraint change / dropped connection) without touching the
+	// service's control flow.
+	require.NoError(t, db.Migrator().DropTable(&models.InventoryMovement{}))
+
+	var logBuf bytes.Buffer
+	prevOutput := log.Writer()
+	prevFlags := log.Flags()
+	log.SetOutput(&logBuf)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(prevOutput)
+		log.SetFlags(prevFlags)
+	}()
+
+	svc := NewSaleInventoryService(db)
+	err := db.Transaction(func(tx *gorm.DB) error {
+		return svc.ApplyPostSale(tx, PostSaleParams{
+			TenantID: tenantID,
+			SaleUUID: saleUUID,
+			Lines:    []SaleInventoryLine{{ProductID: productID, Quantity: 3}},
+		})
+	})
+	require.NoError(t, err, "la venta NUNCA debe fallar por un hiccup de kardex")
+
+	// The sale-level "never abort" contract holds...
+	var product models.Product
+	require.NoError(t, db.First(&product, "id = ?", productID).Error)
+	assert.Equal(t, 17, product.Stock, "el stock SÍ se descuenta aunque el kardex falle")
+
+	// ...but the failure must be traceable in the logs, with enough
+	// context (tenant/sale/product) to diagnose it later.
+	logged := logBuf.String()
+	assert.Contains(t, logged, "[sale-inventory]")
+	assert.Contains(t, logged, tenantID)
+	assert.Contains(t, logged, saleUUID)
+	assert.Contains(t, logged, productID)
 }

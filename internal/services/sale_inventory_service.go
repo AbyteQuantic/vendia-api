@@ -2,6 +2,8 @@
 package services
 
 import (
+	"log"
+
 	"vendia-backend/internal/models"
 
 	"gorm.io/gorm"
@@ -117,8 +119,15 @@ func (s *SaleInventoryService) ApplyPostSale(tx *gorm.DB, p PostSaleParams) erro
 		// transaction. Recipe explosion, by contrast, DOES propagate
 		// errors — that path was always transactional.
 		// Trazar SIEMPRE (council BUG-STOCK0-NOKARDEX Spec 083): descuenta y
-		// registra el movimiento aunque el stock quede negativo. Best-effort.
-		_ = LogInventoryMovement(tx, MovementParams{
+		// registra el movimiento aunque el stock quede negativo. Best-effort:
+		// the "never abort" contract above is intentional and stays exactly
+		// as-is (a venta must never fail over a kardex hiccup). What was
+		// missing is a trace: silently swallowing both errors left zero
+		// signal in the logs when a real failure hit mid-loop (e.g. a
+		// dropped connection or a changed column constraint) — the sale
+		// would still succeed but inventory silently stopped moving, with
+		// no way to diagnose it after the fact (M14).
+		if err := LogInventoryMovement(tx, MovementParams{
 			TenantID:      p.TenantID,
 			BranchID:      p.BranchID,
 			ProductID:     product.ID,
@@ -127,9 +136,15 @@ func (s *SaleInventoryService) ApplyPostSale(tx *gorm.DB, p PostSaleParams) erro
 			Quantity:      -line.Quantity,
 			ReferenceType: "sale",
 			UserID:        p.UserID,
-		})
-		_ = tx.Model(&product).
-			UpdateColumn("stock", gorm.Expr("stock - ?", line.Quantity)).Error
+		}); err != nil {
+			log.Printf("[sale-inventory] kardex log failed tenant=%s sale=%s product=%s qty=%d: %v",
+				p.TenantID, p.SaleUUID, product.ID, line.Quantity, err)
+		}
+		if err := tx.Model(&product).
+			UpdateColumn("stock", gorm.Expr("stock - ?", line.Quantity)).Error; err != nil {
+			log.Printf("[sale-inventory] stock decrement failed tenant=%s sale=%s product=%s qty=%d: %v",
+				p.TenantID, p.SaleUUID, product.ID, line.Quantity, err)
+		}
 	}
 	return nil
 }
