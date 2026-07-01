@@ -26,15 +26,15 @@ func CreateOrder(db *gorm.DB) gin.HandlerFunc {
 	}
 
 	type Request struct {
-		ID              string              `json:"id"`
-		Label           string              `json:"label"          binding:"required"`
-		CustomerName    string              `json:"customer_name"`
-		EmployeeUUID    string              `json:"employee_uuid"`
-		EmployeeName    string              `json:"employee_name"`
-		Type            models.OrderType    `json:"type"`
-		DeliveryAddress string              `json:"delivery_address"`
-		CustomerPhone   string              `json:"customer_phone"`
-		Items           []ItemRequest       `json:"items"          binding:"required,min=1"`
+		ID              string           `json:"id"`
+		Label           string           `json:"label"          binding:"required"`
+		CustomerName    string           `json:"customer_name"`
+		EmployeeUUID    string           `json:"employee_uuid"`
+		EmployeeName    string           `json:"employee_name"`
+		Type            models.OrderType `json:"type"`
+		DeliveryAddress string           `json:"delivery_address"`
+		CustomerPhone   string           `json:"customer_phone"`
+		Items           []ItemRequest    `json:"items"          binding:"required,min=1"`
 	}
 
 	return func(c *gin.Context) {
@@ -391,22 +391,10 @@ func CloseOrder(db *gorm.DB) gin.HandlerFunc {
 			var saleItems []models.SaleItem
 			var inventoryLines []services.SaleInventoryLine
 			// Spec 084 (backlog #5) — congela la comisión de los servicios al
-			// cerrar la comanda (mismo modelo que la venta directa). Cache de
-			// config de pago por profesional para no consultar por línea.
-			payCfgCache := map[string]*models.EmployeePayConfig{}
-			resolveCfg := func(empUUID string) *models.EmployeePayConfig {
-				if v, ok := payCfgCache[empUUID]; ok {
-					return v
-				}
-				var cfg models.EmployeePayConfig
-				if err := tx.Where("tenant_id = ? AND employee_uuid = ? AND is_active = ?",
-					tenantID, empUUID, true).Order("effective_from DESC").First(&cfg).Error; err != nil {
-					payCfgCache[empUUID] = nil
-					return nil
-				}
-				payCfgCache[empUUID] = &cfg
-				return &cfg
-			}
+			// cerrar la comanda (mismo modelo que la venta directa). El resolver
+			// cachea la config de pago por profesional (una query por persona);
+			// es la MISMA resolución que usa CreateSale (servicio compartido).
+			commissions := services.NewCommissionResolver(tx, tenantID)
 			for _, item := range order.Items {
 				pid := item.ProductUUID
 				si := models.SaleItem{
@@ -427,7 +415,7 @@ func CloseOrder(db *gorm.DB) gin.HandlerFunc {
 						First(&p).Error; err == nil && p.IsService {
 						si.IsService = true
 						basis, pct, amount := services.ResolveLineCommission(
-							resolveCfg(*item.EmployeeUUID), p.CommissionPct, si.Subtotal)
+							commissions.Config(*item.EmployeeUUID), p.CommissionPct, si.Subtotal)
 						si.PayBasis = basis
 						si.CommissionPct = pct
 						si.CommissionAmount = amount
