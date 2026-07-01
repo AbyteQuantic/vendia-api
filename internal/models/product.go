@@ -29,6 +29,21 @@ type Product struct {
 	Content           string  `json:"content,omitempty"`      // 350ml, 500g, 1L, etc.
 	IsAIEnhanced      bool    `gorm:"default:false" json:"is_ai_enhanced"`
 
+	// IsDraft marca un producto creado SOLO para que el tendero pruebe fotos
+	// de IA ("Quitar fondo"/"Mejorar con IA"/"Crear foto con IA") en la
+	// pantalla "Nuevo Producto" ANTES de tocar "Guardar" — esos endpoints
+	// necesitan un ID real en BD para operar, así que el frontend crea el
+	// producto de inmediato (create_product_screen.dart, _enhanceOrGenerate-
+	// Photo), con IsDraft=true. Bug real reportado: sin este campo, esos
+	// productos quedaban indistinguibles de uno guardado de verdad —
+	// aparecían en el inventario y en el autocompletado de "Nuevo Producto"
+	// como "Mi tienda" aunque el tendero nunca tocara "Guardar", y si
+	// cerraba la pantalla sin guardar, el producto quedaba huérfano para
+	// siempre. _save (el botón "Guardar" real) pone IsDraft=false al
+	// confirmar — ver ListProducts (Art. VII: solo lo que el tendero
+	// realmente guardó cuenta como su inventario).
+	IsDraft bool `gorm:"default:false;index" json:"is_draft"`
+
 	// Feature 001 — a product is either "directo" (default) or
 	// "receta". When IsRecipe is true, selling it explodes RecipeID's
 	// recipe and discounts the ingredients instead of the product's

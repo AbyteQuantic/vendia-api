@@ -76,8 +76,12 @@ func ListProducts(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// is_draft = false: excluye productos creados solo para probar
+		// fotos de IA antes de "Guardar" (ver models.Product.IsDraft) — no
+		// deben aparecer en el inventario, el POS, ni el autocompletado de
+		// "Nuevo Producto" hasta que el tendero confirme guardarlos.
 		query := db.Model(&models.Product{}).
-			Where("tenant_id = ? AND is_available = true", tenantID)
+			Where("tenant_id = ? AND is_available = true AND is_draft = false", tenantID)
 		query = ApplyBranchScope(query, scope)
 
 		// sellable_only (POS / caché Isar): oculta los platos de menú
@@ -190,6 +194,11 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		DurationMin *int `json:"duration_min"`
 		// Spec 063 — venta solo para mayores de 18 (licor, cigarrillos…).
 		IsAgeRestricted bool `json:"is_age_restricted"`
+		// IsDraft: producto creado SOLO para que el tendero pruebe fotos de
+		// IA en "Nuevo Producto" ANTES de tocar "Guardar" — ver comentario
+		// en models.Product.IsDraft. false por defecto (una creación normal
+		// nunca es borrador).
+		IsDraft bool `json:"is_draft"`
 
 		// Spec F029 — optional tier prices. Nullable pointer so we
 		// can distinguish "not sent" from "explicit 0" (invalid). When
@@ -329,6 +338,7 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			CommissionPct:     req.CommissionPct,
 			DurationMin:       req.DurationMin,
 			IsAgeRestricted:   req.IsAgeRestricted,
+			IsDraft:           req.IsDraft,
 			PriceTier1:        req.PriceTier1,
 			PriceTier2:        req.PriceTier2,
 			PriceTier3:        req.PriceTier3,
@@ -432,6 +442,9 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		Characteristics *string `json:"characteristics"`
 		// Spec 063 — alternar "solo mayores de 18" al editar.
 		IsAgeRestricted *bool `json:"is_age_restricted"`
+		// IsDraft: ver models.Product.IsDraft. create_product_screen.dart
+		// lo pone en false al confirmar "Guardar".
+		IsDraft *bool `json:"is_draft"`
 		// Spec 084 — comisión por servicio (peluquería/barbería).
 		CommissionPct *float64 `json:"commission_pct"`
 		// Spec 084 Fase 2 — duración del servicio en minutos (citas).
@@ -545,6 +558,14 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		}
 		if req.IsAgeRestricted != nil {
 			updates["is_age_restricted"] = *req.IsAgeRestricted
+		}
+		// IsDraft: create_product_screen.dart lo manda explícitamente en
+		// false al confirmar "Guardar" sobre un producto que se creó como
+		// borrador durante las pruebas de foto con IA (ver
+		// models.Product.IsDraft). Puntero para no afectar PATCHes que no
+		// lo mencionan (ej. el resto de pantallas de edición de inventario).
+		if req.IsDraft != nil {
+			updates["is_draft"] = *req.IsDraft
 		}
 
 		// Spec F029 — tier prices on PATCH. >0 validation matches Create.
