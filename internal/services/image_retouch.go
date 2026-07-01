@@ -121,7 +121,17 @@ func composeFaithful(originalBytes, maskBytes []byte, realce func(image.Image) *
 			}
 			sc := realced.NRGBAAt(x, y)
 			prod.SetNRGBA(x, y, color.NRGBA{sc.R, sc.G, sc.B, uint8(a)})
-			if a > 30 { // bbox por el cuerpo sólido del producto
+			// El bbox usa el MISMO umbral que la inclusión de arriba (a<=8
+			// se descarta, todo lo demás cuenta). Antes usaba a>30 ("cuerpo
+			// sólido") mientras el pegado usaba a>8 — cualquier parte
+			// delgada del producto (correa, cadena, cordón) con alfa entre
+			// 9 y 30 SÍ se pintaba en `prod` pero el recorte final
+			// (`imaging.Crop` más abajo, acotado a este bbox) la dejaba
+			// fuera del marco: el pixel existía pero jamás llegaba al
+			// canvas. Bug real reportado: la correa "Stitch" del llavero
+			// quedaba cortada en el resultado. Mismo umbral en ambos lados
+			// = lo que se pinta es lo que se incluye en el recorte.
+			if a > 8 {
 				if x < minX {
 					minX = x
 				}
