@@ -12,12 +12,40 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	_ "image/jpeg"
 	"image/jpeg"
+	_ "image/jpeg"
 	_ "image/png"
+	"math"
 
 	"github.com/disintegration/imaging"
 )
+
+// opaqueBounds devuelve el bounding box de los píxeles con alfa>8 en img.
+// ok=false si no hay ninguno (máscara vacía).
+func opaqueBounds(img *image.NRGBA) (minX, minY, maxX, maxY int, ok bool) {
+	b := img.Bounds()
+	minX, minY, maxX, maxY = b.Max.X, b.Max.Y, b.Min.X-1, b.Min.Y-1
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if img.NRGBAAt(x, y).A <= 8 {
+				continue
+			}
+			if x < minX {
+				minX = x
+			}
+			if y < minY {
+				minY = y
+			}
+			if x > maxX {
+				maxX = x
+			}
+			if y > maxY {
+				maxY = y
+			}
+		}
+	}
+	return minX, minY, maxX, maxY, maxX >= minX && maxY >= minY
+}
 
 func maskLum(c color.NRGBA) float64 {
 	return float64(c.R)*0.299 + float64(c.G)*0.587 + float64(c.B)*0.114
@@ -77,8 +105,18 @@ func encodeJPEG(img image.Image) ([]byte, error) {
 // un fondo de estudio + sombra suave, centrado. maskBytes nil/ inválida → fail-safe:
 // solo realce de la foto original (no recorta, no altera). Devuelve JPEG. Usada por
 // "Quitar fondo" — realce suave, cero riesgo de alterar el producto.
-func ComposeFaithful(originalBytes, maskBytes []byte) ([]byte, error) {
-	return composeFaithful(originalBytes, maskBytes, gentleRealce)
+//
+// rotationDeg gira el producto (píxeles reales, determinista — nunca lo regenera)
+// para presentarlo derecho/nivelado como en una foto de catálogo. Positivo =
+// antihorario, negativo = horario (misma convención que imaging.Rotate y que
+// GeminiService.EstimateUprightRotation, que es quien calcula este valor —
+// NUNCA geometría rígida local: un producto con varias piezas que cuelgan de
+// forma independiente del mismo punto, ej. un llavero con correa Y figura, no
+// tiene un único eje rígido "correcto"; Gemini entiende semánticamente qué es
+// "derecho" para ESE producto). |rotationDeg|<2 omite la rotación (no vale la
+// pena el desenfoque de interpolación para una corrección imperceptible).
+func ComposeFaithful(originalBytes, maskBytes []byte, rotationDeg float64) ([]byte, error) {
+	return composeFaithful(originalBytes, maskBytes, rotationDeg, gentleRealce)
 }
 
 // ComposeFaithfulEnhanced es igual a ComposeFaithful pero con strongRealce: más
@@ -88,11 +126,11 @@ func ComposeFaithful(originalBytes, maskBytes []byte) ([]byte, error) {
 // es 100% filtros de píxeles deterministas sobre la foto real — así "Mejorar con IA" no
 // puede reinterpretar/alucinar el producto (el bug reportado: un llavero de goma azul
 // salía como un llavero metálico plateado de otro personaje).
-func ComposeFaithfulEnhanced(originalBytes, maskBytes []byte) ([]byte, error) {
-	return composeFaithful(originalBytes, maskBytes, strongRealce)
+func ComposeFaithfulEnhanced(originalBytes, maskBytes []byte, rotationDeg float64) ([]byte, error) {
+	return composeFaithful(originalBytes, maskBytes, rotationDeg, strongRealce)
 }
 
-func composeFaithful(originalBytes, maskBytes []byte, realce func(image.Image) *image.NRGBA) ([]byte, error) {
+func composeFaithful(originalBytes, maskBytes []byte, rotationDeg float64, realce func(image.Image) *image.NRGBA) ([]byte, error) {
 	src, _, err := image.Decode(bytes.NewReader(originalBytes))
 	if err != nil {
 		return nil, fmt.Errorf("no se pudo decodificar la foto: %w", err)
@@ -149,6 +187,19 @@ func composeFaithful(originalBytes, maskBytes []byte, realce func(image.Image) *
 	}
 	if maxX < minX || maxY < minY {
 		return encodeJPEG(realced) // máscara vacía → fail-safe
+	}
+
+	// Rotación determinista (píxeles reales, sin regenerar nada) al ángulo
+	// que Gemini estimó como "derecho" para este producto — ver comentario
+	// en ComposeFaithful. Recalcula el bbox sobre la imagen ya rotada; si
+	// la rotación deja la máscara vacía (no debería pasar, pero es una
+	// transformación geométrica sobre datos externos) se ignora la
+	// rotación y se sigue con el bbox original sin rotar.
+	if math.Abs(rotationDeg) >= 2 {
+		rotatedProd := imaging.Rotate(prod, rotationDeg, color.NRGBA{0, 0, 0, 0})
+		if rMinX, rMinY, rMaxX, rMaxY, ok := opaqueBounds(rotatedProd); ok {
+			prod, minX, minY, maxX, maxY = rotatedProd, rMinX, rMinY, rMaxX, rMaxY
+		}
 	}
 
 	prodCrop := imaging.Crop(prod, image.Rect(minX, minY, maxX+1, maxY+1))
