@@ -24,11 +24,28 @@ func maskLum(c color.NRGBA) float64 {
 }
 
 // gentleRealce: mejora suave de luz/color sobre el producto (no cambia su identidad,
-// no aplica nitidez para no crear borde). Conserva el alfa.
+// no aplica nitidez para no crear borde). Conserva el alfa. Usada por "Quitar fondo".
 func gentleRealce(img image.Image) *image.NRGBA {
 	out := imaging.AdjustContrast(img, 6)
 	out = imaging.AdjustBrightness(out, 2)
 	out = imaging.AdjustSaturation(out, 4)
+	return out
+}
+
+// strongRealce: mejora más agresiva de luz/color/nitidez para "Mejorar con IA".
+// Sigue siendo un filtro de PÍXELES (determinista, no generativo) — nunca puede
+// cambiar la identidad del producto, solo su presentación fotográfica. El blur
+// suave antes de afilar evita que el sharpen amplifique el grano/ruido de la
+// foto (denoise-then-sharpen); contraste/brillo/saturación/gamma más marcados
+// corrigen fotos subexpuestas o con balance de blanco pobre — el caso típico de
+// una foto de celular en interior con mala luz.
+func strongRealce(img image.Image) *image.NRGBA {
+	out := imaging.Blur(img, 0.4)
+	out = imaging.Sharpen(out, 1.2)
+	out = imaging.AdjustContrast(out, 12)
+	out = imaging.AdjustBrightness(out, 3)
+	out = imaging.AdjustSaturation(out, 10)
+	out = imaging.AdjustGamma(out, 1.05)
 	return out
 }
 
@@ -58,13 +75,29 @@ func encodeJPEG(img image.Image) ([]byte, error) {
 
 // ComposeFaithful pega los PÍXELES REALES del producto (recortados con la máscara) sobre
 // un fondo de estudio + sombra suave, centrado. maskBytes nil/ inválida → fail-safe:
-// solo realce de la foto original (no recorta, no altera). Devuelve JPEG.
+// solo realce de la foto original (no recorta, no altera). Devuelve JPEG. Usada por
+// "Quitar fondo" — realce suave, cero riesgo de alterar el producto.
 func ComposeFaithful(originalBytes, maskBytes []byte) ([]byte, error) {
+	return composeFaithful(originalBytes, maskBytes, gentleRealce)
+}
+
+// ComposeFaithfulEnhanced es igual a ComposeFaithful pero con strongRealce: más
+// contraste/brillo/saturación/nitidez para "Mejorar con IA". Reemplaza el uso de
+// GeminiService.EnhancePhoto (generativo) en el flujo por-defecto de ese botón: Gemini
+// solo aporta la máscara (SegmentProductMask, nunca dibuja el producto) y el "mejorado"
+// es 100% filtros de píxeles deterministas sobre la foto real — así "Mejorar con IA" no
+// puede reinterpretar/alucinar el producto (el bug reportado: un llavero de goma azul
+// salía como un llavero metálico plateado de otro personaje).
+func ComposeFaithfulEnhanced(originalBytes, maskBytes []byte) ([]byte, error) {
+	return composeFaithful(originalBytes, maskBytes, strongRealce)
+}
+
+func composeFaithful(originalBytes, maskBytes []byte, realce func(image.Image) *image.NRGBA) ([]byte, error) {
 	src, _, err := image.Decode(bytes.NewReader(originalBytes))
 	if err != nil {
 		return nil, fmt.Errorf("no se pudo decodificar la foto: %w", err)
 	}
-	realced := gentleRealce(src)
+	realced := realce(src)
 
 	if len(maskBytes) == 0 {
 		return encodeJPEG(realced) // sin máscara → solo realce (fiel)
