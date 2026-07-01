@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -706,7 +707,7 @@ func RestockProduct(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-func DeleteProduct(db *gorm.DB) gin.HandlerFunc {
+func DeleteProduct(db *gorm.DB, storageSvc services.FileStorage) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
 		productID := c.Param("id")
@@ -732,6 +733,46 @@ func DeleteProduct(db *gorm.DB) gin.HandlerFunc {
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al eliminar producto"})
 			return
+		}
+
+		// Reporte del fundador: un producto SIN ninguna venta real es, casi
+		// siempre, una referencia mal creada (ej. un borrador de prueba de
+		// foto con IA que el tendero decidió borrar) — no una pieza legítima
+		// de catálogo. Si su foto ya quedó registrada en el catálogo GLOBAL
+		// compartido (registerCatalogImage, en inventory.go, se llama sin
+		// chequear IsDraft — CUALQUIER "Quitar fondo"/"Mejorar con
+		// IA"/"Crear foto con IA" la registra de inmediato y ya-aceptada),
+		// esa foto sigue sugiriéndose a OTROS tenants para siempre, porque
+		// no existe ningún vínculo (FK, hook) entre products y
+		// catalog_images — borrar el producto por sí solo no la toca.
+		// Sin ventas: limpiamos también la contribución de ESTE tenant al
+		// catálogo compartido (created_by_tenant_id — nunca la de otro
+		// tenant) y el archivo real en R2, que de otro modo queda huérfano
+		// para siempre (ningún código borra objetos de R2 al eliminar un
+		// producto). Best-effort y FUERA de la transacción de arriba: el
+		// producto ya quedó borrado; un fallo aquí no debe revertir eso.
+		if product.PhotoURL == "" && product.ImageURL == "" {
+			c.JSON(http.StatusOK, gin.H{"message": "producto eliminado"})
+			return
+		}
+		var salesCount int64
+		db.Model(&models.SaleItem{}).Where("product_id = ?", productID).Count(&salesCount)
+		if salesCount > 0 {
+			c.JSON(http.StatusOK, gin.H{"message": "producto eliminado"})
+			return
+		}
+		var images []models.CatalogImage
+		db.Where("created_by_tenant_id = ? AND (image_url = ? OR image_url = ?)",
+			tenantID, product.PhotoURL, product.ImageURL).Find(&images)
+		for _, img := range images {
+			if storageSvc != nil && img.StorageKey != "" {
+				if delErr := storageSvc.Delete(c.Request.Context(), "product-photos", img.StorageKey); delErr != nil {
+					log.Printf("[delete-product] no se pudo borrar %s de R2: %v", img.StorageKey, delErr)
+				}
+			}
+			if delErr := db.Delete(&img).Error; delErr != nil {
+				log.Printf("[delete-product] no se pudo borrar catalog_image %s: %v", img.ID, delErr)
+			}
 		}
 
 		c.JSON(http.StatusOK, gin.H{"message": "producto eliminado"})
