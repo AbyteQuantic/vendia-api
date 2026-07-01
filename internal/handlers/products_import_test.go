@@ -22,7 +22,7 @@ func setupProductImportDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&models.Product{}))
+	require.NoError(t, db.AutoMigrate(&models.Product{}, &models.InventoryMovement{}))
 	return db
 }
 
@@ -510,4 +510,155 @@ func TestImportProducts_WhitespaceSanitization(t *testing.T) {
 	var product models.Product
 	require.NoError(t, db.Where("tenant_id = ?", "tenant-1").First(&product).Error)
 	assert.Equal(t, "Leche Entera", product.Name)
+}
+
+// ── Kardex (M13): create con stock>0 registra initial_stock ─────────────────
+
+func TestImportProducts_NewRowWithStock_LogsInitialStockMovement(t *testing.T) {
+	db := setupProductImportDB(t)
+	r := productImportRouter(db, "tenant-1", false)
+
+	payload := map[string]any{
+		"rows": []map[string]any{
+			{"name": "Arroz Diana", "price": "3000", "barcode": "9999999999991", "stock": "40"},
+		},
+		"dedup_strategy": "merge_by_barcode_then_name",
+	}
+
+	w := postProductImport(r, payload)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var product models.Product
+	require.NoError(t, db.Where("barcode = ? AND tenant_id = ?", "9999999999991", "tenant-1").First(&product).Error)
+
+	var movements []models.InventoryMovement
+	require.NoError(t, db.Where("product_id = ? AND tenant_id = ?", product.ID, "tenant-1").Find(&movements).Error)
+	require.Len(t, movements, 1, "el alta por import debe registrar exactamente un movimiento de kardex")
+	assert.Equal(t, models.MovementInitialStock, movements[0].MovementType)
+	assert.Equal(t, float64(0), movements[0].StockBefore)
+	assert.Equal(t, float64(40), movements[0].StockAfter)
+	assert.Equal(t, float64(40), movements[0].Quantity)
+}
+
+// ── Kardex (M13): create sin stock (0) no registra movimiento ───────────────
+
+func TestImportProducts_NewRowWithZeroStock_NoMovement(t *testing.T) {
+	db := setupProductImportDB(t)
+	r := productImportRouter(db, "tenant-1", false)
+
+	payload := map[string]any{
+		"rows": []map[string]any{
+			{"name": "Producto Sin Stock", "price": "1000"},
+		},
+		"dedup_strategy": "merge_by_barcode_then_name",
+	}
+
+	w := postProductImport(r, payload)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var product models.Product
+	require.NoError(t, db.Where("name = ? AND tenant_id = ?", "Producto Sin Stock", "tenant-1").First(&product).Error)
+
+	var count int64
+	require.NoError(t, db.Model(&models.InventoryMovement{}).Where("product_id = ?", product.ID).Count(&count).Error)
+	assert.Equal(t, int64(0), count)
+}
+
+// ── Kardex (M13): update por barcode registra manual_adjust con el delta ────
+
+func TestImportProducts_ExistingBarcode_LogsManualAdjustMovement(t *testing.T) {
+	db := setupProductImportDB(t)
+
+	existing := models.Product{
+		BaseModel: models.BaseModel{ID: "prod-uuid-kardex-1"},
+		TenantID:  "tenant-1",
+		Name:      "Old Name",
+		Price:     1000,
+		Barcode:   "1234567890199",
+		Stock:     100,
+	}
+	require.NoError(t, db.Create(&existing).Error)
+
+	r := productImportRouter(db, "tenant-1", false)
+	payload := map[string]any{
+		"rows": []map[string]any{
+			{"name": "New Name", "price": "2500", "barcode": "1234567890199", "stock": "180"},
+		},
+		"dedup_strategy": "merge_by_barcode_then_name",
+	}
+
+	w := postProductImport(r, payload)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var movements []models.InventoryMovement
+	require.NoError(t, db.Where("product_id = ? AND tenant_id = ?", "prod-uuid-kardex-1", "tenant-1").Find(&movements).Error)
+	require.Len(t, movements, 1)
+	assert.Equal(t, models.MovementManualAdjust, movements[0].MovementType)
+	assert.Equal(t, float64(100), movements[0].StockBefore)
+	assert.Equal(t, float64(180), movements[0].StockAfter)
+	assert.Equal(t, float64(80), movements[0].Quantity)
+}
+
+// ── Kardex (M13): update por barcode sin cambio de stock → sin movimiento ───
+
+func TestImportProducts_ExistingBarcode_SameStock_NoMovement(t *testing.T) {
+	db := setupProductImportDB(t)
+
+	existing := models.Product{
+		BaseModel: models.BaseModel{ID: "prod-uuid-kardex-2"},
+		TenantID:  "tenant-1",
+		Name:      "Same Stock Product",
+		Price:     1000,
+		Barcode:   "1234567890200",
+		Stock:     50,
+	}
+	require.NoError(t, db.Create(&existing).Error)
+
+	r := productImportRouter(db, "tenant-1", false)
+	payload := map[string]any{
+		"rows": []map[string]any{
+			{"name": "Same Stock Product", "price": "2500", "barcode": "1234567890200", "stock": "50"},
+		},
+		"dedup_strategy": "merge_by_barcode_then_name",
+	}
+
+	w := postProductImport(r, payload)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var count int64
+	require.NoError(t, db.Model(&models.InventoryMovement{}).Where("product_id = ?", "prod-uuid-kardex-2").Count(&count).Error)
+	assert.Equal(t, int64(0), count)
+}
+
+// ── Kardex (M13): update por name-fallback registra manual_adjust ───────────
+
+func TestImportProducts_NameFallbackUpdate_LogsManualAdjustMovement(t *testing.T) {
+	db := setupProductImportDB(t)
+
+	existing := models.Product{
+		BaseModel: models.BaseModel{ID: "prod-uuid-kardex-3"},
+		TenantID:  "tenant-1",
+		Name:      "Coca Cola",
+		Price:     2000,
+		Stock:     10,
+	}
+	require.NoError(t, db.Create(&existing).Error)
+
+	r := productImportRouter(db, "tenant-1", false)
+	payload := map[string]any{
+		"rows": []map[string]any{
+			{"name": "  Coca Cola  ", "price": "2500", "stock": "25"},
+		},
+		"dedup_strategy": "merge_by_barcode_then_name",
+	}
+
+	w := postProductImport(r, payload)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var movements []models.InventoryMovement
+	require.NoError(t, db.Where("product_id = ? AND tenant_id = ?", "prod-uuid-kardex-3", "tenant-1").Find(&movements).Error)
+	require.Len(t, movements, 1)
+	assert.Equal(t, models.MovementManualAdjust, movements[0].MovementType)
+	assert.Equal(t, float64(10), movements[0].StockBefore)
+	assert.Equal(t, float64(25), movements[0].StockAfter)
 }
