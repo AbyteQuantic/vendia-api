@@ -317,23 +317,13 @@ func CreateSale(db *gorm.DB, dispatcher *push.Dispatcher) gin.HandlerFunc {
 			// idempotency anchor for the recipe explosion).
 			var inventoryLines []services.SaleInventoryLine
 
-			// Spec 084 — congelado de comisión por línea al profesional. Cache de
-			// config de pago y nombre por empleado (una query por persona).
-			payCfgCache := map[string]*models.EmployeePayConfig{}
+			// Spec 084 — congelado de comisión por línea al profesional. El
+			// resolver cachea la config de pago por empleado (una query por
+			// persona); es la misma resolución que usa CloseOrder (servicio
+			// compartido, sin duplicar la consulta). El nombre se cachea aparte
+			// porque CreateSale sí atribuye la línea al profesional.
+			commissions := services.NewCommissionResolver(tx, tenantID)
 			empNameCache := map[string]string{}
-			resolveCfg := func(empUUID string) *models.EmployeePayConfig {
-				if v, ok := payCfgCache[empUUID]; ok {
-					return v
-				}
-				var cfg models.EmployeePayConfig
-				if err := tx.Where("tenant_id = ? AND employee_uuid = ? AND is_active = ?",
-					tenantID, empUUID, true).Order("effective_from DESC").First(&cfg).Error; err != nil {
-					payCfgCache[empUUID] = nil
-					return nil
-				}
-				payCfgCache[empUUID] = &cfg
-				return &cfg
-			}
 			empName := func(empUUID string) string {
 				if n, ok := empNameCache[empUUID]; ok {
 					return n
@@ -344,12 +334,13 @@ func CreateSale(db *gorm.DB, dispatcher *push.Dispatcher) gin.HandlerFunc {
 				return e.Name
 			}
 			// freeze fija la atribución + comisión congelada sobre el subtotal de
-			// la línea (salones suelen ser exentos de IVA; refinar a net es TODO).
+			// la línea (salones suelen ser exentos de IVA; el ajuste a net se hace
+			// después vía RecomputeCommissionOnNetOfTax cuando hay IVA).
 			freeze := func(si *models.SaleItem, empUUID string, productPct *float64) {
 				if strings.TrimSpace(empUUID) == "" {
 					return
 				}
-				basis, pct, amount := services.ResolveLineCommission(resolveCfg(empUUID), productPct, si.Subtotal)
+				basis, pct, amount := services.ResolveLineCommission(commissions.Config(empUUID), productPct, si.Subtotal)
 				si.EmployeeUUID = middleware.UUIDPtr(empUUID)
 				si.EmployeeName = empName(empUUID)
 				si.PayBasis = basis
@@ -448,23 +439,10 @@ func CreateSale(db *gorm.DB, dispatcher *push.Dispatcher) gin.HandlerFunc {
 
 			// Spec 084 (backlog #4) — base de comisión SIN IVA. La comisión se
 			// congeló en el loop sobre el subtotal (gross). Si la venta lleva IVA,
-			// recalculamos sobre el NET (subtotal − IVA prorrateado por línea,
-			// largest-remainder) para que el profesional no cobre comisión sobre el
-			// impuesto. Para tenants exentos (tax=0) este bloque es no-op.
-			if req.TaxAmount > 0 {
-				weights := make([]float64, len(items))
-				for i := range items {
-					weights[i] = items[i].Subtotal
-				}
-				taxParts := services.ProrateLargestRemainder(req.TaxAmount, weights)
-				for i := range items {
-					if items[i].PayBasis == models.PayBasisCommission && items[i].CommissionPct != nil {
-						net := items[i].Subtotal - taxParts[i]
-						items[i].CommissionAmount =
-							float64(int64(net*(*items[i].CommissionPct)/100.0 + 0.5))
-					}
-				}
-			}
+			// el servicio la recalcula sobre el NET (subtotal − IVA prorrateado por
+			// línea, largest-remainder) para que el profesional no cobre comisión
+			// sobre el impuesto. Para tenants exentos (tax=0) es no-op.
+			services.RecomputeCommissionOnNetOfTax(items, req.TaxAmount)
 
 			// Spec 049 (IVA): el IVA NO se suma al total — el cliente nunca lo
 			// agrega a lo cobrado (precio inclusivo o base). `tax_amount` es el
