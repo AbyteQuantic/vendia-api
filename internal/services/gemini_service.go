@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -672,6 +673,65 @@ func (s *GeminiService) SegmentProductMask(ctx context.Context, imageData []byte
 	return s.enhanceImagesWithPrompt(ctx,
 		[]ReferenceImage{{MimeType: mimeType, Data: imageData}},
 		prompt, models.AIFeatureEnhancePhoto, 0.0)
+}
+
+// EstimateUprightRotation le pide a Gemini el ángulo (grados) que hay que
+// girar la foto para que el producto se vea derecho/nivelado, como en una
+// foto de catálogo profesional. Es una llamada de TEXTO/visión (usa
+// callWithImageLowTemp, el modelo de texto — no s.imageModel), mucho más
+// barata que generar/editar una imagen, y por eso segura: en el peor caso
+// da un ángulo equivocado (el producto queda igual de torcido que en la
+// foto original), nunca puede alucinar o reemplazar el producto porque
+// NUNCA produce una imagen — solo un número que el caller aplica como una
+// rotación determinista sobre los píxeles reales (services.ComposeFaithful/
+// ComposeFaithfulEnhanced).
+//
+// Por qué no calcularlo con geometría (PCA del eje principal de la
+// máscara): funciona para un producto de una sola pieza alargada, pero
+// falla en productos con varias piezas que cuelgan de forma independiente
+// del mismo punto (ej. un llavero con una correa Y una figura, cada una en
+// su propio ángulo) — girar el conjunto como un solo cuerpo rígido endereza
+// una pieza y tuerce la otra. Gemini entiende semánticamente qué es
+// "derecho" para ESE tipo de producto específico sin necesitar detectar
+// piezas por separado, y generaliza a cualquier categoría (botella, caja,
+// bolsa, llavero, herramienta) en vez de una heurística geométrica atada a
+// un solo patrón de forma.
+//
+// Fail-safe: cualquier error, respuesta no parseable, o ángulo fuera de
+// rango devuelve (0, error) — el caller debe tratar 0/error como "no
+// rotar", igual que el comportamiento antes de que existiera esta función.
+func (s *GeminiService) EstimateUprightRotation(ctx context.Context, imageData []byte, mimeType string) (float64, error) {
+	const prompt = `Look at the attached photo of a product. Estimate the rotation needed to make the product look upright/level, the way it would be presented in a professional e-commerce catalog photo — for a keychain or pendant, the ring/clasp near the top and the item hanging straight down; for a bottle, box, bag or tool, standing/resting level, not tilted.
+
+Answer with a SIGNED number of degrees, where POSITIVE means the image must be rotated COUNTER-CLOCKWISE and NEGATIVE means CLOCKWISE, in the range -180 to 180. If the product already looks upright/level, answer 0.
+
+Return ONLY raw JSON, no markdown, no explanation: {"rotation_degrees": <number>}`
+
+	text, err := s.callWithImageLowTemp(ctx, imageData, mimeType, prompt)
+	if err != nil {
+		return 0, err
+	}
+	return parseUprightRotation(text)
+}
+
+// parseUprightRotation interpreta la respuesta cruda de Gemini para
+// EstimateUprightRotation. Extraída como función pura (sin *GeminiService,
+// sin red) para poder testear la validación — NaN/Inf, fuera de [-180,180],
+// JSON malformado — sin necesitar mockear el HTTP de Gemini.
+func parseUprightRotation(text string) (float64, error) {
+	text = stripMarkdownJSON(text)
+
+	var result struct {
+		RotationDegrees float64 `json:"rotation_degrees"`
+	}
+	if err := json.Unmarshal([]byte(text), &result); err != nil {
+		return 0, fmt.Errorf("no se pudo interpretar el ángulo de rotación: %w", err)
+	}
+	deg := result.RotationDegrees
+	if math.IsNaN(deg) || math.IsInf(deg, 0) || deg < -180 || deg > 180 {
+		return 0, fmt.Errorf("ángulo de rotación fuera de rango: %v", deg)
+	}
+	return deg, nil
 }
 
 // StudioShot — modo "Foto de estudio" (Spec 094): re-dibuja el producto de la foto

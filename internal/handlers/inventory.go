@@ -605,6 +605,21 @@ func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, storage
 	}
 }
 
+// uprightRotation le pide a Gemini el ángulo para presentar el producto
+// derecho/nivelado (GeminiService.EstimateUprightRotation — una llamada de
+// texto/visión, no genera ninguna imagen) y aplica el fail-safe: cualquier
+// error o respuesta no interpretable devuelve 0 (no rotar), silenciosamente
+// — el peor caso es el mismo comportamiento que existía antes de esta
+// función (el producto queda en el ángulo en que fue fotografiado), nunca
+// un resultado peor.
+func uprightRotation(ctx context.Context, geminiSvc *services.GeminiService, imageData []byte, contentType string) float64 {
+	deg, err := geminiSvc.EstimateUprightRotation(ctx, imageData, contentType)
+	if err != nil {
+		return 0
+	}
+	return deg
+}
+
 // enhancePhotoWorker builds the background worker for an enhance job:
 // download the current photo, run Gemini's EnhancePhoto, upload the
 // result to storage, point the product's photo at the new URL, and
@@ -649,7 +664,7 @@ func enhancePhotoWorker(db *gorm.DB, geminiSvc *services.GeminiService, storageS
 			if mErr != nil {
 				mask = nil
 			}
-			enhanced, err = services.ComposeFaithfulEnhanced(imageData, mask)
+			enhanced, err = services.ComposeFaithfulEnhanced(imageData, mask, uprightRotation(ctx, geminiSvc, imageData, contentType))
 		default:
 			// "Quitar fondo" FIEL (Opción A): realce suave. Si la máscara falla →
 			// fail-safe: solo realce de la foto original.
@@ -657,7 +672,7 @@ func enhancePhotoWorker(db *gorm.DB, geminiSvc *services.GeminiService, storageS
 			if mErr != nil {
 				mask = nil
 			}
-			enhanced, err = services.ComposeFaithful(imageData, mask)
+			enhanced, err = services.ComposeFaithful(imageData, mask, uprightRotation(ctx, geminiSvc, imageData, contentType))
 		}
 		if err != nil {
 			return "", fmt.Errorf("error al mejorar foto: %w", err)

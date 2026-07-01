@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Spec: specs/015-ia-foto-timeouts/spec.md — FR-03 / D2.
@@ -223,13 +224,13 @@ func TestBuildEnhancePhotoPrompt_FidelityAnchors(t *testing.T) {
 	// fundador 2026-06-28): limpiar foto/suciedad y subir calidad, pero la
 	// distinción crítica protege que no se rediseñe el producto.
 	qualityAnchors := []string{
-		"remove dust, dirt",      // imperfecciones de superficie
-		"glare",                  // reflejos molestos
-		"remove blur",            // nitidez
-		"noise",                  // ruido digital
-		"HIGH-RESOLUTION",        // calidad de salida
+		"remove dust, dirt",            // imperfecciones de superficie
+		"glare",                        // reflejos molestos
+		"remove blur",                  // nitidez
+		"noise",                        // ruido digital
+		"HIGH-RESOLUTION",              // calidad de salida
 		"WITHOUT inventing any detail", // no alucinar detalles
-		"CRITICAL DISTINCTION",   // foto sí / producto no
+		"CRITICAL DISTINCTION",         // foto sí / producto no
 	}
 	for _, s := range qualityAnchors {
 		assert.Contains(t, prompt, s, "quality/imperfection anchor missing: %q", s)
@@ -266,7 +267,7 @@ func TestBuildEnhancePhotoPrompt_OwnerInstruction(t *testing.T) {
 		"deja la tapa roja y no borres el código de barras")
 	assert.Contains(t, p, "deja la tapa roja y no borres el código de barras")
 	assert.Contains(t, p, "Owner's instruction")
-	assert.Contains(t, p, "can NEVER")          // no puede saltarse las reglas
+	assert.Contains(t, p, "can NEVER") // no puede saltarse las reglas
 	assert.Contains(t, p, "never redesign, replace, invent")
 	// Las anclas de fidelidad siguen presentes con instrucción.
 	assert.Contains(t, p, "THE ATTACHED IMAGE IS THE PRODUCT")
@@ -276,7 +277,7 @@ func TestBuildEnhancePhotoPrompt_OwnerInstruction(t *testing.T) {
 	pct := buildEnhancePhotoPromptWithInstruction("Gaseosa 100%", "subir 50% el brillo %s")
 	assert.Contains(t, pct, "subir 50% el brillo %s")
 	assert.Contains(t, pct, "Gaseosa 100%")
-	assert.NotContains(t, pct, "%!")            // sin verbos de formato mal resueltos
+	assert.NotContains(t, pct, "%!") // sin verbos de formato mal resueltos
 }
 
 func TestBuildEnhancePhotoPrompt_EmptyProductInfoStillBuilds(t *testing.T) {
@@ -402,4 +403,50 @@ func TestBuildGenerateProductPrompt_EmptyPresentation(t *testing.T) {
 		"product-type anchor must always be present")
 	assert.Contains(t, prompt, "white",
 		"white-background anchor must always be present")
+}
+
+// parseUprightRotation es el fail-safe de EstimateUprightRotation: cualquier
+// respuesta no interpretable de Gemini debe devolver error (el caller —
+// uprightRotation en inventory.go — trata error como 0/no-rotar), nunca un
+// ángulo inventado o fuera de rango que termine girando el producto de
+// forma arbitraria.
+func TestParseUprightRotation(t *testing.T) {
+	t.Run("respuesta válida se interpreta tal cual", func(t *testing.T) {
+		deg, err := parseUprightRotation(`{"rotation_degrees": 23.5}`)
+		require.NoError(t, err)
+		assert.Equal(t, 23.5, deg)
+	})
+
+	t.Run("cero se acepta (producto ya derecho)", func(t *testing.T) {
+		deg, err := parseUprightRotation(`{"rotation_degrees": 0}`)
+		require.NoError(t, err)
+		assert.Equal(t, 0.0, deg)
+	})
+
+	t.Run("negativo (horario) se acepta", func(t *testing.T) {
+		deg, err := parseUprightRotation(`{"rotation_degrees": -45}`)
+		require.NoError(t, err)
+		assert.Equal(t, -45.0, deg)
+	})
+
+	t.Run("envuelto en fence de markdown se limpia igual que el OCR", func(t *testing.T) {
+		deg, err := parseUprightRotation("```json\n{\"rotation_degrees\": 10}\n```")
+		require.NoError(t, err)
+		assert.Equal(t, 10.0, deg)
+	})
+
+	t.Run("JSON malformado es error, no un ángulo inventado", func(t *testing.T) {
+		_, err := parseUprightRotation("no soy json")
+		assert.Error(t, err)
+	})
+
+	t.Run("fuera de rango [-180,180] es error", func(t *testing.T) {
+		_, err := parseUprightRotation(`{"rotation_degrees": 270}`)
+		assert.Error(t, err)
+	})
+
+	t.Run("texto vacío es error", func(t *testing.T) {
+		_, err := parseUprightRotation("")
+		assert.Error(t, err)
+	})
 }
