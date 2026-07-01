@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -615,8 +616,15 @@ func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, storage
 func uprightRotation(ctx context.Context, geminiSvc *services.GeminiService, imageData []byte, contentType string) float64 {
 	deg, err := geminiSvc.EstimateUprightRotation(ctx, imageData, contentType)
 	if err != nil {
+		// Antes esto fallaba en total silencio: no había forma de saber, sin
+		// reproducir el bug, si un producto seguía torcido porque Gemini dio
+		// un ángulo ~0 (juicio real) o porque la llamada erró y cayó al
+		// fail-safe. Con este log, un `grep UPRIGHT-ROTATION` en Render
+		// distingue ambos casos para el próximo reporte de este tipo.
+		log.Printf("[UPRIGHT-ROTATION] error, no se rota (fail-safe 0): %v", err)
 		return 0
 	}
+	log.Printf("[UPRIGHT-ROTATION] ángulo estimado: %.1f°", deg)
 	return deg
 }
 
