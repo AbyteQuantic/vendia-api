@@ -34,6 +34,7 @@ func setupSellableDB(t *testing.T) *gorm.DB {
 			name TEXT NOT NULL, price REAL NOT NULL DEFAULT 0,
 			stock INTEGER NOT NULL DEFAULT 0,
 			is_available INTEGER DEFAULT 1,
+			is_draft INTEGER DEFAULT 0,
 			is_menu_item INTEGER DEFAULT 0,
 			requires_container INTEGER DEFAULT 0, container_price INTEGER DEFAULT 0,
 			purchase_price REAL DEFAULT 0, is_price_pending INTEGER DEFAULT 0,
