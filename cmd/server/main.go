@@ -329,7 +329,11 @@ func main() {
 	r.POST("/api/v1/auth/onboarding-parse",
 		loginLimiter, handlers.OnboardingParse(geminiSvc))
 
-	r.POST("/api/v1/auth/refresh", handlers.RefreshToken(db, cfg.JWTSecret))
+	// loginLimiter (5/min/IP por defecto): refresh es un vector de
+	// fuerza bruta sobre el refresh_token igual que /login sobre la
+	// contraseña — sin esto quedaba completamente sin throttle.
+	r.POST("/api/v1/auth/refresh",
+		loginLimiter, handlers.RefreshToken(db, cfg.JWTSecret))
 	r.POST("/api/v1/auth/select-workspace", middleware.Auth(cfg.JWTSecret), handlers.SelectWorkspace(db, cfg.JWTSecret))
 
 	// Subscription — PUBLIC endpoints (Feature 008). The ePayco
@@ -371,25 +375,43 @@ func main() {
 	r.GET("/api/v1/branding/season", handlers.GetSeasonalBranding(db))
 
 	// Spec 084 Fase 2 — reserva pública de citas/turnos (peluquería/barbería).
-	r.GET("/api/v1/store/:slug/booking/services", handlers.PublicBookableServices(db))
-	r.GET("/api/v1/store/:slug/booking/staff", handlers.PublicBookingStaff(db))
-	r.GET("/api/v1/store/:slug/booking/availability", handlers.PublicAvailability(db))
-	r.POST("/api/v1/store/:slug/booking", handlers.PublicCreateBooking(db))
+	// orderRateLimiter (5/15min/IP, F025): igual que el resto de rutas
+	// públicas de creación/consulta intensiva — sin esto quedaban sin
+	// ningún throttle (ni siquiera el global, porque viven antes del
+	// v1.Use(globalLimiter)).
+	r.GET("/api/v1/store/:slug/booking/services",
+		orderRateLimiter, handlers.PublicBookableServices(db))
+	r.GET("/api/v1/store/:slug/booking/staff",
+		orderRateLimiter, handlers.PublicBookingStaff(db))
+	r.GET("/api/v1/store/:slug/booking/availability",
+		orderRateLimiter, handlers.PublicAvailability(db))
+	r.POST("/api/v1/store/:slug/booking",
+		orderRateLimiter, handlers.PublicCreateBooking(db))
 	// Tasa de cambio USD→COP para convertir el precio del evento al cambiar moneda.
 	r.GET("/api/v1/fx/usd-cop", handlers.ExchangeRateUSDCOP())
 	// Carné del asistente (por public_token): el QR solo viaja si ya pagó.
 	r.GET("/api/v1/store/:slug/carnet/:token", handlers.PublicGetCarnet(db))
 	// Comprobante de pago manual del asistente (queda pendiente de aprobación).
-	r.POST("/api/v1/store/:slug/carnet/:token/proof", handlers.PublicSubmitPaymentProof(db, storageSvc))
+	// orderRateLimiter: subida de archivo sin auth — mismo riesgo de
+	// abuso que los otros uploads públicos (recibos de mesa).
+	r.POST("/api/v1/store/:slug/carnet/:token/proof",
+		orderRateLimiter, handlers.PublicSubmitPaymentProof(db, storageSvc))
 	r.POST("/api/v1/store/:slug/events/:id/register",
 		buildHandlers(orderRateLimiter, honeypotMiddleware, captchaMiddleware, handlers.PublicRegisterEvent(db))...)
 
 	// Public rockola (customer suggests song)
-	r.POST("/api/v1/rockola/:slug/suggest", handlers.SuggestSong(db))
+	// orderRateLimiter: creación pública sin auth — mismo patrón que
+	// los demás endpoints de creación de contenido público (F025).
+	r.POST("/api/v1/rockola/:slug/suggest",
+		orderRateLimiter, handlers.SuggestSong(db))
 
 	// Public account (customer sees their bill)
 	r.GET("/api/v1/account/:order_uuid", handlers.GetAccountHTTP(db))
-	r.POST("/api/v1/account/:order_uuid/verify", handlers.VerifyAccountPhone(db))
+	// loginLimiter: verificación de teléfono sin auth — vector de
+	// fuerza bruta (probar números hasta dar con el de la cuenta)
+	// que antes corría SIN throttle alguno.
+	r.POST("/api/v1/account/:order_uuid/verify",
+		loginLimiter, handlers.VerifyAccountPhone(db))
 
 	// Public fiado handshake (customer accepts debt)
 	r.GET("/api/v1/public/fiado/:token", handlers.GetFiadoPublic(db))
@@ -452,11 +474,19 @@ func main() {
 	// phone number and returns ONLY {"needs_consent": bool} — never
 	// the customer's name or any other PII. See
 	// handlers/customer_consent.go for the security rationale.
-	r.POST("/api/v1/public/catalog/:slug/check-customer", handlers.CheckCustomerConsent(db))
+	// loginLimiter: lookup por teléfono sin auth — mismo vector de
+	// enumeración/fuerza bruta que account/verify.
+	r.POST("/api/v1/public/catalog/:slug/check-customer",
+		loginLimiter, handlers.CheckCustomerConsent(db))
 	// Customer Portal — sanitized order history by phone. The handler
 	// scopes the lookup to the slug's tenant + strips PII before
 	// returning, see PublicCustomerOrders for the privacy contract.
-	r.GET("/api/v1/public/catalog/:slug/my-orders", handlers.PublicCustomerOrders(db))
+	// loginLimiter: el propio handler ya tiene un "brute-force gate"
+	// de longitud de teléfono (ver comentario en PublicCustomerOrders),
+	// pero sin un limiter real esa guarda es solo de forma — un
+	// scraper puede iterar teléfonos sin freno alguno.
+	r.GET("/api/v1/public/catalog/:slug/my-orders",
+		loginLimiter, handlers.PublicCustomerOrders(db))
 
 	// Spec 083 — info pública de una mesa (para el menú con ?mesa=<id>):
 	// devuelve label + área para mostrar "Mesa X · Área" al comensal.
@@ -479,7 +509,10 @@ func main() {
 	r.POST("/api/v1/public/table-sessions/:session_token/payments", handlers.SubmitPartialPayment(db))
 	// Public receipt upload (screenshot of the transfer). Returns the
 	// public URL the SubmitPartialPayment call attaches as receipt_url.
-	r.POST("/api/v1/public/table-sessions/:session_token/receipts", handlers.UploadPaymentReceipt(db, storageSvc))
+	// orderRateLimiter: subida de archivo sin auth (mismo criterio que
+	// carnet/:token/proof arriba).
+	r.POST("/api/v1/public/table-sessions/:session_token/receipts",
+		orderRateLimiter, handlers.UploadPaymentReceipt(db, storageSvc))
 
 	// ── Protected routes (JWT) ───────────────────────────────────────────────
 	v1 := r.Group("/api/v1")
