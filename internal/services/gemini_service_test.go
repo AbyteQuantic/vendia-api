@@ -450,3 +450,56 @@ func TestParseUprightRotation(t *testing.T) {
 		assert.Error(t, err)
 	})
 }
+
+// TestSelectModelsFromCandidates_ExcludesOmni cubre el incidente real del
+// 2026-07-01: "gemini-omni-flash-preview" reportaba generateContent en
+// supportedGenerationMethods pero la API lo rechazaba en la práctica con
+// HTTP 400 ("This model only supports Interactions API"), rompiendo en
+// silencio OCR de facturas/menú, certificados de eventos, receta por voz y
+// el enderezado de fotos — todo lo que usa el modelo de texto. El heurístico
+// "nombre mayor alfabéticamente" preferí­a "omni" sobre "2.0", así que un
+// modelo preview roto ganaba sin que nada lo notara.
+func TestSelectModelsFromCandidates_ExcludesOmni(t *testing.T) {
+	candidates := []geminiModelCandidate{
+		{Name: "models/gemini-2.0-flash", SupportedGenerationMethods: []string{"generateContent"}},
+		{Name: "models/gemini-omni-flash-preview", SupportedGenerationMethods: []string{"generateContent"}},
+		{Name: "models/gemini-3-pro-image-preview", SupportedGenerationMethods: []string{"generateContent"}},
+	}
+	textModel, imageModel := selectModelsFromCandidates(candidates)
+	assert.Equal(t, "gemini-2.0-flash", textModel)
+	assert.Equal(t, "gemini-3-pro-image-preview", imageModel)
+}
+
+// TestSelectModelsFromCandidates_PicksNewestFlashAmongStableCandidates
+// confirma que, SIN modelos "omni" en la mezcla, el heurístico sigue
+// escogiendo el flash más nuevo (comportamiento preexistente, no debe
+// romperse por la exclusión agregada arriba).
+func TestSelectModelsFromCandidates_PicksNewestFlashAmongStableCandidates(t *testing.T) {
+	candidates := []geminiModelCandidate{
+		{Name: "models/gemini-1.5-flash", SupportedGenerationMethods: []string{"generateContent"}},
+		{Name: "models/gemini-2.0-flash", SupportedGenerationMethods: []string{"generateContent"}},
+	}
+	textModel, _ := selectModelsFromCandidates(candidates)
+	assert.Equal(t, "gemini-2.0-flash", textModel)
+}
+
+// TestSelectModelsFromCandidates_NoCandidates_FallsBackToDefaults confirma
+// el fail-safe: lista vacía (o sin ningún modelo que pase los filtros) nunca
+// devuelve string vacío — siempre los defaults hardcodeados.
+func TestSelectModelsFromCandidates_NoCandidates_FallsBackToDefaults(t *testing.T) {
+	textModel, imageModel := selectModelsFromCandidates(nil)
+	assert.Equal(t, defaultTextModel, textModel)
+	assert.Equal(t, defaultImageModel, imageModel)
+}
+
+// TestSelectModelsFromCandidates_SkipsModelsWithoutGenerateContent — un
+// modelo que NO reporta generateContent (p. ej. solo embedContent) nunca se
+// selecciona, aunque su nombre "gane" alfabéticamente.
+func TestSelectModelsFromCandidates_SkipsModelsWithoutGenerateContent(t *testing.T) {
+	candidates := []geminiModelCandidate{
+		{Name: "models/gemini-2.0-flash", SupportedGenerationMethods: []string{"generateContent"}},
+		{Name: "models/gemini-9.9-flash-embed-only", SupportedGenerationMethods: []string{"embedContent"}},
+	}
+	textModel, _ := selectModelsFromCandidates(candidates)
+	assert.Equal(t, "gemini-2.0-flash", textModel)
+}

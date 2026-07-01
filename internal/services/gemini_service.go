@@ -144,20 +144,44 @@ func (s *GeminiService) discoverModels() (string, string) {
 	}
 
 	var listResp struct {
-		Models []struct {
-			Name                       string   `json:"name"`
-			SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
-		} `json:"models"`
+		Models []geminiModelCandidate `json:"models"`
 	}
 	if err := json.Unmarshal(body, &listResp); err != nil {
 		log.Printf("[GEMINI] Failed to parse models list: %v", err)
 		return defaultTextModel, defaultImageModel
 	}
 
-	var textModel, imageModel string
+	textModel, imageModel := selectModelsFromCandidates(listResp.Models)
+	log.Printf("[GEMINI] Discovered %d models. Selected text=%s, image=%s", len(listResp.Models), textModel, imageModel)
+	return textModel, imageModel
+}
 
+// geminiModelCandidate is the subset of Google's ListModels response
+// selectModelsFromCandidates needs. Extracted as its own type (instead of an
+// anonymous struct inline in discoverModels) so tests can build a candidate
+// list without any HTTP call.
+type geminiModelCandidate struct {
+	Name                       string   `json:"name"`
+	SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
+}
+
+// selectModelsFromCandidates picks the text/OCR model and the image model out
+// of Google's ListModels response. Pure function (no network) so the
+// selection heuristic — and its exclusions — can be unit tested directly.
+//
+// Bug real (2026-07-01): "gemini-omni-flash-preview" apareció en el listado
+// con generateContent en supportedGenerationMethods, pero la API lo
+// rechazaba en la práctica con HTTP 400 "This model only supports
+// Interactions API" — rompiendo en silencio OCR de facturas/menú,
+// certificados de eventos, receta por voz y el enderezado de fotos (todo lo
+// que usa s.model). El scoring prefiere el nombre "mayor" alfabéticamente
+// entre los candidatos flash, y "omni" ordena después de "2.0" — así que un
+// modelo preview roto le ganaba al estable sin que nada lo notara. Excluir
+// la familia "omni" (experimental, no apta para el contrato generateContent
+// que usa este servicio) hasta que Google la estabilice.
+func selectModelsFromCandidates(models []geminiModelCandidate) (textModel, imageModel string) {
 	// Score models: prefer flash, then pro; prefer newer versions
-	for _, m := range listResp.Models {
+	for _, m := range models {
 		name := strings.TrimPrefix(m.Name, "models/")
 		supportsGenerate := false
 		for _, method := range m.SupportedGenerationMethods {
@@ -174,6 +198,10 @@ func (s *GeminiService) discoverModels() (string, string) {
 		isGemini := strings.Contains(name, "gemini")
 
 		if !isGemini {
+			continue
+		}
+
+		if strings.Contains(name, "omni") {
 			continue
 		}
 
@@ -210,8 +238,6 @@ func (s *GeminiService) discoverModels() (string, string) {
 	if imageModel == "" {
 		imageModel = defaultImageModel
 	}
-
-	log.Printf("[GEMINI] Discovered %d models. Selected text=%s, image=%s", len(listResp.Models), textModel, imageModel)
 	return textModel, imageModel
 }
 
