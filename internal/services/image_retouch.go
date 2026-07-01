@@ -12,9 +12,10 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	_ "image/jpeg"
 	"image/jpeg"
+	_ "image/jpeg"
 	_ "image/png"
+	"math"
 
 	"github.com/disintegration/imaging"
 )
@@ -71,6 +72,144 @@ func encodeJPEG(img image.Image) ([]byte, error) {
 		return nil, fmt.Errorf("no se pudo codificar el resultado: %w", err)
 	}
 	return buf.Bytes(), nil
+}
+
+// straightenElongated endereza el producto cuando su silueta es claramente
+// alargada (llavero + correa, colgante, herramienta): calcula el eje
+// principal de la máscara vía momentos de imagen y gira `prod` (con su
+// alfa, sin invertar ningún pixel — es una rotación geométrica de píxeles
+// reales, no generativa) para que ese eje quede vertical, como se espera
+// en una foto de catálogo. Luego orienta la parte más "pesada" (la figura
+// decorativa) hacia ABAJO, colgando, y el enganche/anillo más liviano
+// hacia arriba — la convención con la que se presentan llaveros/colgantes
+// en fotos de producto reales.
+//
+// Deliberadamente NO se aplica a siluetas poco alargadas (botellas, cajas,
+// bolsas vistas de frente, la mayoría del catálogo): ahí el eje principal
+// de una PCA de 2 líneas no es un dato confiable — podría "enderezar" en
+// una dirección arbitraria y voltear el producto de forma rara. El umbral
+// de elongación (relación entre el eje mayor y el menor de la silueta)
+// filtra ese caso: solo actúa cuando la forma es inequívocamente alargada.
+//
+// minX/minY/maxX/maxY de ENTRADA acotan la región a inspeccionar
+// (optimización, no cambian el resultado si no hay rotación). Devuelve el
+// `prod` (rotado o el mismo) y su bbox actualizado.
+func straightenElongated(prod *image.NRGBA, minX, minY, maxX, maxY int) (*image.NRGBA, int, int, int, int) {
+	var sumW, sumX, sumY, sumXX, sumYY, sumXY float64
+	for y := minY; y <= maxY; y++ {
+		for x := minX; x <= maxX; x++ {
+			a := float64(prod.NRGBAAt(x, y).A)
+			if a <= 8 {
+				continue
+			}
+			fx, fy := float64(x), float64(y)
+			sumW += a
+			sumX += a * fx
+			sumY += a * fy
+			sumXX += a * fx * fx
+			sumYY += a * fy * fy
+			sumXY += a * fx * fy
+		}
+	}
+	if sumW <= 0 {
+		return prod, minX, minY, maxX, maxY
+	}
+
+	cx, cy := sumX/sumW, sumY/sumW
+	mu20 := sumXX/sumW - cx*cx
+	mu02 := sumYY/sumW - cy*cy
+	mu11 := sumXY/sumW - cx*cy
+
+	common := math.Sqrt((mu20-mu02)*(mu20-mu02) + 4*mu11*mu11)
+	lambdaMajor := (mu20 + mu02 + common) / 2
+	lambdaMinor := (mu20 + mu02 - common) / 2
+	if lambdaMinor <= 1e-6 || lambdaMajor <= 1e-6 {
+		return prod, minX, minY, maxX, maxY // silueta degenerada — no rotar
+	}
+
+	const elongationThreshold = 1.6 // solo siluetas claramente alargadas
+	if math.Sqrt(lambdaMajor/lambdaMinor) < elongationThreshold {
+		return prod, minX, minY, maxX, maxY
+	}
+
+	angleDeg := 0.5 * math.Atan2(2*mu11, mu20-mu02) * 180 / math.Pi
+	rotateDeg := angleDeg - 90
+	if rotateDeg > 90 {
+		rotateDeg -= 180
+	} else if rotateDeg < -90 {
+		rotateDeg += 180
+	}
+	if math.Abs(rotateDeg) < 3 {
+		return prod, minX, minY, maxX, maxY // ya casi vertical, no vale la pena
+	}
+
+	rotated := imaging.Rotate(prod, rotateDeg, color.NRGBA{0, 0, 0, 0})
+	nMinX, nMinY, nMaxX, nMaxY, ok := opaqueBounds(rotated)
+	if !ok {
+		return prod, minX, minY, maxX, maxY // rotación degeneró la máscara → fail-safe
+	}
+
+	// Convención de catálogo: la parte más pesada cuelga abajo, el
+	// enganche liviano queda arriba. Si quedó al revés, voltear 180°.
+	if massAbove(rotated, nMinX, nMinY, nMaxX, nMaxY) {
+		rotated = imaging.Rotate180(rotated)
+		nMinX, nMinY, nMaxX, nMaxY, ok = opaqueBounds(rotated)
+		if !ok {
+			return prod, minX, minY, maxX, maxY
+		}
+	}
+
+	return rotated, nMinX, nMinY, nMaxX, nMaxY
+}
+
+// opaqueBounds devuelve el bounding box de los píxeles con alfa>8 en img.
+// ok=false si no hay ninguno.
+func opaqueBounds(img *image.NRGBA) (minX, minY, maxX, maxY int, ok bool) {
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	minX, minY, maxX, maxY = w, h, -1, -1
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			if img.NRGBAAt(x, y).A <= 8 {
+				continue
+			}
+			if x < minX {
+				minX = x
+			}
+			if y < minY {
+				minY = y
+			}
+			if x > maxX {
+				maxX = x
+			}
+			if y > maxY {
+				maxY = y
+			}
+		}
+	}
+	return minX, minY, maxX, maxY, maxX >= minX && maxY >= minY
+}
+
+// massAbove compara cuánta "masa" (suma de alfa) del producto cae en la
+// mitad superior vs inferior de su propio bbox — true si hay más arriba
+// (la figura pesada quedó mal orientada, hay que voltear 180°).
+func massAbove(img *image.NRGBA, minX, minY, maxX, maxY int) bool {
+	midY := (minY + maxY) / 2
+	var top, bottom float64
+	for y := minY; y <= maxY; y++ {
+		for x := minX; x <= maxX; x++ {
+			a := float64(img.NRGBAAt(x, y).A)
+			if a <= 8 {
+				continue
+			}
+			if y <= midY {
+				top += a
+			} else {
+				bottom += a
+			}
+		}
+	}
+	return top > bottom
 }
 
 // ComposeFaithful pega los PÍXELES REALES del producto (recortados con la máscara) sobre
@@ -150,6 +289,13 @@ func composeFaithful(originalBytes, maskBytes []byte, realce func(image.Image) *
 	if maxX < minX || maxY < minY {
 		return encodeJPEG(realced) // máscara vacía → fail-safe
 	}
+
+	// Enderezar SOLO siluetas claramente alargadas (llavero+correa,
+	// colgante) — un tendero suele fotografiarlas colgando en diagonal, y
+	// eso salta a la vista sobre un fondo de estudio limpio. Productos
+	// compactos (botellas, cajas, bolsas) no se tocan: ver comentario de
+	// straightenElongated.
+	prod, minX, minY, maxX, maxY = straightenElongated(prod, minX, minY, maxX, maxY)
 
 	prodCrop := imaging.Crop(prod, image.Rect(minX, minY, maxX+1, maxY+1))
 	bw, bh := maxX-minX+1, maxY-minY+1
