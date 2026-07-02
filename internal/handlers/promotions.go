@@ -78,8 +78,21 @@ func ListPromotions(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
 
+		// Reporte real del fundador: el selector de sede en pantalla ya
+		// existía pero era decorativo — el listado siempre devolvía TODOS
+		// los combos del tenant sin importar la sucursal activa. Mismo
+		// helper que ya usan analytics/inventario (Spec 014): sin
+		// ?branch_id (tenant mono-sede) el filtro queda igual que antes;
+		// con sede activa, incluye los combos de esa sede MÁS los
+		// globales (branch_id NULL) — nunca esconde un combo legacy.
+		scope := ResolveBranchScope(c, db)
+		if scope.NotOwned {
+			c.JSON(http.StatusForbidden, gin.H{"error": "sucursal no pertenece a este negocio"})
+			return
+		}
+
 		var promotions []models.Promotion
-		if err := db.Preload("Items").
+		if err := ApplyBranchScope(db.Preload("Items"), scope).
 			Where("tenant_id = ? AND is_active = true", tenantID).
 			Order("created_at DESC").
 			Find(&promotions).Error; err != nil {
@@ -131,6 +144,19 @@ func CreatePromotion(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// Mismo mecanismo que las lecturas (ResolveBranchScope): el selector
+		// de sede manda ?branch_id= en la URL. Sin sede seleccionada (o
+		// tenant mono-sede), scope.BranchID es "" → UUIDPtr("") → nil →
+		// combo GLOBAL (visible en todas las sedes), el comportamiento de
+		// siempre. La verificación de dueño (NotOwned) evita que alguien
+		// cree un combo apuntando a la sede de otro tenant.
+		branchScope := ResolveBranchScope(c, db)
+		if branchScope.NotOwned {
+			c.JSON(http.StatusForbidden, gin.H{"error": "sucursal no pertenece a este negocio"})
+			return
+		}
+		branchID := middleware.UUIDPtr(branchScope.BranchID)
+
 		promoType := req.PromoType
 		if promoType == "" {
 			promoType = "discount"
@@ -160,6 +186,7 @@ func CreatePromotion(db *gorm.DB) gin.HandlerFunc {
 
 			promo := models.Promotion{
 				TenantID:       tenantID,
+				BranchID:       branchID,
 				Name:           req.Name,
 				Description:    req.Description,
 				BannerImageURL: req.BannerImageURL,
@@ -234,6 +261,7 @@ func CreatePromotion(db *gorm.DB) gin.HandlerFunc {
 
 		promo := models.Promotion{
 			TenantID:    tenantID,
+			BranchID:    branchID,
 			ProductUUID: middleware.UUIDPtr(req.ProductUUID),
 			ProductName: product.Name,
 			OrigPrice:   product.Price,

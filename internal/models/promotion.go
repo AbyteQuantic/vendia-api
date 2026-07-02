@@ -22,6 +22,13 @@ type Promotion struct {
 
 	TenantID string `gorm:"type:uuid;not null;index" json:"tenant_id"`
 
+	// BranchID scopes a combo to one sede — mismo patrón que Product.BranchID
+	// (Spec 014): nil = "todas las sedes" (comportamiento preexistente,
+	// preserva combos creados antes de este campo), un uuid = solo esa sede.
+	// Reporte real del fundador: el selector de sede en PromoBuilderScreen
+	// era puramente decorativo, el backend nunca scopeaba nada por sucursal.
+	BranchID *string `gorm:"type:uuid;index" json:"branch_id,omitempty"`
+
 	// Combo-mode fields (nullable; legacy rows may leave these empty).
 	Name           string     `json:"name,omitempty"`
 	StartDate      *time.Time `json:"start_date,omitempty"`
