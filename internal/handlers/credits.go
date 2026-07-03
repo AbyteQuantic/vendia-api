@@ -279,6 +279,7 @@ func CancelCredit(db *gorm.DB) gin.HandlerFunc {
 					pid := *item.ProductID
 					if err := services.LogInventoryMovement(tx, services.MovementParams{
 						TenantID:      tenantID,
+						BranchID:      sale.BranchID,
 						ProductID:     pid,
 						ProductName:   item.Name,
 						MovementType:  models.MovementSaleCancel,

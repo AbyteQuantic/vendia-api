@@ -10,6 +10,7 @@ import (
 
 	"vendia-backend/internal/handlers"
 	"vendia-backend/internal/middleware"
+	"vendia-backend/internal/models"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -41,7 +42,9 @@ func setupCreditsDB(t *testing.T) *gorm.DB {
 			id TEXT PRIMARY KEY, created_at DATETIME, updated_at DATETIME,
 			deleted_at DATETIME, tenant_id TEXT NOT NULL,
 			name TEXT NOT NULL DEFAULT '', phone TEXT DEFAULT '',
-			email TEXT DEFAULT ''
+			email TEXT DEFAULT '', notes TEXT DEFAULT '',
+			marketing_opt_in INTEGER DEFAULT 0, terms_accepted INTEGER DEFAULT 0,
+			terms_accepted_at DATETIME, last_order_at DATETIME
 		)`,
 		`CREATE TABLE credit_accounts (
 			id TEXT PRIMARY KEY, created_at DATETIME, updated_at DATETIME,
@@ -427,4 +430,109 @@ func TestRegisterCreditPayment_AllowsEmptyReceiptForCashAbono(t *testing.T) {
 		Scan(&stored).Error)
 	assert.Equal(t, "", stored.ReceiptImageURL,
 		"cash abonos persist with empty URL — informative, never enforced")
+}
+
+// ── CancelCredit: restaura stock + kardex con branch_id (2026-07-02) ───────
+//
+// Auditoría 2026-07-02 (concilio POS↔Inventario↔Kardex): CancelCredit
+// restaura el stock de un fiado pendiente y registra un InventoryMovement,
+// pero ese movimiento no propagaba branch_id (quedaba NULL) — a diferencia
+// de la venta original, que sí lo lleva. En un tenant multi-sede esto
+// sesga cualquier reporte de kardex filtrado por sucursal. Fix: usar
+// sale.BranchID (la venta ya lo tiene) al loguear el movimiento.
+
+// setupCreditsCancelDB extiende el esquema de setupCreditsDB con las tablas
+// que CancelCredit SÍ toca (products, sales, sale_items) más
+// InventoryMovement vía AutoMigrate (sin defaults Postgres-específicos que
+// rompan sqlite, a diferencia de products/sales/sale_items).
+func setupCreditsCancelDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db := setupCreditsDB(t)
+	stmts := []string{
+		`CREATE TABLE products (
+			id TEXT PRIMARY KEY, created_at DATETIME, updated_at DATETIME,
+			deleted_at DATETIME, tenant_id TEXT NOT NULL, branch_id TEXT,
+			name TEXT NOT NULL, price REAL NOT NULL DEFAULT 0,
+			stock INTEGER NOT NULL DEFAULT 0, is_available INTEGER DEFAULT 1
+		)`,
+		`CREATE TABLE sales (
+			id TEXT PRIMARY KEY, created_at DATETIME, updated_at DATETIME,
+			deleted_at DATETIME, tenant_id TEXT NOT NULL, branch_id TEXT,
+			credit_account_id TEXT, total REAL NOT NULL DEFAULT 0,
+			payment_method TEXT NOT NULL DEFAULT 'credit'
+		)`,
+		`CREATE TABLE sale_items (
+			id TEXT PRIMARY KEY, created_at DATETIME, updated_at DATETIME,
+			deleted_at DATETIME, sale_id TEXT NOT NULL, product_id TEXT,
+			name TEXT NOT NULL, price REAL NOT NULL DEFAULT 0, quantity INTEGER NOT NULL,
+			subtotal REAL NOT NULL DEFAULT 0, is_container_charge INTEGER DEFAULT 0,
+			is_service INTEGER DEFAULT 0
+		)`,
+	}
+	for _, s := range stmts {
+		require.NoError(t, db.Exec(s).Error)
+	}
+	require.NoError(t, db.AutoMigrate(&models.InventoryMovement{}))
+	return db
+}
+
+func mountCancelCredit(db *gorm.DB, tenantID string) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.TenantIDKey, tenantID)
+		c.Next()
+	})
+	r.POST("/api/v1/credits/:id/cancel", handlers.CancelCredit(db))
+	return r
+}
+
+func TestCancelCredit_RestoresStockAndKardexKeepsBranchID(t *testing.T) {
+	db := setupCreditsCancelDB(t)
+	tenantID := "tenant-cancel-credit"
+	branchID := "branch-norte"
+	customerID := "cust-1"
+	creditID := "credit-1"
+	saleID := "sale-1"
+	productID := "prod-gaseosa"
+
+	require.NoError(t, db.Exec(
+		`INSERT INTO customers (id, created_at, updated_at, tenant_id, name)
+		 VALUES (?, ?, ?, ?, ?)`,
+		customerID, time.Now(), time.Now(), tenantID, "Cliente Test").Error)
+	require.NoError(t, db.Exec(
+		`INSERT INTO products (id, created_at, updated_at, tenant_id, branch_id, name, price, stock)
+		 VALUES (?, ?, ?, ?, ?, ?, 2500, 18)`,
+		productID, time.Now(), time.Now(), tenantID, branchID, "Gaseosa").Error)
+	require.NoError(t, db.Exec(
+		`INSERT INTO sales (id, created_at, updated_at, tenant_id, branch_id, credit_account_id, total, payment_method)
+		 VALUES (?, ?, ?, ?, ?, ?, 5000, 'credit')`,
+		saleID, time.Now(), time.Now(), tenantID, branchID, creditID).Error)
+	require.NoError(t, db.Exec(
+		`INSERT INTO sale_items (id, created_at, updated_at, sale_id, product_id, name, price, quantity, subtotal)
+		 VALUES (?, ?, ?, ?, ?, ?, 2500, 2, 5000)`,
+		"item-1", time.Now(), time.Now(), saleID, productID, "Gaseosa").Error)
+	require.NoError(t, db.Exec(
+		`INSERT INTO credit_accounts (id, created_at, updated_at, tenant_id, branch_id, customer_id, sale_id, total_amount, paid_amount, status)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, 5000, 0, 'pending')`,
+		creditID, time.Now(), time.Now(), tenantID, branchID, customerID, saleID).Error)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost,
+		"/api/v1/credits/"+creditID+"/cancel", bytes.NewReader([]byte(`{}`)))
+	req.Header.Set("Content-Type", "application/json")
+	mountCancelCredit(db, tenantID).ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var p struct{ Stock int }
+	require.NoError(t, db.Table("products").Select("stock").
+		Where("id = ?", productID).Scan(&p).Error)
+	assert.Equal(t, 20, p.Stock, "cancelar el fiado restaura las 2 gaseosas vendidas")
+
+	var mov models.InventoryMovement
+	require.NoError(t, db.Where("movement_type = ?", models.MovementSaleCancel).
+		First(&mov).Error)
+	require.NotNil(t, mov.BranchID,
+		"el movimiento de cancelación de fiado debe llevar la sede de la venta")
+	assert.Equal(t, branchID, *mov.BranchID)
 }

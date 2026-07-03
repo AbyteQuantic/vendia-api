@@ -122,6 +122,11 @@ func CloseTab(db *gorm.DB) gin.HandlerFunc {
 
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
+		// OpenTab/Table (flujo legacy de cuentas de bar) no tienen columna
+		// branch_id — a diferencia de table_tabs.go (el flujo moderno de
+		// mesas, Spec 052/083), que sí la propaga con este mismo patrón.
+		// La sede activa se resuelve del contexto de la petición.
+		branchID := middleware.GetBranchIDPtr(c)
 		tabID := c.Param("id")
 
 		var req Request
@@ -162,6 +167,7 @@ func CloseTab(db *gorm.DB) gin.HandlerFunc {
 
 				if err := services.LogInventoryMovement(tx, services.MovementParams{
 					TenantID:      tenantID,
+					BranchID:      branchID,
 					ProductID:     item.ProductID,
 					ProductName:   item.Name,
 					MovementType:  models.MovementTabClose,
@@ -180,6 +186,7 @@ func CloseTab(db *gorm.DB) gin.HandlerFunc {
 
 			sale = models.Sale{
 				TenantID:      tenantID,
+				BranchID:      branchID,
 				Total:         total,
 				PaymentMethod: req.PaymentMethod,
 				Items:         saleItems,
