@@ -73,7 +73,10 @@ func ListTasks(db *gorm.DB, gen services.GenerateFunc) gin.HandlerFunc {
 		tasks = append(tasks, onlineOrderTasks(db, tenantID)...)            // negocio
 		tasks = append(tasks, tableAccountTasks(db, tenantID, branchID)...) // sede activa
 		tasks = append(tasks, errandTasks(db, tenantID)...)                 // negocio
-		if t, ok := reorderTask(db, tenantID, branchID); ok {               // sede activa
+		if t, ok := outOfStockTask(db, tenantID, branchID); ok {            // sede activa
+			tasks = append(tasks, t)
+		}
+		if t, ok := reorderTask(db, tenantID, branchID); ok { // sede activa
 			tasks = append(tasks, t)
 		}
 		if t, ok := perishableTask(db, tenantID, branchID); ok { // sede activa
@@ -226,11 +229,15 @@ func errandTasks(db *gorm.DB, tenantID string) []models.Task {
 	return out
 }
 
-// T7 — stock bajo (agregada): N productos en/bajo su mínimo.
+// T7 — stock bajo (agregada), partida por severidad: un producto AGOTADO
+// (stock<=0) es más urgente que uno bajo su mínimo pero disponible. Antes una
+// sola tarjeta "normal" nunca ganaba el slot del toast (Spec 078 F3) frente al
+// toast legacy de stock bajo por producto (push.CheckStockLow) — ahora el
+// agotado sube a "high" y sí lo desplaza.
 func reorderTask(db *gorm.DB, tenantID, branchID string) (models.Task, bool) {
 	var n int64
 	q := scopeBranch(db.Model(&models.Product{}).
-		Where("tenant_id = ? AND min_stock > 0 AND stock <= min_stock AND is_available = ?", tenantID, true), branchID)
+		Where("tenant_id = ? AND min_stock > 0 AND stock > 0 AND stock <= min_stock AND is_available = ?", tenantID, true), branchID)
 	q.Count(&n)
 	if n == 0 {
 		return models.Task{}, false
@@ -239,6 +246,24 @@ func reorderTask(db *gorm.DB, tenantID, branchID string) (models.Task, bool) {
 		ID: models.TaskReorder + ":" + tenantID, Kind: models.TaskReorder, SourceID: tenantID,
 		Title: "Productos por reordenar", Subtitle: fmt.Sprintf("%d en su mínimo o por debajo", n),
 		Urgency: models.TaskUrgencyNormal, Count: int(n), ActionLabel: "Reordenar",
+		DeepLink: "/inventory/reorder", CreatedAt: time.Now(),
+	}, true
+}
+
+// T7b — productos AGOTADOS (agregada): stock<=0 con reposición configurada.
+// Urgencia high para que gane el slot del toast (Spec 078 F3).
+func outOfStockTask(db *gorm.DB, tenantID, branchID string) (models.Task, bool) {
+	var n int64
+	q := scopeBranch(db.Model(&models.Product{}).
+		Where("tenant_id = ? AND min_stock > 0 AND stock <= 0 AND is_available = ?", tenantID, true), branchID)
+	q.Count(&n)
+	if n == 0 {
+		return models.Task{}, false
+	}
+	return models.Task{
+		ID: models.TaskReorderOut + ":" + tenantID, Kind: models.TaskReorderOut, SourceID: tenantID,
+		Title: "Productos agotados", Subtitle: fmt.Sprintf("%d sin unidades disponibles", n),
+		Urgency: models.TaskUrgencyHigh, Count: int(n), ActionLabel: "Reordenar",
 		DeepLink: "/inventory/reorder", CreatedAt: time.Now(),
 	}, true
 }
