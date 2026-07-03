@@ -92,6 +92,77 @@ func TestListTasks_DismissHidesAggregated(t *testing.T) {
 	assert.Empty(t, decodeTasks(t, w3.Body.Bytes()))
 }
 
+func TestListTasks_ReorderSplitsBySeverity(t *testing.T) {
+	db := taskDB(t)
+	// Agotado (stock=0) → reorder_out, urgencia high, cede el toast.
+	require.NoError(t, db.Create(&models.Product{BaseModel: models.BaseModel{ID: "p1"}, TenantID: "t1", Name: "Jarra de limonada", Stock: 0, MinStock: 3, IsAvailable: true}).Error)
+	// Bajo mínimo pero no agotado (stock=2) → reorder normal.
+	require.NoError(t, db.Create(&models.Product{BaseModel: models.BaseModel{ID: "p2"}, TenantID: "t1", Name: "Arroz", Stock: 2, MinStock: 5, IsAvailable: true}).Error)
+
+	w := doJSON(t, tasksRouter(db), http.MethodGet, "/tasks", nil)
+	require.Equal(t, http.StatusOK, w.Code)
+	tasks := decodeTasks(t, w.Body.Bytes())
+	require.Len(t, tasks, 2)
+
+	byID := map[string]map[string]any{}
+	for _, tk := range tasks {
+		byID[tk["id"].(string)] = tk
+	}
+	out, ok := byID["reorder_out:t1"]
+	require.True(t, ok, "debe existir reorder_out:t1")
+	assert.Equal(t, models.TaskUrgencyHigh, out["urgency"])
+	assert.Equal(t, float64(1), out["count"])
+
+	low, ok := byID["reorder:t1"]
+	require.True(t, ok, "debe existir reorder:t1")
+	assert.Equal(t, models.TaskUrgencyNormal, low["urgency"])
+	assert.Equal(t, float64(1), low["count"])
+
+	// El agotado NO debe contar dos veces en reorder normal.
+	assert.NotContains(t, byID, "reorder_out:t1_duplicate")
+}
+
+func TestListTasks_ReorderOutOnlyWhenOutOfStock(t *testing.T) {
+	db := taskDB(t)
+	require.NoError(t, db.Create(&models.Product{BaseModel: models.BaseModel{ID: "p1"}, TenantID: "t1", Name: "Arroz", Stock: 2, MinStock: 5, IsAvailable: true}).Error)
+
+	w := doJSON(t, tasksRouter(db), http.MethodGet, "/tasks", nil)
+	tasks := decodeTasks(t, w.Body.Bytes())
+	require.Len(t, tasks, 1)
+	assert.Equal(t, "reorder:t1", tasks[0]["id"])
+}
+
+func TestListTasks_DismissHidesReorderOutIndependently(t *testing.T) {
+	db := taskDB(t)
+	require.NoError(t, db.Create(&models.Product{BaseModel: models.BaseModel{ID: "p1"}, TenantID: "t1", Name: "Jarra de limonada", Stock: 0, MinStock: 3, IsAvailable: true}).Error)
+	require.NoError(t, db.Create(&models.Product{BaseModel: models.BaseModel{ID: "p2"}, TenantID: "t1", Name: "Arroz", Stock: 2, MinStock: 5, IsAvailable: true}).Error)
+	r := tasksRouter(db)
+
+	w2 := doJSON(t, r, http.MethodPost, "/tasks/dismiss", map[string]any{"task_id": "reorder_out:t1", "hours": 24})
+	require.Equal(t, http.StatusOK, w2.Code)
+
+	w3 := doJSON(t, r, http.MethodGet, "/tasks", nil)
+	tasks := decodeTasks(t, w3.Body.Bytes())
+	// reorder_out queda oculta, reorder (el otro producto) sigue visible.
+	require.Len(t, tasks, 1)
+	assert.Equal(t, "reorder:t1", tasks[0]["id"])
+}
+
+func TestListTasks_UrgentCountIncludesReorderOut(t *testing.T) {
+	db := taskDB(t)
+	require.NoError(t, db.Create(&models.Product{BaseModel: models.BaseModel{ID: "p1"}, TenantID: "t1", Name: "Jarra de limonada", Stock: 0, MinStock: 3, IsAvailable: true}).Error)
+
+	w := doJSON(t, tasksRouter(db), http.MethodGet, "/tasks", nil)
+
+	var resp struct {
+		Data struct {
+			Counts map[string]any `json:"counts"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, float64(1), resp.Data.Counts["urgent"])
+}
+
 func TestListTasks_IncompleteMenuItem(t *testing.T) {
 	db := taskDB(t)
 	require.NoError(t, db.AutoMigrate(&models.Recipe{}, &models.RecipeIngredient{}))

@@ -9,6 +9,7 @@ const (
 	TaskTableAccount   = "table_account"
 	TaskErrand         = "errand"
 	TaskReorder        = "reorder"
+	TaskReorderOut     = "reorder_out"
 	TaskPerishable     = "perishable"
 	TaskMenuIncomplete = "menu_incomplete"
 )
