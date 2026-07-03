@@ -1,7 +1,20 @@
 // Spec: specs/077-compra-inteligente-insumos/spec.md
 package services
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"vendia-backend/internal/models"
+
+	"github.com/stretchr/testify/require"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+)
 
 func TestParsePackaging_NormalizesToBaseUnit(t *testing.T) {
 	cases := []struct {
@@ -43,5 +56,80 @@ func TestIsFoodProduct_RejectsCosmetics(t *testing.T) {
 	}
 	if !isFoodProduct("ACEITE CANOLA MEDALLA DE ORO 900ML", "Aceites") {
 		t.Error("aceite de canola SÍ debe ser comestible")
+	}
+}
+
+// Auditoría 2026-07-03: term se interpolaba crudo en la URL (fmt.Sprintf sin
+// url.QueryEscape). Hoy es inofensivo porque ScrapeTerms son 22 palabras fijas
+// sin caracteres especiales, pero FetchVTEXProducts es exportada y reutilizable
+// — un término con espacio/'&'/'#' rompería la URL o inyectaría parámetros
+// extra a VTEX si esta función se reutiliza con input menos controlado.
+func TestFetchVTEXProducts_EscapesTermInURL(t *testing.T) {
+	var gotRawQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotRawQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+
+	client := srv.Client()
+	dangerousTerm := "aceite de oliva & vinagre#1"
+	_, err := FetchVTEXProducts(client, srv.URL, dangerousTerm)
+	if err != nil {
+		t.Fatalf("FetchVTEXProducts error: %v", err)
+	}
+
+	// El servidor debe recibir 'ft' como UN SOLO valor con el término
+	// completo — no debe interpretarse '&'/'#' como separadores de query
+	// params o de fragment, lo que pasaría si no se escapa.
+	values, err := url.ParseQuery(gotRawQuery)
+	if err != nil {
+		t.Fatalf("no se pudo parsear la query recibida %q: %v", gotRawQuery, err)
+	}
+	if got := values.Get("ft"); got != dangerousTerm {
+		t.Fatalf("el término llegó alterado al servidor: got %q, want %q",
+			got, dangerousTerm)
+	}
+}
+
+// Auditoría 2026-07-03: la pausa de cortesía (400ms) vivía DESPUÉS del bloque
+// de inserción, así que un `continue` por error/respuesta vacía la saltaba
+// por completo — justo el escenario (la cadena empezando a fallar/bloquear)
+// en el que la pausa más importa. Este test usa un servidor que SIEMPRE
+// falla (500) para los 22 términos de ScrapeTerms y verifica que, aun así,
+// el tiempo total sea consistente con una pausa entre cada intento — si el
+// bug reaparece, el loop corre casi instantáneo (sin dormir nada).
+func TestScrapeChainsForCity_SleepsBetweenAttempts_EvenOnFailure(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&models.ChainPrice{}))
+
+	var hits int64
+	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&hits, 1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer broken.Close()
+
+	start := time.Now()
+	inserted := ScrapeChainsForCity(db, "Fusagasugá",
+		[]ChainSource{{Chain: "exito", BaseURL: broken.URL}})
+	elapsed := time.Since(start)
+
+	if inserted != 0 {
+		t.Fatalf("no debe insertar nada si todas las respuestas fallan, insertó %d", inserted)
+	}
+	if got := atomic.LoadInt64(&hits); got != int64(len(ScrapeTerms)) {
+		t.Fatalf("debe intentar los %d términos aunque todos fallen, intentó %d",
+			len(ScrapeTerms), got)
+	}
+	// (len(ScrapeTerms)-1) pausas de 400ms — margen amplio (250ms) para no ser
+	// flaky en CI, pero suficiente para detectar el bug (0 pausas ≈ <1s total).
+	minExpected := time.Duration(len(ScrapeTerms)-1) * 250 * time.Millisecond
+	if elapsed < minExpected {
+		t.Fatalf("el loop corrió en %v, muy rápido para %d intentos con pausa "+
+			"de cortesía entre cada uno (¿el continue por error salta el sleep?) — "+
+			"mínimo esperado %v", elapsed, len(ScrapeTerms), minExpected)
 	}
 }

@@ -454,7 +454,7 @@ func main() {
 
 	// Spec 077 F4 — scraping semanal de cadenas (Éxito/Olímpica) → chain_price +
 	// purga >4 meses. Mismo modelo de auth: sin JWT, gated por CRON_TOKEN.
-	r.POST("/api/v1/internal/jobs/scrape-chains", handlers.ScrapeChainsJob(db))
+	r.POST("/api/v1/internal/jobs/scrape-chains", handlers.ScrapeChainsJob(db, services.DefaultChainSources))
 	// Spec 093/091 — monitoreo de capacidad: avisa al rozar el umbral de la DB.
 	r.POST("/api/v1/internal/jobs/capacity-check", handlers.CapacityCheckJob(db))
 

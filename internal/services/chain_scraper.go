@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -156,8 +157,18 @@ type vtexProduct struct {
 }
 
 // FetchVTEXProducts consulta la API pública de catálogo VTEX por un término.
+//
+// Auditoría 2026-07-03: term se interpolaba crudo en la URL (fmt.Sprintf sin
+// escapar). Hoy es inofensivo porque siempre viene de ScrapeTerms (22
+// palabras fijas, sin espacios ni caracteres especiales), pero esta función
+// es exportada y reutilizable — si en el futuro se le pasa un término con
+// espacio, '&', '#' o similar (ej. una búsqueda libre del tendero), rompería
+// la URL o inyectaría parámetros extra a la API de VTEX. url.QueryEscape lo
+// vuelve seguro sin cambiar el comportamiento actual (los 22 términos
+// hardcodeados no tienen caracteres a escapar).
 func FetchVTEXProducts(client *http.Client, baseURL, term string) ([]vtexProduct, error) {
-	u := fmt.Sprintf("%s/api/catalog_system/pub/products/search?ft=%s&_from=0&_to=49", baseURL, term)
+	u := fmt.Sprintf("%s/api/catalog_system/pub/products/search?ft=%s&_from=0&_to=49",
+		baseURL, url.QueryEscape(term))
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
@@ -188,8 +199,22 @@ func ScrapeChainsForCity(db *gorm.DB, city string, sources []ChainSource) int {
 	client := &http.Client{Timeout: 15 * time.Second}
 	now := time.Now()
 	inserted := 0
+	first := true
 	for _, src := range sources {
 		for _, term := range ScrapeTerms {
+			// Auditoría 2026-07-03: la pausa de cortesía vivía DESPUÉS del
+			// bloque de inserción, así que un `continue` por error/vacío la
+			// saltaba por completo — si la cadena empieza a bloquear/limitar
+			// al scraper (justo el escenario que la pausa buscaba evitar),
+			// el loop pasaba los 22 términos restantes SIN ninguna espera,
+			// lo que agrava el bloqueo en vez de mitigarlo. Ahora la pausa
+			// corre SIEMPRE antes de cada request (salvo la primera de
+			// todas), pase lo que pase con la anterior.
+			if !first {
+				time.Sleep(400 * time.Millisecond)
+			}
+			first = false
+
 			products, err := FetchVTEXProducts(client, src.BaseURL, term)
 			if err != nil || len(products) == 0 {
 				continue // best-effort
@@ -222,7 +247,6 @@ func ScrapeChainsForCity(db *gorm.DB, city string, sources []ChainSource) int {
 					inserted += len(rows)
 				}
 			}
-			time.Sleep(400 * time.Millisecond) // cortesía con la cadena
 		}
 	}
 	return inserted
