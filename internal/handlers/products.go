@@ -210,6 +210,17 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		PriceTier1 *float64 `json:"price_tier_1"`
 		PriceTier2 *float64 `json:"price_tier_2"`
 		PriceTier3 *float64 `json:"price_tier_3"`
+
+		// Auditoría 2026-07-03: un tenant real acumuló hasta 9 copias del
+		// mismo producto (mismo nombre+presentación, stocks contradictorios
+		// entre sí) — reintentos de "Nuevo Producto" tras un guardado que
+		// pareció fallar, y el OCR de menú creando 2 platos cuando la carta
+		// trae precio de media porción/porción completa. ForceCreate deja
+		// pasar la creación aunque exista un similar — lo manda el cliente
+		// tras confirmar explícitamente con el tendero ("crear de todas
+		// formas"), o el importador de menú al reintentar un plato que el
+		// tendero ya decidió duplicar a propósito.
+		ForceCreate bool `json:"force_create"`
 	}
 
 	return func(c *gin.Context) {
@@ -282,6 +293,35 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		// cualquier sede (Spec 077). Solo el inventario físico va por sede.
 		if req.IsMenuItem || req.IsService {
 			branchID = ""
+		}
+
+		// Auditoría 2026-07-03: aviso de posible duplicado. Compara en el
+		// MISMO scope de sede que tendrá el producto nuevo (branchID ya
+		// resuelto arriba, incluida la regla de plato/servicio global) por
+		// nombre+presentación normalizados — el mismo criterio de identidad
+		// que ya usa el importador CSV (Spec 027) para no crear copias. Los
+		// borradores (IsDraft, fotos de prueba en "Nuevo Producto" antes de
+		// Guardar) quedan exentos: no son productos reales todavía.
+		if !req.ForceCreate && !req.IsDraft {
+			var candidates []models.Product
+			q := db.Where("tenant_id = ? AND is_draft = false", tenantID)
+			if branchID != "" {
+				q = q.Where("(branch_id = ? OR branch_id IS NULL)", branchID)
+			}
+			q.Find(&candidates)
+			normName := services.NormalizeText(req.Name)
+			normPres := strings.TrimSpace(strings.ToLower(req.Presentation))
+			for _, cand := range candidates {
+				if services.NormalizeText(cand.Name) == normName &&
+					strings.TrimSpace(strings.ToLower(cand.Presentation)) == normPres {
+					c.JSON(http.StatusConflict, gin.H{
+						"error":            "ya existe un producto con ese nombre",
+						"error_code":       "duplicate_product",
+						"existing_product": cand,
+					})
+					return
+				}
+			}
 		}
 
 		expiry, err := normaliseExpiryDate(req.ExpiryDate)
