@@ -215,6 +215,7 @@ func UpdateOrderStatus(db *gorm.DB) gin.HandlerFunc {
 					}
 					if err := services.LogInventoryMovement(tx, services.MovementParams{
 						TenantID:      tenantID,
+						BranchID:      order.BranchID,
 						ProductID:     item.ProductUUID,
 						ProductName:   item.ProductName,
 						MovementType:  models.MovementOrderCancel,
