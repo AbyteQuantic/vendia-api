@@ -615,6 +615,14 @@ func main() {
 		v1.DELETE("/products/:id/media/:mediaId", handlers.DeleteProductMedia(db, storageSvc))
 		v1.POST("/products/:id/enhance", handlers.EnhanceProductPhoto(db, geminiSvc, storageSvc, catalogSvc))
 		v1.POST("/products/:id/generate-image", handlers.GenerateProductImage(db, geminiSvc, storageSvc, catalogSvc))
+		// Spec 095 -- variantes de producto (talla/color).
+		v1.POST("/products/:id/adopt-variant-group", handlers.AdoptProductToVariantGroup(db))
+		v1.GET("/product-variant-groups", handlers.ListVariantGroups(db))
+		v1.POST("/product-variant-groups", handlers.CreateVariantGroup(db))
+		v1.GET("/product-variant-groups/:id", handlers.GetVariantGroup(db))
+		v1.PATCH("/product-variant-groups/:id", handlers.UpdateVariantGroup(db))
+		v1.DELETE("/product-variant-groups/:id", handlers.DeleteVariantGroup(db))
+		v1.POST("/product-variant-groups/:id/generate-combinations", handlers.GenerateVariantCombinations(db))
 		// Feature 016 — async AI photo polling. The enhance/generate
 		// endpoints above now answer 202 with a job_id; the client
 		// polls this endpoint for the result. Tenant-scoped (Art. III).

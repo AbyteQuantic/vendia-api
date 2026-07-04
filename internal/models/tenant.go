@@ -114,7 +114,7 @@ func DefaultFeatureFlags(types []string, opts CapabilityToggles) FeatureFlags {
 	salon := has(BusinessTypePeluqueria)
 
 	return FeatureFlags{
-		EnableSupplierMode: supplier,
+		EnableSupplierMode:    supplier,
 		EnableTables:          food || opts.Tables,
 		EnableKDS:             food, // KDS stays exclusive to food — D3
 		EnableTips:            food, // Tips stays exclusive to food — D3
@@ -351,6 +351,14 @@ type Tenant struct {
 	// "Sección de Ofertas visible" del Marketing Hub (antes no persistía).
 	HideOffersSection bool `gorm:"not null;default:false" json:"hide_offers_section"`
 
+	// ── Spec 095 — variantes de producto (talla/color/atributos) ────────
+	// EnableProductVariants is the optional capability toggle to group
+	// products as variants (talla/color) of a shared item. Default OFF —
+	// a tienda de barrio or restaurante that never touches this sees zero
+	// behavior change. When ON, the tendero can create a
+	// ProductVariantGroup and link Products to it via VariantGroupID.
+	EnableProductVariants bool `gorm:"not null;default:false" json:"enable_product_variants"`
+
 	// Spec F038 — umbral global de stock crítico por tenant.
 	// Cuando un producto cruza este valor hacia abajo en una venta,
 	// el dispatcher envía push "Stock bajo" al dueño + cashiers.
@@ -385,6 +393,7 @@ func (t *Tenant) CountActiveModules() int {
 		t.EnableSupplies,
 		t.EnableFurnitureJobs,
 		t.EnablePurchaseOrders,
+		t.EnableProductVariants,
 		t.FeatureFlags.EnableTables,
 		t.FeatureFlags.EnableKDS,
 		t.FeatureFlags.EnableTips,

@@ -44,6 +44,7 @@ type AuthResponse struct {
 	EnableFurnitureJobs      bool `json:"enable_furniture_jobs"`
 	EnablePurchaseOrders     bool `json:"enable_purchase_orders"`
 	EnablePriceTiers         bool `json:"enable_price_tiers"`
+	EnableProductVariants    bool `json:"enable_product_variants"`
 	// Role / BranchID / UserID expose the workspace context the
 	// JWT already carries so the client can persist them without
 	// decoding the token. Empty on the legacy tenants-only path.
@@ -66,6 +67,7 @@ func applyCapabilityFlags(resp *AuthResponse, t models.Tenant) {
 	resp.EnableFurnitureJobs = t.EnableFurnitureJobs
 	resp.EnablePurchaseOrders = t.EnablePurchaseOrders
 	resp.EnablePriceTiers = t.EnablePriceTiers
+	resp.EnableProductVariants = t.EnableProductVariants
 }
 
 func createTokenPair(db *gorm.DB, tenant models.Tenant, jwtSecret string) (*AuthResponse, error) {

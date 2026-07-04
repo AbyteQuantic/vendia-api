@@ -64,13 +64,14 @@ func Migrate(db *gorm.DB) error {
 		&models.Tenant{},
 		&models.Employee{},
 		&models.Product{},
-		&models.ProductMedia{},       // Spec 070 — galería multimedia
-		&models.SupplierOrder{},      // Spec 075 — pedido cross-tenant a proveedores
-		&models.IngredientPrice{},    // Spec 077 — precios multi-fuente (append-only)
-		&models.ChainPrice{},         // Spec 077 — catálogo scrapeado de cadenas
-		&models.PurchaseErrand{},     // Spec 077 — mandados de compra
-		&models.PurchaseErrandLine{}, // Spec 077 — líneas de mandado
-		&models.TaskDismissal{},      // Spec 078 — snooze de tareas agregadas
+		&models.ProductMedia{},        // Spec 070 — galería multimedia
+		&models.SupplierOrder{},       // Spec 075 — pedido cross-tenant a proveedores
+		&models.IngredientPrice{},     // Spec 077 — precios multi-fuente (append-only)
+		&models.ChainPrice{},          // Spec 077 — catálogo scrapeado de cadenas
+		&models.PurchaseErrand{},      // Spec 077 — mandados de compra
+		&models.PurchaseErrandLine{},  // Spec 077 — líneas de mandado
+		&models.TaskDismissal{},       // Spec 078 — snooze de tareas agregadas
+		&models.ProductVariantGroup{}, // Spec 095 — variantes de producto (talla/color)
 
 		&models.Sale{},
 		&models.SaleItem{},

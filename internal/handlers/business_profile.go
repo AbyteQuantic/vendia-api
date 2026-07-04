@@ -95,6 +95,10 @@ func GetBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 				"enable_furniture_jobs":  tenant.EnableFurnitureJobs,
 				"enable_purchase_orders": tenant.EnablePurchaseOrders,
 				"hide_offers_section":    tenant.HideOffersSection,
+				// Spec 095: variantes de producto (talla/color). El frontend
+				// lee `enable_product_variants` para decidir si muestra el
+				// generador de variantes en Nuevo/Editar Producto.
+				"enable_product_variants": tenant.EnableProductVariants,
 			},
 		})
 	}
@@ -145,6 +149,11 @@ type ProfileConfigInput struct {
 	EnablePurchaseOrders *bool `json:"enable_purchase_orders"`
 	// Oculta la sección de Ofertas del catálogo público (Marketing Hub).
 	HideOffersSection *bool `json:"hide_offers_section"`
+
+	// Spec 095 — variantes de producto (talla/color). Toggle opcional,
+	// default OFF. Mismo patrón que enable_price_tiers: pointer para
+	// distinguir "no enviado" de "false explícito".
+	EnableProductVariants *bool `json:"enable_product_variants"`
 }
 
 // UpdateBusinessProfile partially updates the tenant's business profile.
@@ -391,6 +400,12 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 			}
 			if req.Config.EnablePurchaseOrders != nil {
 				updates["enable_purchase_orders"] = *req.Config.EnablePurchaseOrders
+			}
+
+			// Spec 095 — variantes de producto. Toggle simple sin validación
+			// adicional; mismo patrón que los toggles previos.
+			if req.Config.EnableProductVariants != nil {
+				updates["enable_product_variants"] = *req.Config.EnableProductVariants
 			}
 		}
 

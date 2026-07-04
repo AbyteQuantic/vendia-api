@@ -424,6 +424,29 @@ func TestUpdateBusinessProfile_EnablePriceTiersWithCustomNames(t *testing.T) {
 	assert.Equal(t, "Detal", data["price_tier_3_name"])
 }
 
+// TestUpdateBusinessProfile_EnableProductVariants verifies that PATCH
+// persists the Spec 095 capability toggle, same pattern as enable_price_tiers.
+func TestUpdateBusinessProfile_EnableProductVariants(t *testing.T) {
+	_, patchRouter, getRouter := setupProfileSuiteWithGet(t)
+
+	w := patchProfile(patchRouter, map[string]any{
+		"config": map[string]any{
+			"enable_product_variants": true,
+		},
+	})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	wg := getProfile(getRouter)
+	require.Equal(t, http.StatusOK, wg.Code, wg.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(wg.Body.Bytes(), &resp))
+	data := resp["data"].(map[string]any)
+
+	assert.Equal(t, true, data["enable_product_variants"],
+		"enable_product_variants debe persistir (Spec 095)")
+}
+
 // TestUpdateBusinessProfile_EmptyTierName_400 verifies that an empty
 // tier name returns 400 and does NOT persist any change (F029 FR-02
 // validation — los nombres no pueden quedar vacíos).
