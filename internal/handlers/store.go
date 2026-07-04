@@ -361,6 +361,11 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 			// Spec 070 — carrusel: foto principal (pos 0) + media extra. Vacío/1
 			// item → el front usa el <img> estático actual (cero regresión).
 			Media []MediaItem `json:"media,omitempty"`
+			// Spec 095 — variantes de producto (talla/color). Vacío/omitido
+			// para el 100% de productos sin variantes (AC-01): el front
+			// arma la tarjeta agrupada solo cuando estos campos vienen.
+			VariantGroupID    string `json:"variant_group_id,omitempty"`
+			VariantAttributes string `json:"variant_attributes,omitempty"`
 		}
 
 		var catalog []CatalogProduct
@@ -398,6 +403,10 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 				}
 				media = append(media, toItem(m))
 			}
+			var variantGroupID string
+			if p.VariantGroupID != nil {
+				variantGroupID = *p.VariantGroupID
+			}
 			catalog = append(catalog, CatalogProduct{
 				UUID:            p.ID,
 				Name:            p.Name,
@@ -415,6 +424,13 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 				IsService:       p.IsService,
 				IsAgeRestricted: p.IsAgeRestricted,
 				Media:           media,
+				VariantGroupID:  variantGroupID,
+				VariantAttributes: func() string {
+					if variantGroupID == "" || p.VariantAttributes == "{}" {
+						return ""
+					}
+					return p.VariantAttributes
+				}(),
 			})
 		}
 
