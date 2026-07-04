@@ -399,3 +399,61 @@ func TestPublicCatalog_ExposesMenuFields(t *testing.T) {
 	assert.Equal(t, 1, retails)
 	assert.Equal(t, 1, services)
 }
+
+// Spec 095 — el catálogo público debe exponer variant_group_id/
+// variant_attributes: sin esto, el front no puede armar la tarjeta
+// agrupada ni el selector de talla/color (CatalogProduct es un DTO propio
+// que NO hereda automáticamente los campos nuevos de models.Product).
+func TestPublicCatalog_ExposesVariantFields(t *testing.T) {
+	db := setupStoreTestDB()
+	gin.SetMode(gin.TestMode)
+	slug := "tienda-ropa"
+	tenant := models.Tenant{
+		BaseModel: models.BaseModel{ID: "t-ropa"}, BusinessName: "Tienda Ropa",
+		StoreSlug: &slug,
+	}
+	db.Create(&tenant)
+	groupID := "g1"
+	variant := models.Product{
+		BaseModel: models.BaseModel{ID: "p-variant"}, TenantID: "t-ropa",
+		Name: "Camiseta M Roja", Price: 20000, IsAvailable: true, Stock: 5,
+		VariantGroupID:    &groupID,
+		VariantAttributes: `{"Talla":"M","Color":"Rojo"}`,
+	}
+	db.Create(&variant)
+	plain := models.Product{
+		BaseModel: models.BaseModel{ID: "p-plain"}, TenantID: "t-ropa",
+		Name: "Gorra", Price: 15000, IsAvailable: true, Stock: 2,
+	}
+	db.Create(&plain)
+
+	r := gin.New()
+	r.GET("/catalog/:slug", PublicCatalog(db))
+	req, _ := http.NewRequest(http.MethodGet, "/catalog/tienda-ropa", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var res struct {
+		Data struct {
+			Products []struct {
+				UUID              string `json:"uuid"`
+				VariantGroupID    string `json:"variant_group_id,omitempty"`
+				VariantAttributes string `json:"variant_attributes,omitempty"`
+			} `json:"products"`
+		} `json:"data"`
+	}
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &res))
+	assert.Len(t, res.Data.Products, 2)
+
+	byID := map[string]string{}
+	byIDAttrs := map[string]string{}
+	for _, p := range res.Data.Products {
+		byID[p.UUID] = p.VariantGroupID
+		byIDAttrs[p.UUID] = p.VariantAttributes
+	}
+	assert.Equal(t, "g1", byID["p-variant"])
+	assert.Equal(t, `{"Talla":"M","Color":"Rojo"}`, byIDAttrs["p-variant"])
+	// Un producto normal NO debe traer variant_group_id (AC-01).
+	assert.Empty(t, byID["p-plain"])
+}
