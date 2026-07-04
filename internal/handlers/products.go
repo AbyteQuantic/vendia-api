@@ -221,6 +221,14 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		// formas"), o el importador de menú al reintentar un plato que el
 		// tendero ya decidió duplicar a propósito.
 		ForceCreate bool `json:"force_create"`
+
+		// Spec 095 — variantes de producto (talla/color). Opcionales: NULL/
+		// vacío = producto normal, sin cambio de comportamiento (AC-01).
+		// Necesarios aquí para que el reintento offline del frontend
+		// (ProductPushSync, que reusa este mismo POST) persista el vínculo
+		// al grupo si el producto se creó/editó sin conexión.
+		VariantGroupID    string `json:"variant_group_id"`
+		VariantAttributes string `json:"variant_attributes"`
 	}
 
 	return func(c *gin.Context) {
@@ -353,6 +361,14 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			return
 		}
 
+		// Spec 095 — "" no es JSON válido; un string vacío rompería un
+		// futuro json.Unmarshal en el catálogo/frontend. El default real
+		// del modelo es '{}'.
+		variantAttributes := req.VariantAttributes
+		if variantAttributes == "" {
+			variantAttributes = "{}"
+		}
+
 		product := models.Product{
 			TenantID:          tenantID,
 			CreatedBy:         middleware.UUIDPtr(userID),
@@ -383,6 +399,8 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			PriceTier1:        req.PriceTier1,
 			PriceTier2:        req.PriceTier2,
 			PriceTier3:        req.PriceTier3,
+			VariantGroupID:    middleware.UUIDPtr(req.VariantGroupID),
+			VariantAttributes: variantAttributes,
 		}
 		if req.ID != "" {
 			product.ID = req.ID
@@ -499,6 +517,10 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		PriceTier1 *float64 `json:"price_tier_1"`
 		PriceTier2 *float64 `json:"price_tier_2"`
 		PriceTier3 *float64 `json:"price_tier_3"`
+
+		// Spec 095 — variantes de producto. Ver comentario en CreateProduct.
+		VariantGroupID    *string `json:"variant_group_id"`
+		VariantAttributes *string `json:"variant_attributes"`
 	}
 
 	return func(c *gin.Context) {
@@ -554,6 +576,15 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			updates["barcode"] = strings.TrimSpace(*req.Barcode)
 		}
 		if req.IsAvailable != nil {
+			// Spec 095 — desactivar un producto con una orden de compra
+			// abierta lo deja "huérfano": el stock recibido después nunca
+			// llegaría a las variantes que lo reemplazan.
+			if !*req.IsAvailable {
+				if err := blockIfOpenPurchaseOrder(db, tenantID, productID); err != nil {
+					c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+					return
+				}
+			}
 			updates["is_available"] = *req.IsAvailable
 		}
 		if req.RequiresContainer != nil {
@@ -630,6 +661,16 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 				return
 			}
 			updates["price_tier_3"] = *req.PriceTier3
+		}
+		if req.VariantGroupID != nil {
+			updates["variant_group_id"] = *req.VariantGroupID
+		}
+		if req.VariantAttributes != nil {
+			attrs := *req.VariantAttributes
+			if attrs == "" {
+				attrs = "{}"
+			}
+			updates["variant_attributes"] = attrs
 		}
 
 		// Update + kardex movement run inside one transaction. The kardex
@@ -756,6 +797,14 @@ func DeleteProduct(db *gorm.DB, storageSvc services.FileStorage) gin.HandlerFunc
 		if err := db.Where("id = ? AND tenant_id = ?", productID, tenantID).
 			First(&product).Error; err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "producto no encontrado"})
+			return
+		}
+
+		// Spec 095 — no borrar un producto que una orden de compra abierta
+		// todavía referencia (el stock recibido después entraría a una fila
+		// muerta y nunca llegaría a las variantes que la reemplazan).
+		if err := blockIfOpenPurchaseOrder(db, tenantID, productID); err != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return
 		}
 

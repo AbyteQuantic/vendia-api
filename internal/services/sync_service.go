@@ -134,6 +134,12 @@ func (s *SyncService) processOperation(tx *gorm.DB, tenantID string, op SyncOper
 	case "event_installment":
 		var inst models.EventInstallment
 		return s.syncJSONEntity(tx, tenantID, op, &inst)
+	// Spec 095 — variantes de producto. Case EXPLÍCITO a propósito: sin
+	// esto, la op cae al default de abajo (se marca "aplicada" sin tocar la
+	// base — el mismo patrón que ya perdió datos 2 veces en esta sesión con
+	// otras entidades).
+	case "product_variant_group":
+		return s.syncEntity(tx, &models.ProductVariantGroup{}, tenantID, op)
 	default:
 		return true, nil
 	}

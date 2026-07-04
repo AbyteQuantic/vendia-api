@@ -131,4 +131,20 @@ type Product struct {
 	PriceTier1 *float64 `gorm:"column:price_tier_1;type:numeric" json:"price_tier_1,omitempty"`
 	PriceTier2 *float64 `gorm:"column:price_tier_2;type:numeric" json:"price_tier_2,omitempty"`
 	PriceTier3 *float64 `gorm:"column:price_tier_3;type:numeric" json:"price_tier_3,omitempty"`
+
+	// ── Spec 095 — variantes de producto (talla/color/atributos) ────────
+	// VariantGroupID links this product to a ProductVariantGroup. NULL (the
+	// default, and 100% of products today) means "producto normal" — no
+	// change in behavior anywhere (POS, stock, kardex, catálogo). Not a
+	// GORM-enforced FK: group deletion is guarded at the handler level
+	// (reject deleting a group with live variants) instead of ON DELETE,
+	// to keep AutoMigrate simple (Art. X).
+	VariantGroupID *string `gorm:"type:uuid;index" json:"variant_group_id,omitempty"`
+
+	// VariantAttributes is a free-form JSON object string, e.g.
+	// {"Talla":"M","Color":"Rojo"} — only meaningful when VariantGroupID
+	// is set. Free-form (not an enum) on purpose: a rigid talla/color
+	// taxonomy wouldn't fit every tenant's products (same reasoning as the
+	// existing free-text Category).
+	VariantAttributes string `gorm:"type:jsonb;not null;default:'{}'" json:"variant_attributes,omitempty"`
 }
