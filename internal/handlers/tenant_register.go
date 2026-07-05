@@ -192,10 +192,11 @@ func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 
 			// 3. Create default Branch
 			branch := models.Branch{
-				TenantID: tenant.ID,
-				Name:     "Principal",
-				Address:  req.Business.Address,
-				IsActive: true,
+				TenantID:  tenant.ID,
+				Name:      "Principal",
+				Address:   req.Business.Address,
+				IsActive:  true,
+				IsDefault: true,
 			}
 			if err := tx.Create(&branch).Error; err != nil {
 				return err

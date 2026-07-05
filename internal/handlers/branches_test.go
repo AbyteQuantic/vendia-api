@@ -119,6 +119,43 @@ func TestListBranches_ReturnsOnlyTenantOwnedActive(t *testing.T) {
 	assert.NotContains(t, names, "Archivada")
 }
 
+// TestListBranches_ExposesIsDefault verifies is_default round-trips in
+// the JSON response — the frontend's active-sede selection depends on
+// this field actually being present (incident 2026-07-05: it was
+// missing from the model entirely, so the frontend always saw `false`
+// and fell back to array order to pick the "current" sede).
+func TestListBranches_ExposesIsDefault(t *testing.T) {
+	db := setupBranchesDB(t)
+	require.NoError(t, db.Exec(`
+		INSERT INTO tenants (id, business_name, created_at)
+		VALUES ('tenant-a', 'Test', datetime('now'))`).Error)
+	require.NoError(t, db.Create(&models.Branch{
+		BaseModel: models.BaseModel{ID: "br-default"},
+		TenantID:  "tenant-a", Name: "Principal", IsActive: true, IsDefault: true,
+	}).Error)
+	require.NoError(t, db.Create(&models.Branch{
+		BaseModel: models.BaseModel{ID: "br-other"},
+		TenantID:  "tenant-a", Name: "Secundaria", IsActive: true, IsDefault: false,
+	}).Error)
+
+	r := mountBranches(db, "tenant-a")
+	w := doJSON(t, r, http.MethodGet, "/store/branches", nil)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var body struct {
+		Data []models.Branch `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	require.Len(t, body.Data, 2)
+
+	byID := map[string]models.Branch{}
+	for _, b := range body.Data {
+		byID[b.ID] = b
+	}
+	assert.True(t, byID["br-default"].IsDefault)
+	assert.False(t, byID["br-other"].IsDefault)
+}
+
 func TestListBranches_RejectsWhenNoTenant(t *testing.T) {
 	db := setupBranchesDB(t)
 	r := mountBranches(db, "") // no tenant in context
