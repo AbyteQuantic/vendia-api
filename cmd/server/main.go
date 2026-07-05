@@ -58,6 +58,18 @@ func main() {
 	// credit_accounts are already scoped.
 	database.BackfillRelatedBranchIDs(db)
 
+	// Self-heal: every tenant must have exactly one branch marked
+	// is_default. Without it the frontend falls back to "first branch
+	// the API returns" to pick the active sede on login, which can
+	// select an empty/secondary sede over the one holding the tenant's
+	// real inventory (incident 2026-07-05). Idempotent — skips tenants
+	// that already have a default.
+	if touched, err := database.BackfillDefaultBranch(db); err != nil {
+		log.Printf("[BOOTSTRAP] default-branch backfill failed: %v", err)
+	} else if touched > 0 {
+		log.Printf("[BOOTSTRAP] default-branch backfill marked %d sedes", touched)
+	}
+
 	// Self-heal: every tenant must have at least the "Efectivo"
 	// payment method seeded. Pre-fix tenants registered before the
 	// seed landed and would otherwise render zero chips on the POS.
