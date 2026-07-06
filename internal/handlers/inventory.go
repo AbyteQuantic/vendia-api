@@ -376,7 +376,7 @@ func LookupBarcode(db *gorm.DB, offSvc *services.OpenFoodFactsService) gin.Handl
 
 		// Errores de caché se registran y se ignoran — nunca deben romper
 		// la respuesta de escaneo que el tendero está esperando (AC-05).
-		if cacheErr := services.UpsertVerifiedCatalogProduct(db, *product); cacheErr != nil {
+		if cacheErr := services.UpsertOffCatalogBackup(db, *product); cacheErr != nil {
 			log.Printf("[CATALOG] upsert verified catalog product %s failed: %v", product.Barcode, cacheErr)
 		}
 
@@ -551,25 +551,6 @@ func buildProductGenInputs(c *gin.Context, product models.Product) (name, presen
 	return name, presentation
 }
 
-// registerCatalogImage mirrors a freshly produced product photo into
-// the shared catalog (capped at 3 accepted images per catalog product).
-// It is best-effort: any failure is swallowed so it never fails the
-// AI job — the product photo is already saved at this point.
-func registerCatalogImage(catalogSvc *services.CatalogService, product models.Product, tenantID, newURL, key string) {
-	if catalogSvc == nil {
-		return
-	}
-	cp, err := catalogSvc.FindOrCreateCatalogProduct(
-		product.Barcode, product.Name, "", product.Presentation, product.Content, "")
-	if err != nil {
-		return
-	}
-	count, _ := catalogSvc.CountAcceptedImages(cp.ID)
-	if count < 3 {
-		catalogSvc.CreatePendingImage(cp.ID, tenantID, newURL, key)
-	}
-}
-
 // EnhanceProductPhoto queues an asynchronous "mejorar foto con IA" job.
 // It validates the request, creates a `processing` AIJob row, launches
 // the real work (download + Gemini + upload) in a background goroutine
@@ -729,7 +710,9 @@ func enhancePhotoWorker(db *gorm.DB, geminiSvc *services.GeminiService, storageS
 			return "", fmt.Errorf("error al actualizar producto: %w", err)
 		}
 
-		registerCatalogImage(catalogSvc, product, tenantID, newURL, key)
+		// Spec 096 Adenda A: ya NO se aporta al catálogo compartido en
+		// silencio aquí — el tendero debe compartirla explícitamente vía
+		// POST /products/:id/share-to-catalog (ShareProductPhotoToCatalog).
 		return newURL, nil
 	}
 }
@@ -808,7 +791,9 @@ func generateImageWorker(db *gorm.DB, geminiSvc *services.GeminiService, storage
 			return "", fmt.Errorf("error al actualizar producto: %w", err)
 		}
 
-		registerCatalogImage(catalogSvc, product, tenantID, newURL, key)
+		// Spec 096 Adenda A: ya NO se aporta al catálogo compartido en
+		// silencio aquí — el tendero debe compartirla explícitamente vía
+		// POST /products/:id/share-to-catalog (ShareProductPhotoToCatalog).
 		return newURL, nil
 	}
 }

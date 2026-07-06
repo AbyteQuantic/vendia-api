@@ -1,9 +1,8 @@
-// Spec: specs/096-foto-referencia-verificada/spec.md
+// Spec: specs/096-foto-referencia-verificada/spec.md (Adenda A)
 package database
 
 import (
 	"testing"
-	"time"
 
 	"vendia-backend/internal/models"
 
@@ -49,104 +48,82 @@ func setupCatalogStatusDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-// TestBackfillCatalogStatus_MarksExistingOFFRowsVerified verifies that a
-// pre-existing catalog row already imported from Open Food Facts (with a
-// real image) gets status='verified' + license='CC-BY-SA' so it becomes
-// eligible for suggestion without waiting for the new discovery job to
-// re-fetch it.
-func TestBackfillCatalogStatus_MarksExistingOFFRowsVerified(t *testing.T) {
+// TestRevertOffAutoVerifiedCatalogRows_RevertsOffVerifiedRows verifies the
+// Adenda A correction: an OFF-sourced row that a prior boot's (now removed)
+// backfill wrongly marked 'verified' with zero tenant confirmation gets
+// reverted back to 'pending'.
+func TestRevertOffAutoVerifiedCatalogRows_RevertsOffVerifiedRows(t *testing.T) {
 	db := setupCatalogStatusDB(t)
 	id := uuid.NewString()
-	require.NoError(t, db.Create(&models.CatalogProduct{
-		ID: id, Name: "Coca-Cola 400ml", Barcode: "7702090000012",
-		ImageURL: "https://images.openfoodfacts.org/x.jpg", Source: "off",
-	}).Error)
+	now := "2026-07-01 00:00:00"
+	require.NoError(t, db.Exec(`
+		INSERT INTO catalog_products (id, name, barcode, image_url, source, status, verified_at)
+		VALUES (?, 'Coca-Cola 400ml', '7702090000012', 'https://images.openfoodfacts.org/x.jpg', 'off', 'verified', ?)
+	`, id, now).Error)
 
-	touched, err := BackfillCatalogStatus(db)
+	touched, err := RevertOffAutoVerifiedCatalogRows(db)
 	require.NoError(t, err)
 	assert.Equal(t, 1, touched)
 
 	var row models.CatalogProduct
 	require.NoError(t, db.First(&row, "id = ?", id).Error)
+	assert.Equal(t, "pending", row.Status)
+	assert.Nil(t, row.VerifiedAt)
+}
+
+// TestRevertOffAutoVerifiedCatalogRows_NeverTouchesUserVerifiedRows
+// verifies a row verified through real tenant consensus (source='user',
+// set by CatalogService.ShareProductPhotoToCatalog) is left untouched —
+// this correction only targets the old OFF-only mistake.
+func TestRevertOffAutoVerifiedCatalogRows_NeverTouchesUserVerifiedRows(t *testing.T) {
+	db := setupCatalogStatusDB(t)
+	id := uuid.NewString()
+	require.NoError(t, db.Exec(`
+		INSERT INTO catalog_products (id, name, barcode, image_url, source, status)
+		VALUES (?, 'Coca-Cola 400ml', '7702090000012', 'https://r2.vendia.store/x.jpg', 'user', 'verified')
+	`, id).Error)
+
+	touched, err := RevertOffAutoVerifiedCatalogRows(db)
+	require.NoError(t, err)
+	assert.Equal(t, 0, touched)
+
+	var row models.CatalogProduct
+	require.NoError(t, db.First(&row, "id = ?", id).Error)
 	assert.Equal(t, "verified", row.Status)
-	assert.Equal(t, "CC-BY-SA", row.License)
-	assert.NotNil(t, row.VerifiedAt)
 }
 
-// TestBackfillCatalogStatus_SkipsRowsWithoutImage verifies a catalog row
-// with no image_url is left pending — there's nothing to suggest.
-func TestBackfillCatalogStatus_SkipsRowsWithoutImage(t *testing.T) {
+// TestRevertOffAutoVerifiedCatalogRows_Idempotent verifies a second run is
+// a no-op — once reverted, a row is 'pending' and never matches again.
+func TestRevertOffAutoVerifiedCatalogRows_Idempotent(t *testing.T) {
 	db := setupCatalogStatusDB(t)
-	id := uuid.NewString()
-	require.NoError(t, db.Create(&models.CatalogProduct{
-		ID: id, Name: "Sin foto", Barcode: "1111111111111", Source: "off",
-	}).Error)
+	require.NoError(t, db.Exec(`
+		INSERT INTO catalog_products (id, name, barcode, image_url, source, status)
+		VALUES (?, 'Coca-Cola', '3333333333333', 'https://images.openfoodfacts.org/x.jpg', 'off', 'verified')
+	`, uuid.NewString()).Error)
 
-	touched, err := BackfillCatalogStatus(db)
-	require.NoError(t, err)
-	assert.Equal(t, 0, touched)
-
-	var row models.CatalogProduct
-	require.NoError(t, db.First(&row, "id = ?", id).Error)
-	assert.Equal(t, "pending", row.Status)
-}
-
-// TestBackfillCatalogStatus_SkipsUserContributedRows verifies a
-// tenant-contributed image (source='user', AI-enhanced) is never marked
-// "verified" by this backfill — only OFF-sourced rows carry the
-// open-license guarantee this status represents.
-func TestBackfillCatalogStatus_SkipsUserContributedRows(t *testing.T) {
-	db := setupCatalogStatusDB(t)
-	id := uuid.NewString()
-	require.NoError(t, db.Create(&models.CatalogProduct{
-		ID: id, Name: "Contribuido por tenant", Barcode: "2222222222222",
-		ImageURL: "https://r2.vendia.store/x.jpg", Source: "user",
-	}).Error)
-
-	touched, err := BackfillCatalogStatus(db)
-	require.NoError(t, err)
-	assert.Equal(t, 0, touched)
-
-	var row models.CatalogProduct
-	require.NoError(t, db.First(&row, "id = ?", id).Error)
-	assert.Equal(t, "pending", row.Status)
-}
-
-// TestBackfillCatalogStatus_Idempotent verifies a second run is a no-op.
-func TestBackfillCatalogStatus_Idempotent(t *testing.T) {
-	db := setupCatalogStatusDB(t)
-	require.NoError(t, db.Create(&models.CatalogProduct{
-		ID: uuid.NewString(), Name: "Coca-Cola", Barcode: "3333333333333",
-		ImageURL: "https://images.openfoodfacts.org/x.jpg", Source: "off",
-	}).Error)
-
-	first, err := BackfillCatalogStatus(db)
+	first, err := RevertOffAutoVerifiedCatalogRows(db)
 	require.NoError(t, err)
 	assert.Equal(t, 1, first)
 
-	second, err := BackfillCatalogStatus(db)
+	second, err := RevertOffAutoVerifiedCatalogRows(db)
 	require.NoError(t, err)
 	assert.Equal(t, 0, second, "una segunda corrida es no-op")
 }
 
-// TestBackfillCatalogStatus_DoesNotOverrideAlreadyStale verifies a row an
-// operator/job already marked "stale" is never silently flipped back to
-// verified by this backfill.
-func TestBackfillCatalogStatus_DoesNotOverrideAlreadyStale(t *testing.T) {
+// TestRevertOffAutoVerifiedCatalogRows_SkipsPendingAndStaleRows verifies
+// rows that were never verified are left alone.
+func TestRevertOffAutoVerifiedCatalogRows_SkipsPendingAndStaleRows(t *testing.T) {
 	db := setupCatalogStatusDB(t)
-	id := uuid.NewString()
-	checkedAt := time.Now()
-	require.NoError(t, db.Create(&models.CatalogProduct{
-		ID: id, Name: "Enlace caído", Barcode: "4444444444444",
-		ImageURL: "https://images.openfoodfacts.org/x.jpg", Source: "off",
-		Status: "stale", LastCheckedAt: &checkedAt,
-	}).Error)
+	require.NoError(t, db.Exec(`
+		INSERT INTO catalog_products (id, name, barcode, image_url, source, status)
+		VALUES (?, 'Pendiente', '4444444444444', 'https://images.openfoodfacts.org/x.jpg', 'off', 'pending')
+	`, uuid.NewString()).Error)
+	require.NoError(t, db.Exec(`
+		INSERT INTO catalog_products (id, name, barcode, image_url, source, status)
+		VALUES (?, 'Caído', '5555555555555', 'https://images.openfoodfacts.org/x.jpg', 'off', 'stale')
+	`, uuid.NewString()).Error)
 
-	touched, err := BackfillCatalogStatus(db)
+	touched, err := RevertOffAutoVerifiedCatalogRows(db)
 	require.NoError(t, err)
 	assert.Equal(t, 0, touched)
-
-	var row models.CatalogProduct
-	require.NoError(t, db.First(&row, "id = ?", id).Error)
-	assert.Equal(t, "stale", row.Status)
 }

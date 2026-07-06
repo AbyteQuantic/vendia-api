@@ -78,7 +78,10 @@ func TestLookupBarcode_CacheHit_NeverCallsOFF(t *testing.T) {
 
 // TestLookupBarcode_CacheMiss_PersistsResult verifies AC-05: a barcode not
 // yet in the catalog is fetched from OFF and the result is saved so a
-// future lookup of the same barcode hits the cache.
+// future lookup of the same barcode hits the cache — but NEVER as
+// status='verified' (Adenda A: Open Food Facts es respaldo, nunca fuente
+// de verdad; solo el consenso de 2+ tenants verifica, ver
+// TestShareProductPhotoToCatalog_*).
 func TestLookupBarcode_CacheMiss_PersistsResult(t *testing.T) {
 	db := setupLookupBarcodeDB(t)
 
@@ -103,15 +106,53 @@ func TestLookupBarcode_CacheMiss_PersistsResult(t *testing.T) {
 
 	var count int64
 	db.Table("catalog_products").
-		Where("barcode = ? AND status = ?", "7701234567890", "verified").
+		Where("barcode = ? AND status = ?", "7701234567890", "pending").
 		Count(&count)
-	assert.Equal(t, int64(1), count, "el resultado de OFF debe quedar guardado como verified")
+	assert.Equal(t, int64(1), count,
+		"el resultado de OFF queda guardado como respaldo (pending), NUNCA verified por sí solo")
 
 	var license string
 	db.Table("catalog_products").
 		Where("barcode = ?", "7701234567890").
 		Pluck("license", &license)
 	assert.Equal(t, "CC-BY-SA", license)
+}
+
+// TestLookupBarcode_NeverOverwritesTenantContributedRow verifies Adenda A:
+// if a tenant already owns a catalog row for this barcode (source='user'),
+// an OFF cache-miss must never clobber it with lower-quality external data.
+func TestLookupBarcode_NeverOverwritesTenantContributedRow(t *testing.T) {
+	db := setupLookupBarcodeDB(t)
+	require.NoError(t, db.Exec(`
+		INSERT INTO catalog_products (id, name, barcode, source, status, image_url)
+		VALUES ('cp1', 'Foto real del tendero', '7701234567890', 'user', 'pending', 'https://r2.vendia.store/real.jpg')
+	`).Error)
+
+	fakeOFF := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"status": 1,
+			"product": {
+				"product_name": "Nombre genérico OFF",
+				"image_front_url": "https://off.example/mala-calidad.jpg"
+			}
+		}`))
+	}))
+	defer fakeOFF.Close()
+	offSvc := services.NewOpenFoodFactsServiceWithBaseURL(fakeOFF.URL)
+
+	r := mountLookupBarcode(db, offSvc)
+	w := doJSON(t, r, http.MethodGet, "/products/lookup?barcode=7701234567890", nil)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var row struct {
+		ImageURL string
+		Source   string
+	}
+	db.Table("catalog_products").Where("id = ?", "cp1").Scan(&row)
+	assert.Equal(t, "https://r2.vendia.store/real.jpg", row.ImageURL,
+		"la foto del tendero nunca se pisa con la de OFF")
+	assert.Equal(t, "user", row.Source)
 }
 
 // TestLookupBarcode_NotFoundInOFF_ReturnsNotFound verifies the existing

@@ -45,7 +45,7 @@ func DiscoverBarcodesNeedingPhotos(db *gorm.DB, offSvc *services.OpenFoodFactsSe
 		if err != nil || product == nil {
 			continue
 		}
-		if upsertErr := services.UpsertVerifiedCatalogProduct(db, *product); upsertErr == nil {
+		if upsertErr := services.UpsertOffCatalogBackup(db, *product); upsertErr == nil {
 			discovered++
 		}
 		time.Sleep(300 * time.Millisecond) // cortesía con la API pública de OFF
