@@ -63,6 +63,30 @@ func TestShareProductPhotoToCatalog_FirstTenant_StaysPending(t *testing.T) {
 	assert.Equal(t, "pending", status, "un solo tenant no verifica (AC-08)")
 }
 
+// TestShareProductPhotoToCatalog_BackfillsCatalogProductImageURL is a
+// regression test: catalog_products.image_url was staying EMPTY after a
+// tenant shared a photo — the photo only landed in catalog_images
+// (is_accepted=true), never mirrored back onto the product row. That
+// silently broke two features that both read catalog_products.image_url
+// directly: ReferencePhotoByBarcode (Adenda A — nothing to suggest to
+// other tenants even once verified) and findCatalogReferenceImageURL
+// (Adenda B — nothing to anchor "Crear foto con IA" generation to).
+// The first tenant's shared photo must backfill image_url immediately —
+// Adenda B only needs SOME real photo, not a verified one.
+func TestShareProductPhotoToCatalog_BackfillsCatalogProductImageURL(t *testing.T) {
+	db := setupCatalogServiceDB(t)
+	svc := NewCatalogService(db, nil)
+
+	require.NoError(t, svc.ShareProductPhotoToCatalog(
+		"tenant-a", "7702090000012", "Coca-Cola 400ml", "Coca-Cola", "400ml", "", "bebidas",
+		"https://r2.vendia.store/tenant-a/coca.jpg"))
+
+	var imageURL string
+	db.Table("catalog_products").Where("barcode = ?", "7702090000012").Pluck("image_url", &imageURL)
+	assert.Equal(t, "https://r2.vendia.store/tenant-a/coca.jpg", imageURL,
+		"catalog_products.image_url debe reflejar la foto compartida, no quedar vacío")
+}
+
 // TestShareProductPhotoToCatalog_SecondDistinctTenant_Verifies verifies
 // AC-09: a second, independent tenant sharing/confirming a photo for the
 // SAME barcode promotes the catalog product to verified.

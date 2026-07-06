@@ -81,6 +81,17 @@ func main() {
 		log.Printf("[BOOTSTRAP] revert off-auto-verified catalog rows: %d filas devueltas a pending", touched)
 	}
 
+	// Spec 096 Adenda B — repara filas cuya foto compartida por un tenant
+	// quedó SOLO en catalog_images, con catalog_products.image_url vacío
+	// (bug real: rompía la sugerencia a otros tenants y la referencia para
+	// "Crear foto con IA"). El código que escribe ya está arreglado; esto
+	// repara datos ya guardados con el bug. Idempotente.
+	if touched, err := database.BackfillCatalogProductImageURL(db); err != nil {
+		log.Printf("[BOOTSTRAP] backfill catalog product image_url failed: %v", err)
+	} else if touched > 0 {
+		log.Printf("[BOOTSTRAP] backfill catalog product image_url: %d filas reparadas", touched)
+	}
+
 	// Self-heal: every tenant must have at least the "Efectivo"
 	// payment method seeded. Pre-fix tenants registered before the
 	// seed landed and would otherwise render zero chips on the POS.

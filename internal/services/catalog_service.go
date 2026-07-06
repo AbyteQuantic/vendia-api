@@ -255,6 +255,20 @@ func (s *CatalogService) ShareProductPhotoToCatalog(
 			if _, err := s.CreateCatalogImage(cp.ID, tenantID, imageURL, ""); err != nil {
 				return err
 			}
+			// Regression fix: the shared photo used to live ONLY in
+			// catalog_images, leaving catalog_products.image_url empty
+			// forever — silently breaking both ReferencePhotoByBarcode
+			// (nothing to suggest once verified) and
+			// findCatalogReferenceImageURL (Adenda B — nothing to anchor
+			// "Crear foto con IA" to). Mirror the first shared photo onto
+			// the product row immediately; Adenda B only needs SOME real
+			// photo, not a verified one.
+			if cp.ImageURL == "" {
+				if err := s.db.Model(&models.CatalogProduct{}).Where("id = ?", cp.ID).
+					Update("image_url", imageURL).Error; err != nil {
+					return err
+				}
+			}
 		}
 	}
 
