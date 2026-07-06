@@ -1044,6 +1044,24 @@ PHOTOGRAPHY STYLE:
 Output ONLY the finished product photo. No mockups, no frames, no captions.`, name, packagingLine)
 }
 
+// buildGenerateProductWithReferencePrompt reuses buildGenerateProductPrompt's
+// type-safety rules (packaging trap, brand-is-theme-not-object) and prepends
+// instructions for using an attached EXTERNAL reference photo as a visual
+// anchor. Spec 096 Adenda B (2026-07-06): pure text-only generation
+// hallucinated container shape/label design for real branded products
+// (e.g. "Alcohol JGB" rendered as a generic glass bottle instead of the
+// real white plastic bottle with its blue label) — this gives Gemini
+// something real to look at instead of guessing blind from a name alone.
+// The reference is an external photo (Open Food Facts backup or a
+// tenant-verified catalog photo for the same barcode), never the
+// tendero's OWN photo of their product — that case is EnhanceProductPhoto.
+func buildGenerateProductWithReferencePrompt(name, presentation string) string {
+	anchor := `IMPORTANT — attached is a REFERENCE IMAGE of this same product (or a very similar one), found by its barcode. It may be low quality, cropped, poorly lit, or show it alongside other items — that is fine. Use it ONLY to anchor: the container/packaging SHAPE, the LABEL layout and COLOR palette, and any visible logo/brand mark. Re-draw it as a clean e-commerce catalog photo following the style rules below — do not just crop or paste the reference as-is, and do not copy watermarks, other unrelated background objects, or a cluttered scene from it.
+
+`
+	return anchor + buildGenerateProductPrompt(name, presentation)
+}
+
 // GenerateProductImage creates a product image from a product name and
 // optional packaging/presentation (no source photo needed).
 //
@@ -1057,6 +1075,21 @@ Output ONLY the finished product photo. No mockups, no frames, no captions.`, na
 func (s *GeminiService) GenerateProductImage(ctx context.Context, name, presentation string) ([]byte, error) {
 	return s.generateImageFromTextPrompt(ctx,
 		buildGenerateProductPrompt(name, presentation), models.AIFeatureProductImage)
+}
+
+// GenerateProductImageWithReference is like GenerateProductImage but
+// anchors the result to an attached external reference photo (Spec 096
+// Adenda B) instead of generating blind from text alone. Falls back to
+// the plain text-only call when refData is empty, so callers can always
+// use this entry point regardless of whether a reference was found.
+func (s *GeminiService) GenerateProductImageWithReference(ctx context.Context, name, presentation string, refData []byte, refMimeType string) ([]byte, error) {
+	if len(refData) == 0 {
+		return s.GenerateProductImage(ctx, name, presentation)
+	}
+	prompt := buildGenerateProductWithReferencePrompt(name, presentation)
+	return s.enhanceImagesWithPrompt(ctx,
+		[]ReferenceImage{{MimeType: refMimeType, Data: refData}},
+		prompt, models.AIFeatureProductImage, 0.5)
 }
 
 // GenerateDishImage creates a SAMPLE catalog photo of a restaurant dish from

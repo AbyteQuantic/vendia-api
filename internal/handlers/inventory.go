@@ -761,6 +761,31 @@ func GenerateProductImage(db *gorm.DB, geminiSvc *services.GeminiService, storag
 	}
 }
 
+// findCatalogReferenceImageURL looks up a real product photo already on
+// file for this exact barcode — a verified catalog photo (2+ tenants) or
+// an Open Food Facts backup (pending, never overwritten by OFF per Adenda
+// A) — regardless of status, since ANY real photo is a better generation
+// anchor than none. Returns "" when there's no barcode or no match.
+//
+// Spec 096 Adenda B (2026-07-06): closes the gap left by pure text-to-image
+// generation, which hallucinated container shape/label design for real
+// branded products with no visual reference at all.
+func findCatalogReferenceImageURL(db *gorm.DB, barcode string) (string, error) {
+	if strings.TrimSpace(barcode) == "" {
+		return "", nil
+	}
+	var imageURL string
+	err := db.Table("catalog_products").
+		Where("LOWER(barcode) = LOWER(?) AND image_url IS NOT NULL AND image_url != ''", barcode).
+		Order("CASE status WHEN 'verified' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END").
+		Limit(1).
+		Pluck("image_url", &imageURL).Error
+	if err != nil {
+		return "", err
+	}
+	return imageURL, nil
+}
+
 // generateImageWorker builds the background worker for a generate job:
 // run Gemini's GenerateProductImage, upload the result, point both the
 // product photo and image URL at it, and mirror it into the catalog.
@@ -771,9 +796,26 @@ func GenerateProductImage(db *gorm.DB, geminiSvc *services.GeminiService, storag
 // SEPARATE arguments so the packaging never becomes the object drawn.
 func generateImageWorker(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage, catalogSvc *services.CatalogService, product models.Product, tenantID, productUUID, genName, genPresentation string) aiPhotoWorker {
 	return func(ctx context.Context) (string, error) {
-		generated, err := geminiSvc.GenerateProductImage(ctx, genName, genPresentation)
-		if err != nil {
-			return "", fmt.Errorf("error al generar imagen: %w", err)
+		// Spec 096 Adenda B: best-effort — anchor generation to a real
+		// reference photo for this barcode when one exists. Any failure
+		// along this path (no barcode, no match, broken link, Gemini
+		// error) silently falls back to the proven text-only call below;
+		// it must never block or fail the job.
+		var generated []byte
+		if refURL, findErr := findCatalogReferenceImageURL(db, product.Barcode); findErr == nil && refURL != "" {
+			if refData, refMime, dlErr := downloadSourceImage(ctx, refURL); dlErr == nil {
+				if result, refErr := geminiSvc.GenerateProductImageWithReference(ctx, genName, genPresentation, refData, refMime); refErr == nil {
+					generated = result
+				}
+			}
+		}
+
+		if generated == nil {
+			result, err := geminiSvc.GenerateProductImage(ctx, genName, genPresentation)
+			if err != nil {
+				return "", fmt.Errorf("error al generar imagen: %w", err)
+			}
+			generated = result
 		}
 
 		key := fmt.Sprintf("products/%s/%s-generated.png", tenantID, productUUID)
