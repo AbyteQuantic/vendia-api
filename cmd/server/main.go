@@ -70,6 +70,16 @@ func main() {
 		log.Printf("[BOOTSTRAP] default-branch backfill marked %d sedes", touched)
 	}
 
+	// Spec 096 — marca las fotos de catálogo (Open Food Facts) ya
+	// existentes como "verified" para que queden disponibles como
+	// sugerencia de inmediato, sin esperar a que el job de descubrimiento
+	// las re-descubra. Idempotente — solo toca filas status='pending'.
+	if touched, err := database.BackfillCatalogStatus(db); err != nil {
+		log.Printf("[BOOTSTRAP] catalog-status backfill failed: %v", err)
+	} else if touched > 0 {
+		log.Printf("[BOOTSTRAP] catalog-status backfill marked %d fotos", touched)
+	}
+
 	// Self-heal: every tenant must have at least the "Efectivo"
 	// payment method seeded. Pre-fix tenants registered before the
 	// seed landed and would otherwise render zero chips on the POS.
@@ -444,6 +454,11 @@ func main() {
 	// Bearer secret read from CRON_TOKEN inside the handler.
 	r.POST("/api/v1/internal/jobs/expire-quotes", handlers.ExpireQuotesJob(db))
 
+	// Spec 096 — job semanal que descubre fotos de referencia verificadas
+	// (Open Food Facts) para barcodes con demanda real y re-verifica las
+	// ya existentes. Mismo modelo de auth: CRON_TOKEN Bearer, fail-closed.
+	r.POST("/api/v1/internal/jobs/catalog-image-refresh", handlers.CatalogImageRefreshJob(db, offSvc))
+
 	// Spec F033 — public broadcast-promotion link (customer views the
 	// promo + tracks a visit). No JWT: the unguessable public_token is
 	// the only credential, same pattern as the public quote/fiado links.
@@ -611,7 +626,7 @@ func main() {
 		v1.POST("/products/import", handlers.ImportProducts(db))
 		v1.POST("/products/suggest-categories", handlers.SuggestProductCategories(db, geminiSvc)) // Spec 078 — IA infiere categorías (no aplica)
 		v1.POST("/products/categories/bulk", handlers.BulkUpdateCategories(db))                   // Spec 078 — aplica las que el tenant confirmó
-		v1.GET("/products/lookup", handlers.LookupBarcode(offSvc))
+		v1.GET("/products/lookup", handlers.LookupBarcode(db, offSvc))
 		v1.GET("/products/search-off", handlers.SearchProductsOFF(catalogCacheSvc))
 		v1.GET("/products/catalog-sync", handlers.CatalogDump(db))
 		v1.GET("/products/pending-prices", handlers.PendingPrices(db))
@@ -644,6 +659,7 @@ func main() {
 		v1.GET("/catalog/search", handlers.SearchCatalog(catalogSvc, catalogCacheSvc))
 		v1.GET("/catalog/:id/images", handlers.GetCatalogImages(catalogSvc))
 		v1.POST("/catalog/images/:image_id/accept", handlers.AcceptCatalogImage(catalogSvc))
+		v1.GET("/catalog/reference-photo", handlers.ReferencePhotoByBarcode(db))
 
 		// Inventory IA
 		v1.POST("/inventory/scan-invoice", handlers.ScanInvoice(db, geminiSvc, offSvc))

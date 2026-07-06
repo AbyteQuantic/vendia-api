@@ -8,10 +8,11 @@
 #   CRON_TOKEN   el mismo valor configurado como env var CRON_TOKEN en Render
 #
 # Cadencias (cron de GitHub corre en UTC; Colombia = UTC-5):
-#   */30 * * * *  promotions-push   recordatorios de promos programadas (F033)
-#   10 5  * * *   expire-quotes     vence cotizaciones enviadas (F031) — 00:10 COT
-#   0  13 * * *   event-reminders   recordatorios de eventos (F042) — 08:00 COT
-#   0  9  * * 1   scrape-chains     precios de cadenas (Spec 077) — lunes 04:00 COT
+#   */30 * * * *  promotions-push        recordatorios de promos programadas (F033)
+#   10 5  * * *   expire-quotes          vence cotizaciones enviadas (F031) — 00:10 COT
+#   0  13 * * *   event-reminders        recordatorios de eventos (F042) — 08:00 COT
+#   0  9  * * 1   scrape-chains          precios de cadenas (Spec 077) — lunes 04:00 COT
+#   0  10 * * 1   catalog-image-refresh  fotos de referencia por barcode (Spec 096) — lunes 05:00 COT
 #
 # workflow_dispatch corre los TRES (útil para probar de una).
 name: cron-jobs
@@ -23,6 +24,7 @@ on:
     - cron: '0 13 * * *'
     - cron: '0 9 * * 1' # scrape-chains semanal (lunes 04:00 COT) — Spec 077
     - cron: '0 12 * * 1' # capacity-check semanal (lunes 07:00 COT) — Spec 093/091
+    - cron: '0 10 * * 1' # catalog-image-refresh semanal (lunes 05:00 COT) — Spec 096
   workflow_dispatch:
 
 permissions: {}
@@ -83,6 +85,15 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.CRON_TOKEN }}")
           cat /tmp/out.json; echo
           [ "$code" = "200" ] || { echo "::error::scrape-chains HTTP $code"; exit 1; }
+
+      - name: catalog-image-refresh (Spec 096 — semanal, fotos de referencia por barcode)
+        if: always() && (github.event_name == 'workflow_dispatch' || github.event.schedule == '0 10 * * 1')
+        run: |
+          code=$(curl -sS -o /tmp/out.json -w '%{http_code}' --max-time 300 --retry 2 --retry-delay 15 \
+            -X POST "$API/api/v1/internal/jobs/catalog-image-refresh" \
+            -H "Authorization: Bearer ${{ secrets.CRON_TOKEN }}")
+          cat /tmp/out.json; echo
+          [ "$code" = "200" ] || { echo "::error::catalog-image-refresh HTTP $code"; exit 1; }
 
       - name: capacity-check (Spec 093/091 — semanal, avisa al rozar umbral DB)
         # always(): se corre aunque otro paso falle. HTTP 507 = umbral superado →

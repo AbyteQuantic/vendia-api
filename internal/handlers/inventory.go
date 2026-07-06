@@ -325,11 +325,33 @@ func SearchProductsOFF(cacheSvc *services.CatalogCacheService) gin.HandlerFunc {
 	}
 }
 
-func LookupBarcode(offSvc *services.OpenFoodFactsService) gin.HandlerFunc {
+// LookupBarcode busca un producto por código de barras. Consulta primero
+// el catálogo ya verificado (Spec 096 — evita golpear Open Food Facts en
+// vivo en cada escaneo, AC-05); en cache-miss golpea OFF y guarda el
+// resultado para que el próximo escaneo del mismo barcode (de cualquier
+// tenant) lo sirva desde el catálogo.
+func LookupBarcode(db *gorm.DB, offSvc *services.OpenFoodFactsService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		barcode := c.Query("barcode")
 		if barcode == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "barcode requerido"})
+			return
+		}
+
+		var cached models.CatalogProduct
+		err := db.Where("barcode = ? AND status = ?", barcode, "verified").First(&cached).Error
+		if err == nil {
+			c.JSON(http.StatusOK, gin.H{"data": services.OFFProduct{
+				Name:     cached.Name,
+				Brand:    cached.Brand,
+				ImageURL: cached.ImageURL,
+				Barcode:  cached.Barcode,
+				Category: cached.Category,
+			}})
+			return
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al buscar producto"})
 			return
 		}
 
@@ -350,6 +372,12 @@ func LookupBarcode(offSvc *services.OpenFoodFactsService) gin.HandlerFunc {
 		if product == nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "producto no encontrado en Open Food Facts"})
 			return
+		}
+
+		// Errores de caché se registran y se ignoran — nunca deben romper
+		// la respuesta de escaneo que el tendero está esperando (AC-05).
+		if cacheErr := services.UpsertVerifiedCatalogProduct(db, *product); cacheErr != nil {
+			log.Printf("[CATALOG] upsert verified catalog product %s failed: %v", product.Barcode, cacheErr)
 		}
 
 		c.JSON(http.StatusOK, gin.H{"data": product})
