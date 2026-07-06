@@ -69,7 +69,7 @@ REGLAS ABSOLUTAS (no inventar):
 5. Trate al tendero de USTED en cualquier "clarify_prompt".
 
 ACCIONES PERMITIDAS (campo "action"):
-- "agregar": sumar unidades de un producto. Verbos: deme, agregue, eche, anada, otra, una mas, pongame. Por defecto quantity=1 si no se dice numero.
+- "agregar": sumar unidades de un producto. Verbos: deme, agregue, eche, anada, otra, una mas, pongame, vendo, vendame, vende, venda, lleva, llevo. IMPORTANTE: el verbo NO es parte del producto; "vendo tres empanadas" -> action="agregar", item="empanada" (nombre del producto solo, en singular si es natural), quantity=3. Por defecto quantity=1 si no se dice numero.
 - "quitar": quitar un producto. "quite la gaseosa" (sin numero) = quitar TODO ese producto -> quantity=null. "quite dos aguilas" = restar 2 -> quantity=2.
 - "fijar_cantidad": dejar un producto en una cantidad EXACTA (total). Verbos: que sean, dejelo en, ponga ... en total. REQUIERE numero; si no hay numero, NO use esta accion (use "agregar").
 - "vaciar": borrar toda la orden actual. "borre todo", "empecemos de nuevo", "cancele la cuenta". item=null.
