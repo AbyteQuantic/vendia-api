@@ -405,6 +405,36 @@ func TestBuildGenerateProductPrompt_EmptyPresentation(t *testing.T) {
 		"white-background anchor must always be present")
 }
 
+// TestBuildGenerateProductWithReferencePrompt_MentionsReferenceAnchor
+// verifies Spec 096 Adenda B: the reference-aware prompt explicitly tells
+// Gemini it has an attached external reference image to anchor container
+// shape/label/colors — and never claims it as the tendero's OWN photo
+// (that phrasing belongs to EnhanceProductPhoto's fidelity prompt, not
+// here — this is still fully generative, just less blind).
+func TestBuildGenerateProductWithReferencePrompt_MentionsReferenceAnchor(t *testing.T) {
+	prompt := buildGenerateProductWithReferencePrompt("Alcohol JGB", "Botella")
+
+	for _, s := range []string{"REFERENCE IMAGE", "SHAPE", "LABEL", "COLOR"} {
+		assert.Contains(t, prompt, s,
+			"reference-anchor instruction missing: %q", s)
+	}
+	assert.NotContains(t, prompt, "tendero",
+		"must not claim this is the merchant's own photo — it's an external reference")
+}
+
+// TestBuildGenerateProductWithReferencePrompt_KeepsTypeSafetyRules verifies
+// the reference-aware prompt still carries the same product-type/packaging
+// safety rules as the plain text-only prompt (Spec 021) — adding a
+// reference image must never relax those.
+func TestBuildGenerateProductWithReferencePrompt_KeepsTypeSafetyRules(t *testing.T) {
+	prompt := buildGenerateProductWithReferencePrompt("Llavero Hello Kitty", "Bolsa")
+
+	for _, s := range []string{"main noun", "TYPE of product", "purse", "wallet"} {
+		assert.Contains(t, prompt, s,
+			"type-safety anchor missing from reference-aware prompt: %q", s)
+	}
+}
+
 // parseUprightRotation es el fail-safe de EstimateUprightRotation: cualquier
 // respuesta no interpretable de Gemini debe devolver error (el caller —
 // uprightRotation en inventory.go — trata error como 0/no-rotar), nunca un
