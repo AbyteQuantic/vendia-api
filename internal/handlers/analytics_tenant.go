@@ -32,10 +32,21 @@ func AnalyticsDashboard(db *gorm.DB) gin.HandlerFunc {
 			Select("COALESCE(SUM(total_amount - paid_amount), 0)").
 			Scan(&totalCredit)
 
+		// Misma definición de "producto vendible" que ListProducts con
+		// sellable_only=true (Spec 078): un plato de menú sin receta
+		// costeable no cuenta. Sin esto la tarjeta "Inventario" del
+		// Dashboard mostraba un número mayor que "Mi Inventario" para
+		// la MISMA sede, confundiendo al dueño (reporte 2026-07-06).
 		var productCount int64
-		ApplyBranchScope(db.Model(&models.Product{}), scope).
-			Where("tenant_id = ? AND is_available = true", tenantID).
-			Count(&productCount)
+		productQuery := ApplyBranchScope(db.Model(&models.Product{}), scope).
+			Where("tenant_id = ? AND is_available = true", tenantID)
+		completeMenuIDs := completeMenuProductIDs(db, tenantID)
+		if len(completeMenuIDs) > 0 {
+			productQuery = productQuery.Where("is_menu_item = ? OR id IN ?", false, completeMenuIDs)
+		} else {
+			productQuery = productQuery.Where("is_menu_item = ?", false)
+		}
+		productQuery.Count(&productCount)
 
 		var lowStockCount int64
 		ApplyBranchScope(db.Model(&models.Product{}), scope).
