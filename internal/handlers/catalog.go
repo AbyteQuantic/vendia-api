@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
 	"vendia-backend/internal/services"
 
@@ -122,5 +123,46 @@ func ReferencePhotoByBarcode(db *gorm.DB) gin.HandlerFunc {
 			"brand":              row.Brand,
 			"name":               row.Name,
 		}})
+	}
+}
+
+// ShareProductPhotoToCatalog — POST /api/v1/products/:id/share-to-catalog
+// Spec 096 Adenda A. El tendero, tras confirmar explícitamente (el frontend
+// SIEMPRE pregunta antes de llamar este endpoint — nunca automático), comparte
+// la foto de SU producto para ayudar a otros tenderos con el mismo barcode.
+// Requiere que el producto (del propio tenant) tenga barcode + foto.
+func ShareProductPhotoToCatalog(db *gorm.DB, catalogSvc *services.CatalogService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+		productID := c.Param("id")
+
+		var product models.Product
+		if err := db.Where("id = ? AND tenant_id = ?", productID, tenantID).First(&product).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "producto no encontrado"})
+			return
+		}
+
+		if product.Barcode == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "el producto no tiene código de barras"})
+			return
+		}
+		photo := product.PhotoURL
+		if photo == "" {
+			photo = product.ImageURL
+		}
+		if photo == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "el producto no tiene foto para compartir"})
+			return
+		}
+
+		err := catalogSvc.ShareProductPhotoToCatalog(
+			tenantID, product.Barcode, product.Name, "", product.Presentation, product.Content, product.Category, photo,
+		)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo compartir la foto"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "foto compartida, gracias por ayudar a otros tenderos"})
 	}
 }

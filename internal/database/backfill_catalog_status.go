@@ -1,4 +1,4 @@
-// Spec: specs/096-foto-referencia-verificada/spec.md
+// Spec: specs/096-foto-referencia-verificada/spec.md (Adenda A)
 package database
 
 import (
@@ -8,29 +8,31 @@ import (
 	"gorm.io/gorm"
 )
 
-// BackfillCatalogStatus marks pre-existing Open Food Facts catalog rows
-// (source='off', already carrying a real image_url) as status='verified',
-// so they're immediately eligible for suggestion without waiting for the
-// new discovery job to re-fetch data it already has.
+// RevertOffAutoVerifiedCatalogRows corrects a mistake from the original
+// (pre-Adenda A) version of this backfill: it used to mark every
+// pre-existing Open Food Facts row as status='verified' on boot. Adenda A
+// (2026-07-06): el fundador probó OFF en producción y encontró cobertura
+// pobre de Colombia + fotos de mala calidad — OFF NUNCA debe ser la fuente
+// de la verdad. Solo 2+ tenants distintos compartiendo su propia foto
+// (CatalogService.ShareProductPhotoToCatalog) puede verificar una fila.
 //
-// Idempotency (Art. II): only touches rows with status='pending' (the
-// default for every row before this backfill and for any not yet reviewed)
-// — a row already 'verified' or 'stale' (set by the discovery/refresh job
-// or a prior run of this backfill) is never re-touched. Safe to run on
-// every boot.
-func BackfillCatalogStatus(db *gorm.DB) (int, error) {
+// This reverts any row the old backfill already verified back to
+// 'pending' — those rows had zero tenant confirmation, only an OFF import.
+//
+// Idempotency (Art. II): only touches rows with source='off' AND
+// status='verified' — once reverted, a row is 'pending' and never matches
+// again. Safe to run on every boot.
+func RevertOffAutoVerifiedCatalogRows(db *gorm.DB) (int, error) {
 	res := db.Exec(`
 		UPDATE catalog_products
-		SET status = 'verified',
-		    verified_at = COALESCE(fetched_at, CURRENT_TIMESTAMP),
-		    license = 'CC-BY-SA'
-		WHERE source = 'off' AND image_url != '' AND status = 'pending'`)
+		SET status = 'pending', verified_at = NULL
+		WHERE source = 'off' AND status = 'verified'`)
 	if res.Error != nil {
-		return 0, fmt.Errorf("backfill catalog status: %w", res.Error)
+		return 0, fmt.Errorf("revert off auto-verified catalog rows: %w", res.Error)
 	}
 	touched := int(res.RowsAffected)
 	if touched > 0 {
-		log.Printf("[BOOTSTRAP] backfill catalog status: %d fotos OFF existentes marcadas verified", touched)
+		log.Printf("[BOOTSTRAP] revert off auto-verified catalog rows: %d filas OFF sin consenso de tenants devueltas a pending", touched)
 	}
 	return touched, nil
 }

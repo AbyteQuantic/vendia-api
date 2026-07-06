@@ -214,6 +214,66 @@ func (s *CatalogService) SearchCatalogWithFallback(ctx context.Context, query st
 	return results, nil
 }
 
+// ShareProductPhotoToCatalog registers a tenant's EXPLICIT consent to
+// share their own product photo into the shared catalog, keyed by
+// barcode. Spec 096 Adenda A (2026-07-06): Open Food Facts proved to
+// have poor coverage for Colombian products and low-quality images —
+// tenant-contributed photos are the real source of truth now. A single
+// tenant's share is not enough signal on its own (they could be wrong
+// about their own product, or the photo could be bad) — the catalog
+// product only becomes `status='verified'` (eligible for
+// ReferencePhotoByBarcode to suggest to OTHER tenants) once at least 2
+// DISTINCT tenants have independently shared/confirmed a photo for the
+// same barcode. The same tenant sharing twice never counts twice.
+func (s *CatalogService) ShareProductPhotoToCatalog(
+	tenantID, barcode, name, brand, presentation, content, category, imageURL string,
+) error {
+	if barcode == "" {
+		return fmt.Errorf("código de barras requerido para compartir")
+	}
+	if imageURL == "" {
+		return fmt.Errorf("foto requerida para compartir")
+	}
+
+	cp, err := s.FindOrCreateCatalogProduct(barcode, name, brand, presentation, content, category)
+	if err != nil {
+		return err
+	}
+
+	var alreadySharedByTenant int64
+	if err := s.db.Model(&models.CatalogImage{}).
+		Where("catalog_product_id = ? AND created_by_tenant_id = ? AND is_accepted = true", cp.ID, tenantID).
+		Count(&alreadySharedByTenant).Error; err != nil {
+		return err
+	}
+	if alreadySharedByTenant == 0 {
+		count, err := s.CountAcceptedImages(cp.ID)
+		if err != nil {
+			return err
+		}
+		if count < 3 {
+			if _, err := s.CreateCatalogImage(cp.ID, tenantID, imageURL, ""); err != nil {
+				return err
+			}
+		}
+	}
+
+	var distinctTenants int64
+	if err := s.db.Model(&models.CatalogImage{}).
+		Where("catalog_product_id = ? AND is_accepted = true", cp.ID).
+		Distinct("created_by_tenant_id").
+		Count(&distinctTenants).Error; err != nil {
+		return err
+	}
+	if distinctTenants >= 2 && cp.Status != "verified" {
+		now := time.Now()
+		return s.db.Model(&models.CatalogProduct{}).Where("id = ?", cp.ID).Updates(map[string]any{
+			"status": "verified", "verified_at": now, "source": "user",
+		}).Error
+	}
+	return nil
+}
+
 // PromoteInUseImages marks as accepted every catalog image that is already
 // referenced by a product's photo_url/image_url. This is a safety net so a
 // stale cleanup run can never delete a bucket file that a merchant's live

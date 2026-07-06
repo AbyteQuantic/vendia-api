@@ -70,14 +70,15 @@ func main() {
 		log.Printf("[BOOTSTRAP] default-branch backfill marked %d sedes", touched)
 	}
 
-	// Spec 096 — marca las fotos de catálogo (Open Food Facts) ya
-	// existentes como "verified" para que queden disponibles como
-	// sugerencia de inmediato, sin esperar a que el job de descubrimiento
-	// las re-descubra. Idempotente — solo toca filas status='pending'.
-	if touched, err := database.BackfillCatalogStatus(db); err != nil {
-		log.Printf("[BOOTSTRAP] catalog-status backfill failed: %v", err)
+	// Spec 096 Adenda A (2026-07-06) — corrige el backfill original: OFF
+	// nunca debe ser la fuente de la verdad (cobertura pobre + fotos de
+	// mala calidad). Revierte cualquier fila que ese backfill haya
+	// marcado "verified" sin consenso real de tenants. Idempotente —
+	// solo toca filas source='off' AND status='verified'.
+	if touched, err := database.RevertOffAutoVerifiedCatalogRows(db); err != nil {
+		log.Printf("[BOOTSTRAP] revert off-auto-verified catalog rows failed: %v", err)
 	} else if touched > 0 {
-		log.Printf("[BOOTSTRAP] catalog-status backfill marked %d fotos", touched)
+		log.Printf("[BOOTSTRAP] revert off-auto-verified catalog rows: %d filas devueltas a pending", touched)
 	}
 
 	// Self-heal: every tenant must have at least the "Efectivo"
@@ -642,6 +643,9 @@ func main() {
 		v1.DELETE("/products/:id/media/:mediaId", handlers.DeleteProductMedia(db, storageSvc))
 		v1.POST("/products/:id/enhance", handlers.EnhanceProductPhoto(db, geminiSvc, storageSvc, catalogSvc))
 		v1.POST("/products/:id/generate-image", handlers.GenerateProductImage(db, geminiSvc, storageSvc, catalogSvc))
+		// Spec 096 Adenda A — consentimiento explícito para compartir la foto
+		// propia al catálogo compartido (nunca automático).
+		v1.POST("/products/:id/share-to-catalog", handlers.ShareProductPhotoToCatalog(db, catalogSvc))
 		// Spec 095 -- variantes de producto (talla/color).
 		v1.POST("/products/:id/adopt-variant-group", handlers.AdoptProductToVariantGroup(db))
 		v1.GET("/product-variant-groups", handlers.ListVariantGroups(db))
