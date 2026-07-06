@@ -2,9 +2,11 @@ package handlers
 
 import (
 	"net/http"
+	"vendia-backend/internal/models"
 	"vendia-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 func SearchCatalog(catalogSvc *services.CatalogService, cacheSvc *services.CatalogCacheService) gin.HandlerFunc {
@@ -92,5 +94,33 @@ func AcceptCatalogImage(catalogSvc *services.CatalogService) gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, gin.H{"message": "imagen aceptada"})
+	}
+}
+
+// ReferencePhotoByBarcode — GET /api/v1/catalog/reference-photo?barcode=
+// Spec 096. Devuelve la foto de catálogo verificada para un código de
+// barras EXACTO, o 404 si no hay ninguna (AC-04: sin match, el frontend
+// simplemente no muestra la sugerencia — nunca un error visible).
+func ReferencePhotoByBarcode(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		barcode := c.Query("barcode")
+		if barcode == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "barcode requerido"})
+			return
+		}
+
+		var row models.CatalogProduct
+		err := db.Where("barcode = ? AND status = ?", barcode, "verified").First(&row).Error
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "sin foto de referencia para este barcode"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"data": gin.H{
+			"catalog_product_id": row.ID,
+			"image_url":          row.ImageURL,
+			"brand":              row.Brand,
+			"name":               row.Name,
+		}})
 	}
 }

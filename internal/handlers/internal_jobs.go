@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"vendia-backend/internal/jobs"
+	"vendia-backend/internal/services"
 	"vendia-backend/internal/services/email"
 	"vendia-backend/internal/services/push"
 
@@ -183,6 +184,39 @@ func CapacityCheckJob(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		c.JSON(http.StatusOK, body)
+	}
+}
+
+// CatalogImageRefreshJob — POST /api/v1/internal/jobs/catalog-image-refresh
+// (Spec 096). Same auth model as the other internal jobs: no JWT, gated
+// by the shared CRON_TOKEN Bearer secret, fail-closed when unset.
+//
+// Runs both halves of the weekly catalog maintenance: discover barcodes
+// with real tenant demand and cache a verified photo for them, then
+// re-check verified entries older than a month for broken links.
+func CatalogImageRefreshJob(db *gorm.DB, offSvc *services.OpenFoodFactsService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !cronAuthOK(c) {
+			return
+		}
+
+		discovered, err := jobs.DiscoverBarcodesNeedingPhotos(db, offSvc, 50)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "no se pudo ejecutar el descubrimiento de fotos",
+			})
+			return
+		}
+
+		refreshed, err := jobs.RefreshStaleCatalogEntries(db)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "no se pudo ejecutar el refresco de fotos",
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"discovered": discovered, "refreshed": refreshed})
 	}
 }
 

@@ -20,6 +20,19 @@ type CatalogProduct struct {
 	FetchedAt      *time.Time `gorm:"index" json:"-"`
 	CreatedAt      time.Time  `json:"-"`
 	UpdatedAt      time.Time  `json:"-"`
+
+	// Spec 096 — catálogo de fotos de referencia verificadas por barcode.
+	// Status: "pending" (recién descubierta, aún no vetada) | "verified"
+	// (imagen confirmada accesible, se puede sugerir) | "stale" (dejó de
+	// responder en la re-verificación mensual, no se sugiere más).
+	Status        string     `gorm:"default:'pending'" json:"status"`
+	VerifiedAt    *time.Time `json:"verified_at,omitempty"`
+	LastCheckedAt *time.Time `json:"last_checked_at,omitempty"`
+	// License / SourceURL: trazabilidad de la fuente para cumplimiento de
+	// licencia (ej. "CC-BY-SA" + URL original en Open Food Facts). Solo
+	// interno — nunca mostrado al tendero (decisión de /clarify).
+	License   string `json:"license,omitempty"`
+	SourceURL string `json:"source_url,omitempty"`
 }
 
 func (CatalogProduct) TableName() string {

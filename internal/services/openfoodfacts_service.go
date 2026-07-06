@@ -22,6 +22,16 @@ func NewOpenFoodFactsService() *OpenFoodFactsService {
 	}
 }
 
+// NewOpenFoodFactsServiceWithBaseURL builds a service pointed at a custom
+// base URL — used by tests to stub the OFF API with an httptest.Server
+// instead of hitting the real network.
+func NewOpenFoodFactsServiceWithBaseURL(baseURL string) *OpenFoodFactsService {
+	return &OpenFoodFactsService{
+		baseURL: baseURL,
+		client:  &http.Client{Timeout: 10 * time.Second},
+	}
+}
+
 type OFFProduct struct {
 	Name     string `json:"name"`
 	Brand    string `json:"brand,omitempty"`

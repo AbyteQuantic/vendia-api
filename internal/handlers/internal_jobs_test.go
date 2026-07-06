@@ -9,6 +9,7 @@ import (
 
 	"vendia-backend/internal/handlers"
 	"vendia-backend/internal/models"
+	"vendia-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -153,4 +154,55 @@ func TestPromotionsPushJob_AuthAndRun(t *testing.T) {
 	var stored models.BroadcastPromotion
 	require.NoError(t, db.First(&stored, "id = ?", "11111111-1111-1111-1111-111111111111").Error)
 	assert.True(t, stored.SchedulePushSent, "la promo notificada queda marcada")
+}
+
+// TestCatalogImageRefreshJob_AuthAndRun covers the CRON_TOKEN gate of the
+// Spec 096 internal job endpoint, same auth model as the other internal
+// jobs, and confirms it runs both DiscoverBarcodesNeedingPhotos and
+// RefreshStaleCatalogEntries and reports their counts.
+func TestCatalogImageRefreshJob_AuthAndRun(t *testing.T) {
+	db := setupLookupBarcodeDB(t)
+	require.NoError(t, db.Exec(`
+		CREATE TABLE products (
+			id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL,
+			barcode TEXT, image_url TEXT, deleted_at DATETIME
+		);
+	`).Error)
+	require.NoError(t, db.Exec(
+		`INSERT INTO products (id, tenant_id, barcode, image_url) VALUES ('p1', 't1', '7702090000012', '')`,
+	).Error)
+
+	fakeOFF := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":1,"product":{"product_name":"Producto","image_front_url":"https://off.example/x.jpg"}}`))
+	}))
+	defer fakeOFF.Close()
+	offSvc := services.NewOpenFoodFactsServiceWithBaseURL(fakeOFF.URL)
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.POST("/api/v1/internal/jobs/catalog-image-refresh", handlers.CatalogImageRefreshJob(db, offSvc))
+
+	call := func(authHeader string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		req, _ := http.NewRequest(http.MethodPost,
+			"/api/v1/internal/jobs/catalog-image-refresh", nil)
+		if authHeader != "" {
+			req.Header.Set("Authorization", authHeader)
+		}
+		r.ServeHTTP(w, req)
+		return w
+	}
+
+	t.Setenv("CRON_TOKEN", "")
+	assert.Equal(t, http.StatusServiceUnavailable, call("Bearer anything").Code,
+		"sin CRON_TOKEN el endpoint debe fallar cerrado (503)")
+
+	t.Setenv("CRON_TOKEN", "s3cr3t-cron-token")
+	assert.Equal(t, http.StatusUnauthorized, call("Bearer wrong").Code,
+		"token de cron incorrecto → 401")
+
+	w := call("Bearer s3cr3t-cron-token")
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), `"discovered":1`)
 }
