@@ -675,6 +675,8 @@ func main() {
 		v1.GET("/catalog/:id/images", handlers.GetCatalogImages(catalogSvc))
 		v1.POST("/catalog/images/:image_id/accept", handlers.AcceptCatalogImage(catalogSvc))
 		v1.GET("/catalog/reference-photo", handlers.ReferencePhotoByBarcode(db))
+		// Spec 097 — sugerencias de foto en LOTE para completar el inventario.
+		v1.POST("/catalog/reference-photos", handlers.ReferencePhotosByBarcodes(db))
 
 		// Inventory IA
 		v1.POST("/inventory/scan-invoice", handlers.ScanInvoice(db, geminiSvc, offSvc))
