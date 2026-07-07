@@ -145,6 +145,7 @@ func TestRegisterCaptcha_ConTokenDePrueba(t *testing.T) {
 		"config": map[string]interface{}{
 			"sale_types": []string{"products"},
 		},
+		"accept_terms": true, // Spec 098
 	}
 
 	body, _ := json.Marshal(payload)
