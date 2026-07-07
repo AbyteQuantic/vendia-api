@@ -17,6 +17,10 @@ type TenantRegisterRequest struct {
 	Business  BusinessInput   `json:"business"  binding:"required"`
 	Config    ConfigInput     `json:"config"    binding:"required"`
 	Employees []EmployeeInput `json:"employees"`
+	// Spec 098 — aceptación de Términos (incluye uso colaborativo de imágenes).
+	// Fail-closed: sin aceptación no se crea la cuenta. La UI lo captura con un
+	// checkbox obligatorio.
+	AcceptTerms bool `json:"accept_terms"`
 }
 
 type OwnerInput struct {
@@ -66,6 +70,13 @@ func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 		var req TenantRegisterRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Spec 098 — fail-closed: no se crea la cuenta sin aceptar los términos
+		// (incluida la cláusula de uso colaborativo de imágenes).
+		if !req.AcceptTerms {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "debe aceptar los Términos y Servicios para crear la cuenta"})
 			return
 		}
 
@@ -167,6 +178,9 @@ func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 				EnableQuotes:             caps.Quotes,
 				// OnboardingCompleted is left as its zero value (false):
 				// every new tenant sees the onboarding wizard once.
+				// Spec 098 — aceptación de términos capturada en el registro.
+				TermsAcceptedVersion: models.CatalogTermsVersion,
+				TermsAcceptedAt:      func() *time.Time { t := time.Now(); return &t }(),
 			}
 			if err := tx.Create(&tenant).Error; err != nil {
 				return err

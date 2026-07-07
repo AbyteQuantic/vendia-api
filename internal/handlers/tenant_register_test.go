@@ -98,17 +98,19 @@ type employeePayload struct {
 }
 
 type fullRegisterPayload struct {
-	Owner     ownerPayload      `json:"owner"`
-	Business  businessPayload   `json:"business"`
-	Config    configPayload     `json:"config"`
-	Employees []employeePayload `json:"employees,omitempty"`
+	Owner       ownerPayload      `json:"owner"`
+	Business    businessPayload   `json:"business"`
+	Config      configPayload     `json:"config"`
+	Employees   []employeePayload `json:"employees,omitempty"`
+	AcceptTerms bool              `json:"accept_terms"` // Spec 098
 }
 
 func defaultPayload(phone string) fullRegisterPayload {
 	return fullRegisterPayload{
-		Owner:    ownerPayload{Name: "Test Owner", Phone: phone, Password: "1234"},
-		Business: businessPayload{Name: "Test Store", Type: "tienda_barrio"},
-		Config:   configPayload{SaleTypes: []string{"products"}},
+		Owner:       ownerPayload{Name: "Test Owner", Phone: phone, Password: "1234"},
+		Business:    businessPayload{Name: "Test Store", Type: "tienda_barrio"},
+		Config:      configPayload{SaleTypes: []string{"products"}},
+		AcceptTerms: true, // Spec 098 — el registro exige aceptar términos
 	}
 }
 

@@ -51,6 +51,11 @@ type AuthResponse struct {
 	Role     string `json:"role,omitempty"`
 	BranchID string `json:"branch_id,omitempty"`
 	UserID   string `json:"user_id,omitempty"`
+	// Spec 098 — true si el tenant no aceptó la versión vigente de los términos
+	// (incluye la cláusula colaborativa). La app muestra un modal de
+	// re-aceptación bloqueante en el próximo ingreso. Los registros nuevos ya
+	// aceptaron, así que llega false.
+	TermsAcceptanceRequired bool `json:"terms_acceptance_required"`
 }
 
 // applyCapabilityFlags copia las columnas de capacidad top-level del tenant a
@@ -68,6 +73,8 @@ func applyCapabilityFlags(resp *AuthResponse, t models.Tenant) {
 	resp.EnablePurchaseOrders = t.EnablePurchaseOrders
 	resp.EnablePriceTiers = t.EnablePriceTiers
 	resp.EnableProductVariants = t.EnableProductVariants
+	// Spec 098 — pide re-aceptar si no aceptó la versión vigente de términos.
+	resp.TermsAcceptanceRequired = !t.AcceptedCurrentTerms()
 }
 
 func createTokenPair(db *gorm.DB, tenant models.Tenant, jwtSecret string) (*AuthResponse, error) {
