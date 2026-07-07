@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
 	"vendia-backend/internal/services"
@@ -123,6 +124,69 @@ func ReferencePhotoByBarcode(db *gorm.DB) gin.HandlerFunc {
 			"brand":              row.Brand,
 			"name":               row.Name,
 		}})
+	}
+}
+
+// ReferencePhotosByBarcodes — POST /api/v1/catalog/reference-photos
+// Spec 097. Body {"barcodes":[...]}. Devuelve un mapa barcode→foto sugerida
+// del catálogo para completar productos sin imagen en LOTE. Por cada barcode
+// elige la mejor: VERIFICADA (consenso 2+ tiendas) primero; si no hay, el
+// respaldo pending (Open Food Facts). Solo filas CON imagen. `verified` le dice
+// al frontend cómo marcar la sugerencia. Acota a 200 barcodes por request.
+func ReferencePhotosByBarcodes(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Barcodes []string `json:"barcodes"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "cuerpo inválido"})
+			return
+		}
+
+		seen := make(map[string]struct{})
+		codes := make([]string, 0, len(req.Barcodes))
+		for _, b := range req.Barcodes {
+			b = strings.TrimSpace(b)
+			if b == "" {
+				continue
+			}
+			if _, ok := seen[b]; ok {
+				continue
+			}
+			seen[b] = struct{}{}
+			codes = append(codes, b)
+			if len(codes) >= 200 {
+				break
+			}
+		}
+
+		out := gin.H{}
+		if len(codes) == 0 {
+			c.JSON(http.StatusOK, gin.H{"data": out})
+			return
+		}
+
+		var rows []models.CatalogProduct
+		db.Where("barcode IN ? AND image_url <> ''", codes).Find(&rows)
+
+		// Por barcode, verified le gana a pending; si empatan, la primera.
+		best := make(map[string]models.CatalogProduct, len(rows))
+		for _, row := range rows {
+			cur, ok := best[row.Barcode]
+			if !ok || (cur.Status != "verified" && row.Status == "verified") {
+				best[row.Barcode] = row
+			}
+		}
+		for bc, row := range best {
+			out[bc] = gin.H{
+				"catalog_product_id": row.ID,
+				"image_url":          row.ImageURL,
+				"brand":              row.Brand,
+				"name":               row.Name,
+				"verified":           row.Status == "verified",
+			}
+		}
+		c.JSON(http.StatusOK, gin.H{"data": out})
 	}
 }
 
