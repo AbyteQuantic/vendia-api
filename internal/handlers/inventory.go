@@ -384,7 +384,7 @@ func LookupBarcode(db *gorm.DB, offSvc *services.OpenFoodFactsService) gin.Handl
 	}
 }
 
-func UploadProductPhoto(db *gorm.DB, storageSvc services.FileStorage) gin.HandlerFunc {
+func UploadProductPhoto(db *gorm.DB, storageSvc services.FileStorage, geminiSvc *services.GeminiService, catalogSvc *services.CatalogService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
 		productUUID := c.Param("id")
@@ -429,6 +429,10 @@ func UploadProductPhoto(db *gorm.DB, storageSvc services.FileStorage) gin.Handle
 		}
 
 		db.Model(&product).Update("photo_url", photoURL)
+
+		// Spec 098 Fase 2: aporte automático al catálogo compartido (fire-and-
+		// forget). Recarga desde BD para tener todos los campos frescos.
+		autoContributePhoto(db, catalogSvc, geminiSvc, tenantID, productUUID)
 
 		c.JSON(http.StatusOK, gin.H{"data": gin.H{"photo_url": photoURL}})
 	}
@@ -713,8 +717,29 @@ func enhancePhotoWorker(db *gorm.DB, geminiSvc *services.GeminiService, storageS
 		// Spec 096 Adenda A: ya NO se aporta al catálogo compartido en
 		// silencio aquí — el tendero debe compartirla explícitamente vía
 		// POST /products/:id/share-to-catalog (ShareProductPhotoToCatalog).
+		//
+		// Spec 098 Fase 2: APORTE AUTOMÁTICO (distinto del share explícito).
+		// Fire-and-forget: recargar el producto ya con la foto nueva y dejar
+		// que CatalogService decida (barcode retail válido + campos completos +
+		// términos aceptados + IA confirma). Nunca bloquea ni rompe el job.
+		autoContributePhoto(db, catalogSvc, geminiSvc, tenantID, productUUID)
 		return newURL, nil
 	}
+}
+
+// autoContributePhoto recarga el producto (los workers a veces sólo tienen el
+// id) y lanza el aporte automático al catálogo en una goroutine para no
+// bloquear la respuesta del job. Spec 098 Fase 2. Fire-and-forget: cualquier
+// fallo se traga dentro de AutoContributeProductPhoto.
+func autoContributePhoto(db *gorm.DB, catalogSvc *services.CatalogService, geminiSvc *services.GeminiService, tenantID, productUUID string) {
+	if catalogSvc == nil {
+		return
+	}
+	var fresh models.Product
+	if err := db.Where("id = ? AND tenant_id = ?", productUUID, tenantID).First(&fresh).Error; err != nil {
+		return
+	}
+	go catalogSvc.AutoContributeProductPhoto(context.Background(), geminiSvc, tenantID, fresh)
 }
 
 // GenerateProductImage queues an asynchronous "generar foto con IA"
@@ -836,6 +861,9 @@ func generateImageWorker(db *gorm.DB, geminiSvc *services.GeminiService, storage
 		// Spec 096 Adenda A: ya NO se aporta al catálogo compartido en
 		// silencio aquí — el tendero debe compartirla explícitamente vía
 		// POST /products/:id/share-to-catalog (ShareProductPhotoToCatalog).
+		//
+		// Spec 098 Fase 2: aporte automático (ver enhancePhotoWorker).
+		autoContributePhoto(db, catalogSvc, geminiSvc, tenantID, productUUID)
 		return newURL, nil
 	}
 }

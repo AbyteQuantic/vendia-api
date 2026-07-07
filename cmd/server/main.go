@@ -643,7 +643,7 @@ func main() {
 		v1.GET("/products/catalog-sync", handlers.CatalogDump(db))
 		v1.GET("/products/pending-prices", handlers.PendingPrices(db))
 		v1.PATCH("/products/:id/price", handlers.SetProductPrice(db))
-		v1.POST("/products/:id/photo", handlers.UploadProductPhoto(db, storageSvc))
+		v1.POST("/products/:id/photo", handlers.UploadProductPhoto(db, storageSvc, geminiSvc, catalogSvc))
 		// Spec 070 — galería multimedia (imágenes extra + YouTube + video ≤25s).
 		v1.GET("/products/:id/media", handlers.ListProductMedia(db))
 		v1.POST("/products/:id/media/image", handlers.AddProductMediaImage(db, storageSvc))
