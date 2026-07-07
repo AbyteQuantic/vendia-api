@@ -54,7 +54,8 @@ func setupCapFlagsDB(t *testing.T) *gorm.DB {
 			enable_supplies INTEGER DEFAULT 0,
 			enable_furniture_jobs INTEGER DEFAULT 0,
 			enable_purchase_orders INTEGER DEFAULT 0,
-			enable_price_tiers INTEGER DEFAULT 0
+			enable_price_tiers INTEGER DEFAULT 0,
+			terms_accepted_version TEXT DEFAULT '' -- Spec 098
 		);
 		CREATE TABLE branches (
 			id TEXT PRIMARY KEY, created_at DATETIME, updated_at DATETIME,

@@ -2,6 +2,12 @@ package models
 
 import "time"
 
+// CatalogTermsVersion — versión vigente de los Términos que incluye la cláusula
+// de uso COLABORATIVO de imágenes (Spec 098). Un tenant cuyo
+// TermsAcceptedVersion sea distinto debe re-aceptar en el próximo ingreso.
+// Cambiar esta constante cuando la cláusula cambie fuerza re-aceptación global.
+const CatalogTermsVersion = "2026-07-07"
+
 // Unified business-type taxonomy (see migration 020).
 // The DB enforces the same whitelist via validate_business_types().
 // Keep this list in sync with DefaultFeatureFlags and with the Flutter
@@ -312,6 +318,15 @@ type Tenant struct {
 	// pre-F036 read is well-defined (Constitución Art. X).
 	OnboardingCompleted bool `gorm:"not null;default:false" json:"onboarding_completed"`
 
+	// Spec 098 — aceptación de Términos y Servicios (incluye la cláusula de uso
+	// COLABORATIVO de imágenes de producto: las fotos con barcode válido pueden
+	// sugerirse a otras tiendas y viceversa). Se captura al registrarse; los
+	// tenants previos (versión distinta a CatalogTermsVersion) deben re-aceptar
+	// en el próximo ingreso. Aditivo (Art. X): vacío/NULL = no aceptó la versión
+	// vigente. El aporte automático (Fase 2) sólo ocurre si aceptó la vigente.
+	TermsAcceptedVersion string     `gorm:"type:varchar(32)" json:"terms_accepted_version"`
+	TermsAcceptedAt      *time.Time `json:"terms_accepted_at,omitempty"`
+
 	// Spec F037 — capabilities migrated from byType→optional. F037 reverts
 	// F036's auto-activation by business_type: every tenant now arrives with
 	// zero optional capabilities and discovers them through the Dashboard
@@ -381,6 +396,12 @@ const StockLowThresholdDefault = 3
 // enable_*) más los feature flags type-derivados en ON (mesas, KDS,
 // servicios, eventos…). Lo usa el god-mode para mostrar "cuántos módulos
 // activos" por tenant. No incluye EnableFiados (base, default ON).
+// AcceptedCurrentTerms — ¿el tenant aceptó la versión vigente de los términos
+// (con la cláusula colaborativa)? Gobierna el aporte automático (Spec 098).
+func (t *Tenant) AcceptedCurrentTerms() bool {
+	return t.TermsAcceptedVersion == CatalogTermsVersion
+}
+
 func (t *Tenant) CountActiveModules() int {
 	n := 0
 	for _, on := range []bool{

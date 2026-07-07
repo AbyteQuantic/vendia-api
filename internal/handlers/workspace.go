@@ -48,6 +48,7 @@ func createWorkspaceTokenPair(db *gorm.DB, user models.User, tenantID, branchID,
 		"enable_recipes", "enable_marketing_hub", "enable_quotes",
 		"enable_promotions", "enable_customer_management", "enable_supplies",
 		"enable_furniture_jobs", "enable_purchase_orders", "enable_price_tiers",
+		"terms_accepted_version", // Spec 098 — para terms_acceptance_required
 	).First(&tenant, "id = ?", tenantID).Error
 
 	resp := &AuthResponse{
