@@ -288,6 +288,91 @@ func (s *CatalogService) ShareProductPhotoToCatalog(
 	return nil
 }
 
+// AutoContributeProductPhoto — Spec 098 Fase 2. Aporte AUTOMÁTICO (sin
+// consentimiento por-foto): si el tenant aceptó los términos vigentes, el
+// producto tiene barcode de retail válido + nombre + presentación + descripción
+// (content) + foto, y la IA confirma que la imagen corresponde, la foto queda
+// SUGERIBLE (status='verified') para otras tiendas. Fire-and-forget: nunca
+// bloquea ni rompe el flujo de foto; cualquier fallo se traga.
+func (s *CatalogService) AutoContributeProductPhoto(ctx context.Context, gemini *GeminiService, tenantID string, p models.Product) {
+	if s == nil || s.db == nil {
+		return
+	}
+
+	// 1. Gates deterministas (baratos, sin red): sólo productos aptos para el
+	// catálogo COMPARTIDO — barcode de retail real + campos completos + foto.
+	if !ValidRetailBarcode(p.Barcode) {
+		return
+	}
+	photo := p.PhotoURL
+	if photo == "" {
+		photo = p.ImageURL
+	}
+	if photo == "" ||
+		strings.TrimSpace(p.Name) == "" ||
+		strings.TrimSpace(p.Presentation) == "" ||
+		strings.TrimSpace(p.Content) == "" {
+		return
+	}
+
+	// 2. El tenant debe haber aceptado la versión VIGENTE de los términos
+	// (con la cláusula colaborativa). Sin eso, jamás se aporta.
+	var t models.Tenant
+	if err := s.db.Select("id", "terms_accepted_version").
+		First(&t, "id = ?", tenantID).Error; err != nil || !t.AcceptedCurrentTerms() {
+		return
+	}
+
+	// 3. Verificación IA: la imagen debe corresponder al producto. Ante
+	// error/duda → false → no aporta (fail-safe dentro del método).
+	ok, err := gemini.VerifyImageMatchesProduct(ctx, photo, p.Name, p.Presentation)
+	if err != nil || !ok {
+		return
+	}
+
+	// 4. Aportar: buscar/crear el producto de catálogo por barcode.
+	cp, err := s.FindOrCreateCatalogProduct(p.Barcode, p.Name, "", p.Presentation, p.Content, p.Category)
+	if err != nil {
+		return
+	}
+
+	// 5. No pisar una foto YA establecida distinta: si el producto de catálogo
+	// ya está verificado con OTRA imagen, respetarla.
+	if cp.Status == "verified" && cp.ImageURL != "" && cp.ImageURL != photo {
+		return
+	}
+
+	// 6. Registrar la imagen del tenant si aún no la tiene (mismo patrón que
+	// ShareProductPhotoToCatalog: una por tenant, tope de 3 aceptadas).
+	var alreadySharedByTenant int64
+	if err := s.db.Model(&models.CatalogImage{}).
+		Where("catalog_product_id = ? AND created_by_tenant_id = ? AND is_accepted = true", cp.ID, tenantID).
+		Count(&alreadySharedByTenant).Error; err != nil {
+		return
+	}
+	if alreadySharedByTenant == 0 {
+		if count, cErr := s.CountAcceptedImages(cp.ID); cErr == nil && count < 3 {
+			if _, iErr := s.CreateCatalogImage(cp.ID, tenantID, photo, ""); iErr != nil {
+				return
+			}
+		}
+	}
+
+	// 7. Marcar verified (sugerible a otras tiendas). Reflejar la foto en el
+	// producto de catálogo sólo si aún no tiene ninguna.
+	updates := map[string]any{
+		"status":      "verified",
+		"verified_at": time.Now(),
+		"source":      "user",
+	}
+	if cp.ImageURL == "" {
+		updates["image_url"] = photo
+	}
+	if err := s.db.Model(&models.CatalogProduct{}).Where("id = ?", cp.ID).Updates(updates).Error; err != nil {
+		log.Printf("[CATALOG] auto-contribute: update verified failed for %s: %v", cp.ID, err)
+	}
+}
+
 // PromoteInUseImages marks as accepted every catalog image that is already
 // referenced by a product's photo_url/image_url. This is a safety net so a
 // stale cleanup run can never delete a bucket file that a merchant's live

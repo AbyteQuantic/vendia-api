@@ -21,4 +21,6 @@ const (
 	AIFeatureRecipeAssist = "RECIPE_ASSIST"
 	// Spec 085 — vender por voz: comandos de venta dictados (POS).
 	AIFeatureVoiceOrder = "VOICE_ORDER"
+	// Spec 098 — aporte automático al catálogo: verificación imagen↔producto.
+	AIFeatureCatalogVerify = "CATALOG_VERIFY"
 )
