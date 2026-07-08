@@ -146,7 +146,21 @@ func composeFaithful(originalBytes, maskBytes []byte, rotationDeg float64, realc
 	}
 	b := realced.Bounds()
 	w, h := b.Dx(), b.Dy()
-	mask := imaging.Resize(maskImg, w, h, imaging.Linear)
+	// CatmullRom (cúbico nítido) escala la máscara con menos escalones que Linear.
+	mask := imaging.Resize(maskImg, w, h, imaging.CatmullRom)
+	// Feather anti-alias: un blur MUY pequeño suaviza los dientes del borde
+	// (staircase) convirtiéndolos en una rampa de 1 px. Es SEGURO para partes
+	// finas: el blur las ESPARCE (no las erosiona), así una correa/cadena queda
+	// más suave pero presente. El umbral a<=8 de más abajo recorta la rampa más
+	// tenue que agrega el blur, así que no reaparece halo. Radio escalado al
+	// tamaño y acotado [0.5, 1.2] px para no engordar el recorte.
+	blurR := float64(w+h) / 2 * 0.0009
+	if blurR < 0.5 {
+		blurR = 0.5
+	} else if blurR > 1.2 {
+		blurR = 1.2
+	}
+	mask = imaging.Blur(mask, blurR)
 
 	// Recorte con alfa SUAVE (= luminancia de la máscara). Sin dilatar → sin halo.
 	prod := imaging.New(w, h, color.NRGBA{0, 0, 0, 0})

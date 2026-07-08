@@ -695,7 +695,11 @@ func (s *GeminiService) CleanSignature(ctx context.Context, imageData []byte, mi
 // El producto final sale de los PÍXELES REALES vía composite (services.ComposeFaithful),
 // así NUNCA se regenera ni cambia. temp 0 para una máscara estable.
 func (s *GeminiService) SegmentProductMask(ctx context.Context, imageData []byte, mimeType string) ([]byte, error) {
-	const prompt = `Output a black-and-white MASK image, the SAME size, framing and proportions as the attached photo. Paint PURE WHITE (#FFFFFF) exactly the pixels that belong to the MAIN PRODUCT in the foreground — INCLUDING every thin part (straps, cords, chains, keyrings, tags, handles) — and PURE BLACK (#000000) everything else (background, surface, table, shadows, hands). Do NOT draw the product or add anything: ONLY the white silhouette on black, with precise edges following the real outline and the COMPLETE product (never leave out the straps/chains). Keep the same resolution and proportions as the photo.`
+	const prompt = `Output a black-and-white MASK image, the SAME size, framing and proportions as the attached photo. Paint WHITE (#FFFFFF) exactly the pixels that belong to the MAIN PRODUCT in the foreground — INCLUDING every thin part (straps, cords, chains, keyrings, tags, handles) — and BLACK (#000000) everything else (background, surface, table, shadows, hands).
+
+EDGE QUALITY (critical): trace the product's real outline with PIXEL-ACCURATE precision, hugging the true contour tightly — do not leave a rim of background inside the white, and do not eat into the product. At the exact boundary, render a SMOOTH ANTI-ALIASED transition (a soft 1–2 pixel gradient from white to black) that follows the real edge — never a hard, blocky, jagged staircase. Curved and diagonal edges must look smooth, not pixelated.
+
+Keep every thin part fully WHITE and CONNECTED to the body (never break a strap or chain into dots). Do NOT draw the product or add anything: ONLY the smooth white silhouette on black, at the SAME resolution and proportions as the photo.`
 	return s.enhanceImagesWithPrompt(ctx,
 		[]ReferenceImage{{MimeType: mimeType, Data: imageData}},
 		prompt, models.AIFeatureEnhancePhoto, 0.0)
