@@ -253,6 +253,11 @@ func Migrate(db *gorm.DB) error {
 		if err := applyStaffCommissionIndexes(db); err != nil {
 			log.Printf("[bootstrap] staff-commission indexes: %v", err)
 		}
+		// Spec 100 — un código de barras = UN producto por tenant. Tolerante:
+		// si falla (duplicados preexistentes), log y seguir sirviendo (Art. X).
+		if err := applyProductBarcodeIndex(db); err != nil {
+			log.Printf("[bootstrap] product-barcode unique index: %v", err)
+		}
 		// F042 — el tipo academias_instituciones debe pasar el CHECK
 		// tenants_business_types_valid. Render solo corre AutoMigrate, no
 		// los .sql, así que actualizamos la función de validación en el
