@@ -373,6 +373,51 @@ func (s *CatalogService) AutoContributeProductPhoto(ctx context.Context, gemini 
 	}
 }
 
+// TakedownByBarcode — Spec 098 Adenda A. Retira del catálogo COMPARTIDO todas
+// las imágenes aportadas para ese código de barras y demota el producto a
+// 'stale' (deja de sugerirse a otras tiendas). NO toca la foto propia del
+// tenant en la tabla products — esa es del tendero. Devuelve cuántas imágenes
+// se retiraron. Lo usa el proceso de notice-and-takedown de soporte.
+func (s *CatalogService) TakedownByBarcode(barcode string) (int64, error) {
+	if barcode == "" {
+		return 0, fmt.Errorf("barcode requerido")
+	}
+	var cp models.CatalogProduct
+	if err := s.db.Where("barcode = ?", barcode).First(&cp).Error; err != nil {
+		return 0, err
+	}
+	res := s.db.Where("catalog_product_id = ?", cp.ID).Delete(&models.CatalogImage{})
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	if err := s.db.Model(&models.CatalogProduct{}).Where("id = ?", cp.ID).
+		Updates(map[string]any{"status": "stale", "image_url": ""}).Error; err != nil {
+		return res.RowsAffected, err
+	}
+	log.Printf("[CATALOG] takedown by barcode %s: retiradas %d imágenes, producto %s → stale", barcode, res.RowsAffected, cp.ID)
+	return res.RowsAffected, nil
+}
+
+// TakedownByImageID — retira UNA imagen del catálogo compartido por su id. Si
+// era la foto que el producto de catálogo estaba sugiriendo, lo demota a 'stale'
+// y le limpia la image_url. No toca products del tenant. Spec 098 Adenda A.
+func (s *CatalogService) TakedownByImageID(imageID string) error {
+	if imageID == "" {
+		return fmt.Errorf("catalog_image_id requerido")
+	}
+	var img models.CatalogImage
+	if err := s.db.First(&img, "id = ?", imageID).Error; err != nil {
+		return err
+	}
+	if err := s.db.Delete(&models.CatalogImage{}, "id = ?", imageID).Error; err != nil {
+		return err
+	}
+	log.Printf("[CATALOG] takedown image %s (producto %s, tenant %s)", imageID, img.CatalogProductID, img.CreatedByTenantID)
+	return s.db.Model(&models.CatalogProduct{}).
+		Where("id = ? AND image_url = ?", img.CatalogProductID, img.ImageURL).
+		Updates(map[string]any{"status": "stale", "image_url": ""}).Error
+}
+
 // PromoteInUseImages marks as accepted every catalog image that is already
 // referenced by a product's photo_url/image_url. This is a safety net so a
 // stale cleanup run can never delete a bucket file that a merchant's live

@@ -190,6 +190,46 @@ func ReferencePhotosByBarcodes(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// TakedownCatalogPhoto — POST /api/v1/admin/catalog/takedown (super-admin).
+// Spec 098 Adenda A. Proceso de notice-and-takedown: retira una foto del
+// catálogo COMPARTIDO (deja de sugerirse a otras tiendas) ante un reclamo de
+// derechos. Body: {"barcode": "..."} o {"catalog_image_id": "..."}. NO borra la
+// foto propia del tenant (esa es del tendero). La traza (created_by_tenant_id)
+// permite identificar quién la aportó.
+func TakedownCatalogPhoto(catalogSvc *services.CatalogService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Barcode        string `json:"barcode"`
+			CatalogImageID string `json:"catalog_image_id"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "cuerpo inválido"})
+			return
+		}
+		req.Barcode = strings.TrimSpace(req.Barcode)
+		req.CatalogImageID = strings.TrimSpace(req.CatalogImageID)
+
+		if req.CatalogImageID != "" {
+			if err := catalogSvc.TakedownByImageID(req.CatalogImageID); err != nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "no se pudo retirar la imagen"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"message": "imagen retirada del catálogo compartido"})
+			return
+		}
+		if req.Barcode != "" {
+			n, err := catalogSvc.TakedownByBarcode(req.Barcode)
+			if err != nil {
+				c.JSON(http.StatusNotFound, gin.H{"error": "no se encontró el producto de catálogo"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"message": "retirado del catálogo compartido", "removed": n})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": "indique barcode o catalog_image_id"})
+	}
+}
+
 // ShareProductPhotoToCatalog — POST /api/v1/products/:id/share-to-catalog
 // Spec 096 Adenda A. El tendero, tras confirmar explícitamente (el frontend
 // SIEMPRE pregunta antes de llamar este endpoint — nunca automático), comparte
