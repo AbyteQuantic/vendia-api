@@ -268,7 +268,8 @@ func MatchProductsHandler(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		results := services.MatchProducts(db, tenantID, req.Products)
+		branchID := c.Query("branch_id")
+		results := services.MatchProducts(db, tenantID, req.Products, branchID)
 
 		c.JSON(http.StatusOK, gin.H{"data": results})
 	}

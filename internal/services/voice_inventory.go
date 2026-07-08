@@ -14,14 +14,24 @@ import (
 	"vendia-backend/internal/models"
 )
 
-// VoiceInventoryItem mirrors the Phase-4 contract the tendero's voice
-// note resolves into: a product name, a quantity (0 if not mentioned),
-// and a price in COP (0 if not mentioned). Kept flat so the frontend
-// can feed the same array into the existing IAResultScreen review UI.
+// VoiceInventoryItem mirrors InvoiceProduct's shape (gemini_service.go)
+// so the same review UI (IaResultScreen) and the same dedup pipeline can
+// serve both sources without special-casing.
+//
+// Spec 099 (2026-07-08): before this, the schema only had
+// Name/Quantity/Price — with nothing to hold "350 ml" or a distinct
+// sell price, the model had no choice but to fold everything into
+// Name, and any dictated sell price was silently discarded by the
+// frontend's margin-based suggestion. Presentation/Content/
+// PurchasePrice/SellPrice/Barcode close that gap.
 type VoiceInventoryItem struct {
-	Name     string  `json:"name"`
-	Quantity int     `json:"quantity"`
-	Price    float64 `json:"price"`
+	Name          string  `json:"name"`
+	Presentation  string  `json:"presentation,omitempty"`
+	Content       string  `json:"content,omitempty"`
+	Quantity      int     `json:"quantity"`
+	PurchasePrice float64 `json:"purchase_price"`
+	SellPrice     float64 `json:"sell_price"`
+	Barcode       string  `json:"barcode,omitempty"`
 }
 
 // VoiceInventoryPrompt is the system prompt the brief prescribes.
@@ -36,6 +46,16 @@ type VoiceInventoryItem struct {
 // and an explicit "return []" escape hatch. Combined with
 // temperature=0 in the request payload this eliminates the
 // hallucination path: the model either transcribes or returns empty.
+//
+// Spec 099 (2026-07-08): the schema grew presentation/content/
+// purchase_price/sell_price/barcode (see VoiceInventoryItem) to fix a
+// real bug — everything the tendero dictated (quantity, size, price)
+// was landing crammed inside "name" (e.g. "30 coca cola sabor orifinal
+// 350 ml"), and a dictated sell price was silently discarded. Rule 8
+// below teaches the separation WITHOUT a concrete worked example
+// (no brand/product name) — the 2026-04-24 hardening proved that any
+// example seeds an anchor the model hallucinates around when audio is
+// unclear, so the rule stays abstract on purpose.
 const VoiceInventoryPrompt = `Eres un procesador de datos estricto para un inventario. Tu ÚNICO trabajo es extraer los productos mencionados en el texto del usuario y convertirlos a JSON.
 
 REGLAS ESTRICTAS:
@@ -43,9 +63,18 @@ REGLAS ESTRICTAS:
 2. Si el audio es incomprensible, está vacío, o no menciona productos claros, DEBES retornar un arreglo vacío: []
 3. NUNCA uses ejemplos predeterminados ni productos genéricos cuando no entiendas. Mejor retorna [].
 4. NO inventes marcas ni presentaciones que el usuario no dijo. Preserva tal cual lo que oíste.
-5. El precio es 0 si el usuario no lo menciona. La cantidad es 1 si no la menciona.
+5. La cantidad es 1 si el usuario no la menciona.
 6. Responde ÚNICA Y EXCLUSIVAMENTE con un JSON Array válido. NO uses bloques de código markdown. NO uses backticks. NO escribas la palabra "json" antes del arreglo. NO agregues texto antes ni después.
-7. Formato obligatorio: [{"name": "string", "quantity": int, "price": float}]`
+7. Formato obligatorio: [{"name": "string", "presentation": "string", "content": "string", "quantity": int, "purchase_price": float, "sell_price": float, "barcode": "string"}]
+8. SEPARA LOS CAMPOS — NUNCA los mezcles dentro de "name":
+   - "name": SOLO el nombre comercial del producto tal como lo dijo el usuario, SIN cantidades, SIN medidas/tamaño y SIN precios incrustados.
+   - "presentation": el tipo de empaque si lo menciona (botella, bolsa, caja, paquete, lata, frasco). Vacío ("") si no lo dice.
+   - "content": la medida o tamaño del producto si lo menciona (ej. mililitros, litros, gramos, kilos, unidades por paquete). Vacío ("") si no lo dice.
+   - "quantity": cuántas unidades le llegaron o compró. NUNCA repitas la cantidad ni la medida dentro de "name" — cada dato va SOLO en su propio campo.
+9. PRECIOS — nunca inventes uno que el usuario no dijo:
+   - Si el usuario menciona un precio de compra (lo que él pagó) Y un precio de venta (a lo que lo va a vender), cada uno va en su campo: "purchase_price" y "sell_price".
+   - Si el usuario menciona SOLO un precio sin aclarar cuál es, va en "purchase_price" (recibir mercancía es el contexto más común al dictar inventario) y "sell_price" queda en 0 — NUNCA calcules ni inventes el precio de venta.
+   - Si no menciona ningún precio, ambos quedan en 0.`
 
 // Supported audio MIME types accepted by Gemini multimodal. See
 //   https://ai.google.dev/gemini-api/docs/audio
@@ -306,9 +335,13 @@ func clampVoiceInventory(in []VoiceInventoryItem) []VoiceInventoryItem {
 	out := make([]VoiceInventoryItem, 0, len(in))
 	for _, item := range in {
 		clean := VoiceInventoryItem{
-			Name:     strings.TrimSpace(item.Name),
-			Quantity: item.Quantity,
-			Price:    item.Price,
+			Name:          strings.TrimSpace(item.Name),
+			Presentation:  strings.TrimSpace(item.Presentation),
+			Content:       strings.TrimSpace(item.Content),
+			Quantity:      item.Quantity,
+			PurchasePrice: item.PurchasePrice,
+			SellPrice:     item.SellPrice,
+			Barcode:       strings.TrimSpace(item.Barcode),
 		}
 		if clean.Name == "" {
 			// LLM hallucinated an empty entry — drop it rather than
@@ -318,8 +351,11 @@ func clampVoiceInventory(in []VoiceInventoryItem) []VoiceInventoryItem {
 		if clean.Quantity < 0 {
 			clean.Quantity = 0
 		}
-		if clean.Price < 0 {
-			clean.Price = 0
+		if clean.PurchasePrice < 0 {
+			clean.PurchasePrice = 0
+		}
+		if clean.SellPrice < 0 {
+			clean.SellPrice = 0
 		}
 		out = append(out, clean)
 	}

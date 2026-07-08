@@ -52,7 +52,10 @@ func postAudio(t *testing.T, r *gin.Engine, body *bytes.Buffer, contentType stri
 func mountVoiceHandler(svc *services.GeminiService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.POST("/api/v1/ai/voice-inventory", handlers.VoiceInventory(svc))
+	// These tests never reach the DB-dependent matching step (they all
+	// fail earlier at validation or at the Gemini call itself, which
+	// has no real API key in tests) — a nil db is safe here.
+	r.POST("/api/v1/ai/voice-inventory", handlers.VoiceInventory(nil, svc))
 	return r
 }
 
