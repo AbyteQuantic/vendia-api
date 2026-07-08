@@ -250,6 +250,13 @@ func processProductImportRow(db *gorm.DB, tenantID string, userID *string, idx i
 			Find(&products).Error; dbErr == nil {
 			for _, p := range products {
 				if services.NormalizeText(p.Name) == normalizedName {
+					// Spec 100 / D1 — esta rama escribe row.Barcode sobre el
+					// producto que matcheó por NOMBRE: si el código ya es de
+					// otro producto vivo, la fila falla con razón en español
+					// (nunca el error crudo de Postgres al tendero).
+					if failed := importBarcodeConflict(db, tenantID, idx, row.Barcode, p.ID); failed != nil {
+						return failed
+					}
 					oldStock := p.Stock
 					updates := buildProductUpdateMap(row, price, stock, minStock, purchasePrice)
 					txErr := db.Transaction(func(tx *gorm.DB) error {
@@ -259,6 +266,11 @@ func processProductImportRow(db *gorm.DB, tenantID string, userID *string, idx i
 						return logImportStockAdjustment(tx, tenantID, userID, p.ID, p.Name, oldStock, stock)
 					})
 					if txErr != nil {
+						// Carrera: el índice único detuvo la escritura → misma
+						// razón limpia que el pre-check.
+						if failed := importBarcodeFailedRow(db, tenantID, idx, row.Barcode, p.ID, txErr); failed != nil {
+							return failed
+						}
 						return &importFailedRow{RowIndex: idx, Reason: "error al actualizar: " + txErr.Error()}
 					}
 					result.Updated++
@@ -331,10 +343,52 @@ func processProductImportRow(db *gorm.DB, tenantID string, userID *string, idx i
 		})
 	})
 	if txErr != nil {
+		// Spec 100 / D1 — carrera en el INSERT: el barcode quedó libre en el
+		// dedup de arriba pero otro request lo ganó antes del Create.
+		if failed := importBarcodeFailedRow(db, tenantID, idx, row.Barcode, product.ID, txErr); failed != nil {
+			return failed
+		}
 		return &importFailedRow{RowIndex: idx, Reason: "error al crear: " + txErr.Error()}
 	}
 	result.Created++
 	return nil
+}
+
+// importBarcodeConflict — Spec 100 / D1. Devuelve la fila fallida (razón en
+// ESPAÑOL con el nombre del producto dueño, sin internals de la BD) cuando
+// `barcode` ya pertenece a OTRO producto vivo del tenant; nil si el código
+// está libre. excludeID = el producto que la fila está actualizando (su
+// propio código no conflictúa).
+func importBarcodeConflict(db *gorm.DB, tenantID string, idx int, barcode, excludeID string) *importFailedRow {
+	owner := services.FindBarcodeOwner(db, tenantID, barcode, excludeID)
+	if owner == nil {
+		return nil
+	}
+	return &importFailedRow{
+		RowIndex: idx,
+		Reason:   "código de barras ya usado por " + owner.Name,
+	}
+}
+
+// importBarcodeFailedRow mapea la violación del índice único de barcode
+// (carrera: otro request ganó el código entre el pre-check y la escritura)
+// a la MISMA razón limpia en español. Devuelve nil para cualquier otro
+// error, para que el caller conserve su manejo. Sin esto, el error crudo de
+// Postgres (inglés + constraint + SQLSTATE 23505) llegaba tal cual al
+// tendero en la respuesta del importador.
+func importBarcodeFailedRow(db *gorm.DB, tenantID string, idx int, barcode, excludeID string, txErr error) *importFailedRow {
+	if !services.IsProductBarcodeUniqueViolation(txErr) {
+		return nil
+	}
+	if failed := importBarcodeConflict(db, tenantID, idx, barcode, excludeID); failed != nil {
+		return failed
+	}
+	// El dueño ya no es legible (p. ej. borrado tras ganar la carrera):
+	// razón genérica igual de limpia, jamás el error crudo.
+	return &importFailedRow{
+		RowIndex: idx,
+		Reason:   "código de barras ya usado por otro producto",
+	}
 }
 
 // logImportStockAdjustment logs a manual_adjust kardex movement for an

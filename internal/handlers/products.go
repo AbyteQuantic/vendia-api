@@ -338,7 +338,7 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 		// " 777 " y "777" sean el mismo código; excludeID = req.ID cubre el
 		// re-sync offline idempotente que reenvía el propio producto.
 		barcode := strings.TrimSpace(req.Barcode)
-		if owner := findBarcodeOwner(db, tenantID, barcode, req.ID); owner != nil {
+		if owner := services.FindBarcodeOwner(db, tenantID, barcode, req.ID); owner != nil {
 			respondDuplicateBarcode(c, owner)
 			return
 		}
@@ -451,8 +451,8 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			// Spec 100 / D1 — carrera pura: dos creaciones simultáneas con el
 			// mismo código pasaron el pre-check y el índice único parcial
 			// detuvo la segunda. Mismo 409 duplicate_barcode, nunca un 500.
-			if IsProductBarcodeUniqueViolation(err) {
-				respondDuplicateBarcode(c, findBarcodeOwner(db, tenantID, barcode, product.ID))
+			if services.IsProductBarcodeUniqueViolation(err) {
+				respondDuplicateBarcode(c, services.FindBarcodeOwner(db, tenantID, barcode, product.ID))
 				return
 			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al crear producto"})
@@ -595,7 +595,7 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			// Spec 100 / D1 — un código de barras identifica UN producto por
 			// tenant. Si otro producto vivo ya lo usa → 409 con el dueño;
 			// re-guardar el propio código (excludeID = productID) no conflictúa.
-			if owner := findBarcodeOwner(db, tenantID, barcode, productID); owner != nil {
+			if owner := services.FindBarcodeOwner(db, tenantID, barcode, productID); owner != nil {
 				respondDuplicateBarcode(c, owner)
 				return
 			}
@@ -732,8 +732,8 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			// Spec 100 / D1 — carrera pura: dos ediciones simultáneas pasaron
 			// el pre-check y el índice único parcial detuvo la segunda. Se
 			// mapea al MISMO 409 duplicate_barcode, nunca un 500 genérico.
-			if req.Barcode != nil && IsProductBarcodeUniqueViolation(err) {
-				respondDuplicateBarcode(c, findBarcodeOwner(
+			if req.Barcode != nil && services.IsProductBarcodeUniqueViolation(err) {
+				respondDuplicateBarcode(c, services.FindBarcodeOwner(
 					db, tenantID, strings.TrimSpace(*req.Barcode), productID))
 				return
 			}

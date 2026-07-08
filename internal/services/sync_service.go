@@ -2,6 +2,7 @@ package services
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 	"vendia-backend/internal/models"
 
@@ -114,7 +115,7 @@ func isLegacyOfflineSalePayload(data map[string]any) bool {
 func (s *SyncService) processOperation(tx *gorm.DB, tenantID string, op SyncOperation) (bool, error) {
 	switch canonicalSyncEntity(op.Entity) {
 	case "product":
-		return s.syncEntity(tx, &models.Product{}, tenantID, op)
+		return s.syncProduct(tx, tenantID, op)
 	case "sale":
 		return s.syncSale(tx, tenantID, op)
 	case "customer":
@@ -207,6 +208,67 @@ func (s *SyncService) syncEventScan(tx *gorm.DB, tenantID string, op SyncOperati
 		}
 	}
 	return res.RowsAffected > 0, nil
+}
+
+// syncProduct — Spec 100 / D1: el camino `product` respeta el invariante "un
+// código de barras = UN producto por tenant" sin envenenar el lote. Dos
+// defectos reales que corrige frente al índice único parcial:
+//   - create usaba ON CONFLICT DO NOTHING SIN target → la violación de
+//     barcode se absorbía y el producto se descartaba EN SILENCIO
+//     (applied=true, fila inexistente): cliente desincronizado para siempre.
+//   - update (applyLWW) no clasificaba la violación → el error tumbaba la
+//     transacción del lote COMPLETO → 500 → reintento infinito del lote
+//     envenenado (mismo patrón del bug de syncSale documentado abajo).
+//
+// Un barcode duplicado se trata como conflicto NO aplicado (false, nil) —
+// el mismo tratamiento que un LWW perdido: el lote sigue, el cliente ve el
+// conteo en `conflicts` y el pull posterior le trae la verdad del servidor.
+func (s *SyncService) syncProduct(tx *gorm.DB, tenantID string, op SyncOperation) (bool, error) {
+	if op.Action != "delete" {
+		if barcode := syncProductBarcode(op); barcode != "" {
+			if FindBarcodeOwner(tx, tenantID, barcode, op.ID) != nil {
+				return false, nil
+			}
+		}
+	}
+	applied, err := s.syncProductWrite(tx, tenantID, op)
+	if err != nil && IsProductBarcodeUniqueViolation(err) {
+		// Carrera entre lotes concurrentes: el índice detuvo la escritura.
+		return false, nil
+	}
+	return applied, err
+}
+
+// syncProductWrite espeja syncEntity para `product`, con UNA diferencia en
+// create: el ON CONFLICT va acotado a (id) — la idempotencia por UUID sigue
+// siendo silenciosa (Art. II), pero la violación del índice de barcode SÍ
+// emerge como error clasificable en vez de absorberse en silencio.
+func (s *SyncService) syncProductWrite(tx *gorm.DB, tenantID string, op SyncOperation) (bool, error) {
+	if op.Action != "create" {
+		return s.syncEntity(tx, &models.Product{}, tenantID, op)
+	}
+	model := &models.Product{}
+	if err := tx.Where("id = ?", op.ID).First(model).Error; err == nil {
+		return s.applyLWW(tx, model, op)
+	}
+	op.Data["id"] = op.ID
+	op.Data["tenant_id"] = tenantID
+	err := tx.Model(model).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "id"}}, DoNothing: true,
+	}).Create(op.Data).Error
+	return err == nil, err
+}
+
+// syncProductBarcode extrae el barcode del payload de la op (trim incluido:
+// " 777 " y "777" son el mismo código, igual que en CreateProduct).
+func syncProductBarcode(op SyncOperation) string {
+	if op.Data == nil {
+		return ""
+	}
+	if b, ok := op.Data["barcode"].(string); ok {
+		return strings.TrimSpace(b)
+	}
+	return ""
 }
 
 func (s *SyncService) syncEntity(tx *gorm.DB, model any, tenantID string, op SyncOperation) (bool, error) {

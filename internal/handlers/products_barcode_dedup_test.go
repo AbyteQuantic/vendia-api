@@ -15,7 +15,6 @@ package handlers_test
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"testing"
 
@@ -217,26 +216,6 @@ func TestCreateProduct_EmptyBarcode_SkipsCheck(t *testing.T) {
 	assert.Equal(t, http.StatusCreated, w.Code, w.Body.String())
 }
 
-// ── T-05 — clasificador de violación del índice único (carrera) ─────────
-
-func TestIsProductBarcodeUniqueViolation(t *testing.T) {
-	cases := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{"nil", nil, false},
-		{"violación por nombre de índice",
-			errors.New(`ERROR: duplicate key value violates unique constraint "idx_products_tenant_barcode_unique" (SQLSTATE 23505)`),
-			true},
-		{"otro índice único no aplica",
-			errors.New(`ERROR: duplicate key value violates unique constraint "uq_customer_phone" (SQLSTATE 23505)`),
-			false},
-		{"error cualquiera", errors.New("connection refused"), false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, handlers.IsProductBarcodeUniqueViolation(tc.err))
-		})
-	}
-}
+// El clasificador de violación del índice único (T-05) se prueba en
+// services/product_barcode_test.go — el helper se movió a services porque
+// también lo usan el importador CSV y el sync offline.
