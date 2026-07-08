@@ -201,6 +201,24 @@ func applyStaffCommissionIndexes(db *gorm.DB) error {
 	return nil
 }
 
+// applyProductBarcodeIndex — Spec 100 / D1. Índice único PARCIAL que hace
+// físico el invariante "un código de barras = UN producto por tenant" (Art.
+// VII): es la única barrera total contra la carrera de dos requests que
+// pasan el pre-check de CreateProduct/UpdateProduct al mismo tiempo. Los
+// handlers mapean su violación al 409 duplicate_barcode. Parcial: barcode
+// vacío no es identidad y los soft-deleted no bloquean reusar el código.
+// Idempotente (IF NOT EXISTS); auditoría 2026-07-08 en prod: 0 duplicados.
+// Si aun así fallara (duplicados aparecidos entre auditoría y deploy), el
+// caller loguea y SIGUE arrancando (Art. X) — el pre-check del handler
+// mantiene la protección funcional.
+func applyProductBarcodeIndex(db *gorm.DB) error {
+	return db.Exec(
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_products_tenant_barcode_unique
+		 ON products (tenant_id, barcode)
+		 WHERE barcode <> '' AND deleted_at IS NULL`,
+	).Error
+}
+
 // ensureBusinessTypesWhitelist keeps the Postgres validate_business_types()
 // function in sync with models.ValidBusinessTypes. The CHECK constraint
 // tenants_business_types_valid (migration 020) calls this function, so adding

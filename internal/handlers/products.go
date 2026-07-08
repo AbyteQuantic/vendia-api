@@ -332,6 +332,17 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			}
 		}
 
+		// Spec 100 / D1 — un código de barras identifica UN producto por
+		// tenant: si otro producto vivo ya usa el código entrante → 409 con
+		// el dueño (mismo contrato que en UpdateProduct). Trim para que
+		// " 777 " y "777" sean el mismo código; excludeID = req.ID cubre el
+		// re-sync offline idempotente que reenvía el propio producto.
+		barcode := strings.TrimSpace(req.Barcode)
+		if owner := findBarcodeOwner(db, tenantID, barcode, req.ID); owner != nil {
+			respondDuplicateBarcode(c, owner)
+			return
+		}
+
 		expiry, err := normaliseExpiryDate(req.ExpiryDate)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -377,7 +388,7 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			Price:             req.Price,
 			Stock:             req.Stock,
 			MinStock:          req.MinStock,
-			Barcode:           req.Barcode,
+			Barcode:           barcode,
 			ImageURL:          req.ImageURL,
 			IsAvailable:       true,
 			RequiresContainer: req.RequiresContainer,
@@ -437,6 +448,13 @@ func CreateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			}
 			return nil
 		}); err != nil {
+			// Spec 100 / D1 — carrera pura: dos creaciones simultáneas con el
+			// mismo código pasaron el pre-check y el índice único parcial
+			// detuvo la segunda. Mismo 409 duplicate_barcode, nunca un 500.
+			if IsProductBarcodeUniqueViolation(err) {
+				respondDuplicateBarcode(c, findBarcodeOwner(db, tenantID, barcode, product.ID))
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al crear producto"})
 			return
 		}
@@ -573,7 +591,15 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			updates["min_stock"] = *req.MinStock
 		}
 		if req.Barcode != nil {
-			updates["barcode"] = strings.TrimSpace(*req.Barcode)
+			barcode := strings.TrimSpace(*req.Barcode)
+			// Spec 100 / D1 — un código de barras identifica UN producto por
+			// tenant. Si otro producto vivo ya lo usa → 409 con el dueño;
+			// re-guardar el propio código (excludeID = productID) no conflictúa.
+			if owner := findBarcodeOwner(db, tenantID, barcode, productID); owner != nil {
+				respondDuplicateBarcode(c, owner)
+				return
+			}
+			updates["barcode"] = barcode
 		}
 		if req.IsAvailable != nil {
 			// Spec 095 — desactivar un producto con una orden de compra
@@ -703,6 +729,14 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			}
 			return nil
 		}); err != nil {
+			// Spec 100 / D1 — carrera pura: dos ediciones simultáneas pasaron
+			// el pre-check y el índice único parcial detuvo la segunda. Se
+			// mapea al MISMO 409 duplicate_barcode, nunca un 500 genérico.
+			if req.Barcode != nil && IsProductBarcodeUniqueViolation(err) {
+				respondDuplicateBarcode(c, findBarcodeOwner(
+					db, tenantID, strings.TrimSpace(*req.Barcode), productID))
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al actualizar producto"})
 			return
 		}
