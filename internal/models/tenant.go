@@ -6,9 +6,11 @@ import "time"
 // de uso COLABORATIVO de imágenes (Spec 098). Un tenant cuyo
 // TermsAcceptedVersion sea distinto debe re-aceptar en el próximo ingreso.
 // Cambiar esta constante cuando la cláusula cambie fuerza re-aceptación global.
-// v2 (2026-07-08, Adenda A): agrega indemnización + prohibición de subir fotos
-// de terceros (Google/catálogos ajenos). Subir la versión fuerza re-aceptación.
-const CatalogTermsVersion = "2026-07-08"
+// v3 (2026-07-09, Adenda B): Términos completos aterrizados en la ley colombiana
+// (Ley 1581 habeas data, Ley 1480 consumidor, Ley 527 comercio electrónico,
+// derechos de autor) + Política de Privacidad. Subir la versión fuerza
+// re-aceptación de todos los tenants.
+const CatalogTermsVersion = "2026-07-09"
 
 // Unified business-type taxonomy (see migration 020).
 // The DB enforces the same whitelist via validate_business_types().
