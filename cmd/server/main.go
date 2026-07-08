@@ -1107,6 +1107,9 @@ func main() {
 	{
 		// Hotfix 2026-05-31 — agregador con 6 secciones que la
 		// pantalla /admin/analytics del admin-web consume.
+		// Spec 098 Adenda A — notice-and-takedown: retira una foto del catálogo
+		// compartido ante un reclamo de derechos (por barcode o catalog_image_id).
+		admin.POST("/catalog/takedown", handlers.TakedownCatalogPhoto(catalogSvc))
 		admin.GET("/analytics", handlers.AdminAnalytics(db))
 		admin.GET("/analytics/overview", handlers.AdminOverview(db))
 		admin.GET("/analytics/ai-costs", handlers.AdminAICosts(db))
