@@ -678,14 +678,22 @@ func enhancePhotoWorker(db *gorm.DB, geminiSvc *services.GeminiService, storageS
 			enhanced, err = geminiSvc.StudioShot(ctx, imageData, contentType, productInfo)
 			outMime, ext = "image/png", "png"
 		case mode == "improve":
-			// "Mejorar con IA" FIEL: máscara + realce MÁS FUERTE que "Quitar
-			// fondo" (contraste/brillo/saturación/nitidez), pero sigue siendo
-			// 100% filtros de píxeles — nunca puede cambiar el producto.
-			mask, mErr := geminiSvc.SegmentProductMask(ctx, imageData, contentType)
-			if mErr != nil {
-				mask = nil
-			}
-			enhanced, err = services.ComposeFaithfulEnhanced(imageData, mask, uprightRotation(ctx, geminiSvc, imageData, contentType))
+			// "Mejorar con IA" es GENERATIVO: envía la foto real a Nano Banana
+			// Pro (gemini-3-pro-image-preview) que produce una foto de ESTUDIO
+			// profesional del MISMO producto sobre fondo blanco, con el prompt de
+			// fidelidad (buildEnhancePhotoPrompt): mantener marca, etiqueta, texto,
+			// colores, forma y detalles EXACTOS — solo mejora luz/fondo/encuadre.
+			//
+			// Antes usaba el recorte determinista por máscara (ComposeFaithfulEnhanced).
+			// Se cambió porque: (1) el modelo actual preserva la identidad mucho
+			// mejor que el viejo (el bug histórico del llavero era con otro modelo);
+			// (2) la máscara FALLA en productos transparentes/reflectivos —caso real
+			// reportado: una botella de agua Cristal salía PARTIDA en dos pedazos y
+			// SIN la etiqueta—; (3) es lo que el flujo promete ("estudio
+			// profesional respetando el producto"). El modo FIEL sin cambios sigue
+			// disponible en "Quitar fondo", y "Dar indicaciones" permite corregir.
+			enhanced, err = geminiSvc.EnhancePhoto(ctx, imageData, contentType, productInfo, "")
+			outMime, ext = "image/png", "png"
 		default:
 			// "Quitar fondo" FIEL (Opción A): realce suave. Si la máscara falla →
 			// fail-safe: solo realce de la foto original.
