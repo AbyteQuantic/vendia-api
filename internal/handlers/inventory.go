@@ -51,6 +51,104 @@ func respondAIImageError(c *gin.Context, ctx context.Context, prefix string, err
 	c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("%s: %v", prefix, err)})
 }
 
+// ProductResult is a single parsed+matched invoice line, returned by
+// ScanInvoice. Also the shape ia_result_screen.dart's review UI was
+// originally built against — VoiceInventoryProductResult mirrors it
+// field-for-field so the same screen serves both sources (Spec 099).
+type ProductResult struct {
+	Name           string  `json:"name"`
+	Presentation   string  `json:"presentation,omitempty"`
+	Content        string  `json:"content,omitempty"`
+	Quantity       int     `json:"quantity"`
+	UnitPrice      float64 `json:"unit_price"`
+	TotalPrice     float64 `json:"total_price"`
+	Barcode        string  `json:"barcode,omitempty"`
+	ImageURL       string  `json:"image_url,omitempty"`
+	ExpiryDate     string  `json:"expiry_date,omitempty"`
+	Confidence     float64 `json:"confidence"`
+	Status         string  `json:"status"`
+	MatchProductID string  `json:"match_product_id,omitempty"`
+	MatchMethod    string  `json:"match_method,omitempty"`
+	SupplierID     string  `json:"supplier_id,omitempty"`
+}
+
+// buildInvoiceProductResults resolves each parsed invoice line against
+// the tenant's existing catalog (Spec 099 FR-05: same shared
+// services.MatchProducts + services.BestMatchStatus that
+// buildVoiceInventoryResults uses) and enriches it with an OFF image
+// when a barcode is present. Extracted as a pure function (no Gemini
+// call inside) so it's directly unit-testable — see
+// scan_invoice_matching_test.go, written BEFORE this refactor to
+// characterize the exact prior behavior (AC-05: zero regression).
+func buildInvoiceProductResults(
+	ctx context.Context, db *gorm.DB, offSvc *services.OpenFoodFactsService,
+	tenantID, branchID string, invoiceProducts []services.InvoiceProduct, matchedSupplierID *string,
+) []ProductResult {
+	reqs := make([]services.MatchProductRequest, len(invoiceProducts))
+	displayNames := make([]string, len(invoiceProducts))
+	for i, p := range invoiceProducts {
+		// Append content to name so references don't look like duplicates
+		// e.g. "Coca Cola" + "1.5L" → "Coca Cola 1.5L"
+		displayName := p.Name
+		if p.Content != "" {
+			displayName += " " + p.Content
+		}
+		displayNames[i] = displayName
+		reqs[i] = services.MatchProductRequest{
+			Name: displayName, Barcode: p.Barcode,
+			Presentation: p.Presentation, Content: p.Content,
+		}
+	}
+	matches := services.MatchProducts(db, tenantID, reqs, branchID)
+
+	products := make([]ProductResult, len(invoiceProducts))
+	for i, p := range invoiceProducts {
+		// Validate the expiry_date that Gemini extracted. Bad formats
+		// are dropped so they never reach the DB; the shopkeeper can
+		// add or correct the date later on the review screen.
+		expiryForDB, _ := normaliseExpiryDate(p.ExpiryDate)
+		expiryForResponse := ""
+		if expiryForDB != nil {
+			expiryForResponse = *expiryForDB
+		}
+
+		pr := ProductResult{
+			Name:         displayNames[i],
+			Presentation: p.Presentation,
+			Content:      p.Content,
+			Quantity:     p.Quantity,
+			UnitPrice:    p.UnitPrice,
+			TotalPrice:   p.TotalPrice,
+			Barcode:      p.Barcode,
+			ExpiryDate:   expiryForResponse,
+			Confidence:   p.Confidence,
+			Status:       "precio_pendiente",
+		}
+
+		if p.Barcode != "" && offSvc != nil {
+			offProduct, err := offSvc.LookupBarcode(ctx, p.Barcode)
+			if err == nil && offProduct != nil {
+				pr.ImageURL = offProduct.ImageURL
+				if pr.Name == "" && offProduct.Name != "" {
+					pr.Name = offProduct.Name
+				}
+			}
+		}
+
+		status, matchID, matchMethod := services.BestMatchStatus(matches[i])
+		pr.Status = status
+		if status == "match_encontrado" {
+			pr.MatchProductID = matchID
+			pr.MatchMethod = matchMethod
+		}
+		if matchedSupplierID != nil {
+			pr.SupplierID = *matchedSupplierID
+		}
+		products[i] = pr
+	}
+	return products
+}
+
 func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *services.OpenFoodFactsService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
@@ -107,23 +205,6 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 			return
 		}
 
-		type ProductResult struct {
-			Name           string  `json:"name"`
-			Presentation   string  `json:"presentation,omitempty"`
-			Content        string  `json:"content,omitempty"`
-			Quantity       int     `json:"quantity"`
-			UnitPrice      float64 `json:"unit_price"`
-			TotalPrice     float64 `json:"total_price"`
-			Barcode        string  `json:"barcode,omitempty"`
-			ImageURL       string  `json:"image_url,omitempty"`
-			ExpiryDate     string  `json:"expiry_date,omitempty"`
-			Confidence     float64 `json:"confidence"`
-			Status         string  `json:"status"`
-			MatchProductID string  `json:"match_product_id,omitempty"`
-			MatchMethod    string  `json:"match_method,omitempty"`
-			SupplierID     string  `json:"supplier_id,omitempty"`
-		}
-
 		// Auto-link supplier: if Gemini detected a provider name, try to
 		// match it against existing suppliers so new products get supplier_id.
 		var matchedSupplierID *string
@@ -143,127 +224,7 @@ func ScanInvoice(db *gorm.DB, geminiSvc *services.GeminiService, offSvc *service
 		// must not match products in branch B.
 		branchID := middleware.GetBranchID(c)
 
-		var products []ProductResult
-		for _, p := range result.Products {
-			// Validate the expiry_date that Gemini extracted. Bad formats
-			// are dropped so they never reach the DB; the shopkeeper can
-			// add or correct the date later on the review screen.
-			expiryForDB, _ := normaliseExpiryDate(p.ExpiryDate)
-			expiryForResponse := ""
-			if expiryForDB != nil {
-				expiryForResponse = *expiryForDB
-			}
-
-			// Append content to name so references don't look like duplicates
-			// e.g. "Coca Cola" + "1.5L" → "Coca Cola 1.5L"
-			displayName := p.Name
-			if p.Content != "" {
-				displayName += " " + p.Content
-			}
-
-			pr := ProductResult{
-				Name:         displayName,
-				Presentation: p.Presentation,
-				Content:      p.Content,
-				Quantity:     p.Quantity,
-				UnitPrice:    p.UnitPrice,
-				TotalPrice:   p.TotalPrice,
-				Barcode:      p.Barcode,
-				ExpiryDate:   expiryForResponse,
-				Confidence:   p.Confidence,
-				Status:       "precio_pendiente",
-			}
-
-			if p.Barcode != "" && offSvc != nil {
-				offProduct, err := offSvc.LookupBarcode(ctx, p.Barcode)
-				if err == nil && offProduct != nil {
-					pr.ImageURL = offProduct.ImageURL
-					if pr.Name == "" && offProduct.Name != "" {
-						pr.Name = offProduct.Name
-					}
-				}
-			}
-
-			// 3-level dedup: return match info without modifying DB
-			var existing models.Product
-			matched := false
-			matchMethod := ""
-
-			// Level 1: barcode exact (branch-scoped)
-			if pr.Barcode != "" {
-				barcodeQ := db.Where("barcode = ? AND tenant_id = ?", pr.Barcode, tenantID)
-				if branchID != "" {
-					barcodeQ = barcodeQ.Where("branch_id = ?", branchID)
-				}
-				if err := barcodeQ.First(&existing).Error; err == nil {
-					matched = true
-					matchMethod = "barcode"
-				}
-			}
-
-			// Level 2: normalized name+presentation+content (branch-scoped)
-			if !matched {
-				normKey := services.NormalizeText(displayName) + "|" +
-					services.NormalizeText(pr.Presentation) + "|" +
-					services.NormalizeText(pr.Content)
-				var candidates []models.Product
-				candQ := db.Where("tenant_id = ? AND is_available = true", tenantID)
-				if branchID != "" {
-					candQ = candQ.Where("branch_id = ?", branchID)
-				}
-				candQ.Find(&candidates)
-				for _, cand := range candidates {
-					cKey := services.NormalizeText(cand.Name) + "|" +
-						services.NormalizeText(cand.Presentation) + "|" +
-						services.NormalizeText(cand.Content)
-					if cKey == normKey {
-						existing = cand
-						matched = true
-						matchMethod = "normalized"
-						break
-					}
-				}
-			}
-
-			// Level 3: pg_trgm fuzzy (branch-scoped)
-			if !matched && displayName != "" {
-				normName := services.NormalizeText(displayName)
-				var fuzzy struct {
-					models.Product
-					Similarity float64
-				}
-				fuzzySQL := `
-					SELECT p.*, similarity(LOWER(p.name), ?) AS similarity
-					FROM products p
-					WHERE p.tenant_id = ? AND p.is_available = true
-					  AND p.deleted_at IS NULL
-					  AND similarity(LOWER(p.name), ?) > 0.6`
-				fuzzyArgs := []any{normName, tenantID, normName}
-				if branchID != "" {
-					fuzzySQL += ` AND p.branch_id = ?`
-					fuzzyArgs = append(fuzzyArgs, branchID)
-				}
-				fuzzySQL += ` ORDER BY similarity DESC LIMIT 1`
-				if err := db.Raw(fuzzySQL, fuzzyArgs...).Scan(&fuzzy).Error; err == nil && fuzzy.Product.ID != "" {
-					existing = fuzzy.Product
-					matched = true
-					matchMethod = "fuzzy"
-				}
-			}
-
-			if matched {
-				pr.Status = "match_encontrado"
-				pr.MatchProductID = existing.ID
-				pr.MatchMethod = matchMethod
-			} else {
-				pr.Status = "nuevo"
-			}
-			if matchedSupplierID != nil {
-				pr.SupplierID = *matchedSupplierID
-			}
-			products = append(products, pr)
-
-		}
+		products := buildInvoiceProductResults(ctx, db, offSvc, tenantID, branchID, result.Products, matchedSupplierID)
 
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{

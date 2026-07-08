@@ -45,6 +45,49 @@ type productImportResult struct {
 	Updated int               `json:"updated"`
 	Skipped int               `json:"skipped"`
 	Failed  []importFailedRow `json:"failed"`
+	// FuzzyMatches (Spec 099 FR-09): rows that didn't match anything
+	// exactly (no barcode, no exact normalized name) but resemble an
+	// existing product closely enough to be worth a second look — purely
+	// informational, never blocks or merges the row. The importer has no
+	// per-row review UI (unlike voice/factura), so silently auto-merging
+	// an approximate match here would violate "coincidencia aproximada
+	// nunca se aplica sin confirmación" (spec §7) — this is the
+	// confirmation-free alternative: still create the row, but tell the
+	// tendero afterward so they can review it in Mi Inventario.
+	FuzzyMatches []productImportFuzzyMatch `json:"fuzzy_matches,omitempty"`
+}
+
+// productImportFuzzyMatch is one "this looks like a product you
+// already have" heads-up surfaced after import.
+type productImportFuzzyMatch struct {
+	RowIndex      int     `json:"row_index"`
+	RowName       string  `json:"row_name"`
+	CandidateID   string  `json:"candidate_id"`
+	CandidateName string  `json:"candidate_name"`
+	Similarity    float64 `json:"similarity"`
+}
+
+// buildFuzzyMatchEntry reduces a candidate list to the single
+// highest-confidence fuzzy match worth surfacing, or nil when there are
+// no candidates. Extracted as a pure function (no DB/SQL inside) so it's
+// directly unit-testable — the actual pg_trgm similarity() query has no
+// SQLite equivalent to test against (same gotcha as MatchProducts'
+// existing fuzzy level), verified in production per Art. XII.
+func buildFuzzyMatchEntry(rowIndex int, rowName string, candidates []services.MatchCandidate) *productImportFuzzyMatch {
+	if len(candidates) == 0 {
+		return nil
+	}
+	best := candidates[0]
+	for _, c := range candidates[1:] {
+		if c.Confidence > best.Confidence {
+			best = c
+		}
+	}
+	return &productImportFuzzyMatch{
+		RowIndex: rowIndex, RowName: rowName,
+		CandidateID: best.ProductID, CandidateName: best.ProductName,
+		Similarity: best.Confidence,
+	}
 }
 
 // ImportProducts handles POST /api/v1/products/import.
@@ -223,6 +266,17 @@ func processProductImportRow(db *gorm.DB, tenantID string, userID *string, idx i
 				}
 			}
 		}
+	}
+
+	// ── Fuzzy match heads-up (Spec 099 FR-09) ───────────────────────────────
+	// No exact match (barcode or normalized name) was found above — before
+	// inserting, check for an approximate resemblance worth flagging.
+	// Never blocks or changes the INSERT below; purely informational.
+	fuzzyCandidates := services.MatchProducts(db, tenantID, []services.MatchProductRequest{{
+		Name: row.Name, Barcode: row.Barcode, Presentation: row.Presentation, Content: row.Content,
+	}}, "")[0]
+	if entry := buildFuzzyMatchEntry(idx, row.Name, fuzzyCandidates); entry != nil {
+		result.FuzzyMatches = append(result.FuzzyMatches, *entry)
 	}
 
 	// ── INSERT ────────────────────────────────────────────────────────────

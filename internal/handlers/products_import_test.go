@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"vendia-backend/internal/models"
+	"vendia-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -661,4 +662,57 @@ func TestImportProducts_NameFallbackUpdate_LogsManualAdjustMovement(t *testing.T
 	assert.Equal(t, models.MovementManualAdjust, movements[0].MovementType)
 	assert.Equal(t, float64(10), movements[0].StockBefore)
 	assert.Equal(t, float64(25), movements[0].StockAfter)
+}
+
+// ── Spec 099 — fuzzy-match surfacing (FR-09/AC-09) ──────────────────────────
+
+// TestBuildFuzzyMatchEntry_NoCandidates_ReturnsNil verifies a row with
+// zero candidates (genuinely new product) never adds noise to
+// fuzzy_matches.
+func TestBuildFuzzyMatchEntry_NoCandidates_ReturnsNil(t *testing.T) {
+	entry := buildFuzzyMatchEntry(0, "Producto Nuevo", nil)
+	assert.Nil(t, entry)
+}
+
+// TestBuildFuzzyMatchEntry_PicksHighestConfidence verifies the surfaced
+// entry reflects the best candidate found, never auto-applied — it's
+// purely informational (FR-09: CSV import never fuses on similarity
+// alone).
+func TestBuildFuzzyMatchEntry_PicksHighestConfidence(t *testing.T) {
+	candidates := []services.MatchCandidate{
+		{ProductID: "p-weak", ProductName: "Coca-Cola Zero", Confidence: 0.65, MatchMethod: "fuzzy"},
+		{ProductID: "p-strong", ProductName: "Coca-Cola 350ml", Confidence: 0.82, MatchMethod: "fuzzy"},
+	}
+	entry := buildFuzzyMatchEntry(3, "Coca Cola 350 ml", candidates)
+	require.NotNil(t, entry)
+	assert.Equal(t, 3, entry.RowIndex)
+	assert.Equal(t, "Coca Cola 350 ml", entry.RowName)
+	assert.Equal(t, "p-strong", entry.CandidateID)
+	assert.Equal(t, "Coca-Cola 350ml", entry.CandidateName)
+	assert.Equal(t, 0.82, entry.Similarity)
+}
+
+// TestImportProducts_FuzzyMatchRow_StillCreatesRow verifies FR-09's
+// core invariant end-to-end through the HTTP handler: even when a
+// fuzzy-match entry would be reported, the row is still created (or
+// updated via exact match) exactly as before — fuzzy matching is
+// strictly additive/informational, never blocking, never merging.
+// (The fuzzy_matches array itself isn't asserted here — SQLite has no
+// pg_trgm similarity(), so it never populates in this test suite; see
+// buildFuzzyMatchEntry's unit tests above and Art. XII prod verification.)
+func TestImportProducts_FuzzyMatchRow_StillCreatesRow(t *testing.T) {
+	db := setupProductImportDB(t)
+	r := productImportRouter(db, "tenant-1", false)
+	payload := map[string]any{
+		"rows": []map[string]any{
+			{"name": "Producto Parecido A Otro", "price": "1000", "stock": "5"},
+		},
+		"dedup_strategy": "merge_by_barcode_then_name",
+	}
+
+	w := postProductImport(r, payload)
+	assert.Equal(t, http.StatusOK, w.Code)
+	resp := parseProductImportResp(t, w)
+	data := resp["data"].(map[string]any)
+	assert.EqualValues(t, 1, data["created"])
 }

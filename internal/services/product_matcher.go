@@ -34,7 +34,16 @@ type MatchProductRequest struct {
 //  1. Barcode exact match → confidence 1.0
 //  2. Normalized name+presentation+content match → confidence 0.9
 //  3. pg_trgm fuzzy name → confidence = similarity score
-func MatchProducts(db *gorm.DB, tenantID string, items []MatchProductRequest) [][]MatchCandidate {
+//
+// branchID (Spec 099): when non-empty, every level is scoped to that
+// branch — a product in branch A must never match a lookup for branch B
+// (Art. III). Empty branchID preserves the original unscoped behavior
+// (the only caller today, the unused MatchProductsHandler, passes "").
+// The fuzzy threshold is standardized to 0.6 (was 0.3) to match the
+// stricter value already proven in production via ScanInvoice's inline
+// copy of this same algorithm — 0.3 risked fusing distinct products
+// (e.g. "Coca-Cola" vs. "Coca-Cola Zero").
+func MatchProducts(db *gorm.DB, tenantID string, items []MatchProductRequest, branchID string) [][]MatchCandidate {
 	results := make([][]MatchCandidate, len(items))
 
 	for i, item := range items {
@@ -43,8 +52,12 @@ func MatchProducts(db *gorm.DB, tenantID string, items []MatchProductRequest) []
 		// Level 1: Barcode exact
 		if item.Barcode != "" {
 			var product models.Product
-			if err := db.Where("barcode = ? AND tenant_id = ? AND is_available = true",
-				item.Barcode, tenantID).First(&product).Error; err == nil {
+			q := db.Where("barcode = ? AND tenant_id = ? AND is_available = true",
+				item.Barcode, tenantID)
+			if branchID != "" {
+				q = q.Where("branch_id = ?", branchID)
+			}
+			if err := q.First(&product).Error; err == nil {
 				candidates = append(candidates, MatchCandidate{
 					ProductID:    product.ID,
 					ProductName:  product.Name,
@@ -68,8 +81,11 @@ func MatchProducts(db *gorm.DB, tenantID string, items []MatchProductRequest) []
 		normKey := normName + "|" + normPres + "|" + normContent
 
 		var products []models.Product
-		db.Where("tenant_id = ? AND is_available = true", tenantID).
-			Find(&products)
+		nameQ := db.Where("tenant_id = ? AND is_available = true", tenantID)
+		if branchID != "" {
+			nameQ = nameQ.Where("branch_id = ?", branchID)
+		}
+		nameQ.Find(&products)
 
 		for _, p := range products {
 			pKey := NormalizeText(p.Name) + "|" + NormalizeText(p.Presentation) + "|" + NormalizeText(p.Content)
@@ -99,16 +115,20 @@ func MatchProducts(db *gorm.DB, tenantID string, items []MatchProductRequest) []
 				models.Product
 				Similarity float64
 			}
-			db.Raw(`
+			fuzzySQL := `
 				SELECT p.*, similarity(LOWER(p.name), ?) AS similarity
 				FROM products p
 				WHERE p.tenant_id = ?
 				  AND p.is_available = true
 				  AND p.deleted_at IS NULL
-				  AND similarity(LOWER(p.name), ?) > 0.3
-				ORDER BY similarity DESC
-				LIMIT 5
-			`, normName, tenantID, normName).Scan(&fuzzyResults)
+				  AND similarity(LOWER(p.name), ?) > 0.6`
+			fuzzyArgs := []any{normName, tenantID, normName}
+			if branchID != "" {
+				fuzzySQL += ` AND p.branch_id = ?`
+				fuzzyArgs = append(fuzzyArgs, branchID)
+			}
+			fuzzySQL += ` ORDER BY similarity DESC LIMIT 5`
+			db.Raw(fuzzySQL, fuzzyArgs...).Scan(&fuzzyResults)
 
 			for _, r := range fuzzyResults {
 				candidates = append(candidates, MatchCandidate{
@@ -129,6 +149,24 @@ func MatchProducts(db *gorm.DB, tenantID string, items []MatchProductRequest) []
 	}
 
 	return results
+}
+
+// BestMatchStatus reduces a candidate list (as returned per-item by
+// MatchProducts) to the "status"/"match_product_id"/"match_method" triple
+// that ScanInvoice and VoiceInventory both surface in their responses.
+// Picks the highest-confidence candidate; empty input means a genuinely
+// new product ("nuevo").
+func BestMatchStatus(candidates []MatchCandidate) (status, matchProductID, matchMethod string) {
+	if len(candidates) == 0 {
+		return "nuevo", "", ""
+	}
+	best := candidates[0]
+	for _, c := range candidates[1:] {
+		if c.Confidence > best.Confidence {
+			best = c
+		}
+	}
+	return "match_encontrado", best.ProductID, best.MatchMethod
 }
 
 // ImageIdempotencyKey generates a SHA256 key from the first 2KB of image data.
