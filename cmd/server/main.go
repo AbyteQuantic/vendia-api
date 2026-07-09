@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 	"vendia-backend/internal/config"
@@ -231,6 +232,23 @@ func main() {
 
 	catalogSvc := services.NewCatalogService(db, storageSvc)
 	catalogSvc.StartCleanupTicker(context.Background())
+
+	// Spec 101 — worker de la cola de retoque masivo (modo FIEL). Ticker
+	// in-process (~1 ítem/12s, configurable con RETOUCH_TICK_SECONDS); el
+	// cron retouch-tick es solo backstop. Sin Gemini/R2 el worker no
+	// arranca y el endpoint interno responde sin procesar (nil-safe).
+	var retouchWorker *services.RetouchWorker
+	if geminiSvc != nil && storageSvc != nil {
+		tickSeconds := services.RetouchDefaultTickSeconds
+		if v, err := strconv.Atoi(os.Getenv("RETOUCH_TICK_SECONDS")); err == nil && v > 0 {
+			tickSeconds = v
+		}
+		retouchWorker = services.NewRetouchWorker(db,
+			services.NewFaithfulRetouchEnhancer(geminiSvc, storageSvc),
+			time.Duration(tickSeconds)*time.Second)
+		retouchWorker.Start(context.Background())
+		log.Printf("[SVC] Retouch queue worker initialized (1 item/%ds)", tickSeconds)
+	}
 
 	// Spec 081 — mercado cercano (mapa de tiendas reales vía OpenStreetMap).
 	placesSvc := services.NewPlacesService()
@@ -496,6 +514,9 @@ func main() {
 	r.POST("/api/v1/internal/jobs/scrape-chains", handlers.ScrapeChainsJob(db, services.DefaultChainSources))
 	// Spec 093/091 — monitoreo de capacidad: avisa al rozar el umbral de la DB.
 	r.POST("/api/v1/internal/jobs/capacity-check", handlers.CapacityCheckJob(db))
+	// Spec 101 — backstop del ticker de retoque (recovery + pocos ítems por
+	// invocación). Mismo modelo de auth: CRON_TOKEN Bearer, fail-closed 503.
+	r.POST("/api/v1/internal/jobs/retouch-tick", handlers.RetouchTickJob(retouchWorker))
 
 	// Public online orders (customer places order from catalog).
 	// Two paths hit the same handler: the legacy shape and the
@@ -679,6 +700,15 @@ func main() {
 		v1.POST("/terms/accept", handlers.AcceptTerms(db))
 		// Spec 097 — sugerencias de foto en LOTE para completar el inventario.
 		v1.POST("/catalog/reference-photos", handlers.ReferencePhotosByBarcodes(db))
+
+		// Spec 101 — retoque masivo de fotos (modo FIEL). Encolar lote /
+		// consultar chip+progreso+revisión / confirmar / descartar / cancelar.
+		// Mismo guard JWT de inventario que /products/:id/enhance.
+		v1.POST("/inventory/retouch/batches", handlers.CreateRetouchBatch(db))
+		v1.GET("/inventory/retouch/summary", handlers.RetouchSummary(db))
+		v1.POST("/inventory/retouch/items/confirm", handlers.ConfirmRetouchItems(db, catalogSvc, geminiSvc))
+		v1.POST("/inventory/retouch/items/discard", handlers.DiscardRetouchItems(db))
+		v1.POST("/inventory/retouch/batches/:id/cancel", handlers.CancelRetouchBatch(db))
 
 		// Inventory IA
 		v1.POST("/inventory/scan-invoice", handlers.ScanInvoice(db, geminiSvc, offSvc))

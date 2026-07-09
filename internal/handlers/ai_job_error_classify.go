@@ -7,7 +7,11 @@
 // detalles técnicos crudos del proveedor).
 package handlers
 
-import "strings"
+import (
+	"strings"
+
+	"vendia-backend/internal/services"
+)
 
 // Mensajes en español. Cada uno corresponde a una categoría
 // reconocible del worker que se puede accionar por el tendero
@@ -86,11 +90,9 @@ func isSafetyBlock(raw string) bool {
 }
 
 func isRateLimit(raw string) bool {
-	return strings.Contains(raw, "returned 429") ||
-		strings.Contains(raw, "error 429") ||
-		strings.Contains(raw, "rate limit") ||
-		strings.Contains(raw, "too many requests") ||
-		strings.Contains(raw, "resource_exhausted")
+	// Fuente única de patrones 429: services.IsRateLimitMessage — la
+	// comparte el backoff del worker de retoque (Spec 101, AC-10).
+	return services.IsRateLimitMessage(raw)
 }
 
 func isDownloadFailure(raw string) bool {

@@ -224,6 +224,12 @@ func Migrate(db *gorm.DB) error {
 		// el catálogo público se comporta como antes (Art. X).
 		&models.WeeklyMenuPlan{},
 		&models.MenuPlanOverride{},
+		// Spec 101 — cola de retoque masivo de fotos (modo fiel). Dos
+		// tablas nuevas: el lote por tenant y sus ítems con candidate_url
+		// pendiente de revisión. Aditivo y retrocompatible — nada cambia
+		// en products (Art. X).
+		&models.RetouchBatch{},
+		&models.RetouchItem{},
 	)
 	if err != nil {
 		return err
@@ -257,6 +263,11 @@ func Migrate(db *gorm.DB) error {
 		// si falla (duplicados preexistentes), log y seguir sirviendo (Art. X).
 		if err := applyProductBarcodeIndex(db); err != nil {
 			log.Printf("[bootstrap] product-barcode unique index: %v", err)
+		}
+		// Spec 101 — un producto no vive en dos lotes de retoque activos.
+		// Tolerante: si falla, log y seguir sirviendo (Art. X).
+		if err := ApplyRetouchIndexes(db); err != nil {
+			log.Printf("[bootstrap] retouch active-item unique index: %v", err)
 		}
 		// F042 — el tipo academias_instituciones debe pasar el CHECK
 		// tenants_business_types_valid. Render solo corre AutoMigrate, no

@@ -406,32 +406,10 @@ func UploadProductPhoto(db *gorm.DB, storageSvc services.FileStorage, geminiSvc 
 //
 // Spec: specs/016-ia-foto-async-polling/spec.md — §3 (background work).
 func downloadSourceImage(ctx context.Context, sourceURL string) ([]byte, string, error) {
-	imgReq, err := http.NewRequestWithContext(ctx, "GET", sourceURL, nil)
-	if err != nil {
-		return nil, "", fmt.Errorf("error al preparar descarga de foto: %w", err)
-	}
-	imgReq.Header.Set("User-Agent", "VendIA-POS/1.0 (vendia.co)")
-
-	resp, err := http.DefaultClient.Do(imgReq)
-	if err != nil {
-		return nil, "", fmt.Errorf("error al obtener foto: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("la URL de la foto devolvió %d", resp.StatusCode)
-	}
-
-	contentType := resp.Header.Get("Content-Type")
-	if !strings.HasPrefix(contentType, "image/") {
-		return nil, "", fmt.Errorf("la URL no contiene una imagen válida")
-	}
-
-	imageData, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, "", fmt.Errorf("error al leer foto: %w", err)
-	}
-	return imageData, contentType, nil
+	// Spec 101: el cuerpo vive en services.DownloadImage porque el worker
+	// del lote de retoque también lo usa (handlers importa services, nunca
+	// al revés). Mismos wraps en español que reconoce classifyAIJobError.
+	return services.DownloadImage(ctx, sourceURL)
 }
 
 // buildProductInfo assembles the descriptive string Gemini receives —
@@ -580,26 +558,18 @@ func EnhanceProductPhoto(db *gorm.DB, geminiSvc *services.GeminiService, storage
 	}
 }
 
-// uprightRotation le pide a Gemini el ángulo para presentar el producto
-// derecho/nivelado (GeminiService.EstimateUprightRotation — una llamada de
-// texto/visión, no genera ninguna imagen) y aplica el fail-safe: cualquier
-// error o respuesta no interpretable devuelve 0 (no rotar), silenciosamente
-// — el peor caso es el mismo comportamiento que existía antes de esta
-// función (el producto queda en el ángulo en que fue fotografiado), nunca
-// un resultado peor.
-func uprightRotation(ctx context.Context, geminiSvc *services.GeminiService, imageData []byte, contentType string) float64 {
-	deg, err := geminiSvc.EstimateUprightRotation(ctx, imageData, contentType)
-	if err != nil {
-		// Antes esto fallaba en total silencio: no había forma de saber, sin
-		// reproducir el bug, si un producto seguía torcido porque Gemini dio
-		// un ángulo ~0 (juicio real) o porque la llamada erró y cayó al
-		// fail-safe. Con este log, un `grep UPRIGHT-ROTATION` en Render
-		// distingue ambos casos para el próximo reporte de este tipo.
-		log.Printf("[UPRIGHT-ROTATION] error, no se rota (fail-safe 0): %v", err)
-		return 0
+// applyEnhancedProductPhoto apunta la foto del producto a la URL mejorada y
+// enciende is_ai_enhanced — el paso "aplicar" que el flujo /enhance
+// individual SIEMPRE hace al terminar y que el lote de retoque (Spec 101)
+// difiere hasta el confirm del tendero. (uprightRotation y su fail-safe se
+// movieron a services.RunFaithfulEnhance, que ahora es el único camino fiel.)
+func applyEnhancedProductPhoto(db *gorm.DB, tenantID, productUUID, newURL string) error {
+	if err := db.Model(&models.Product{}).
+		Where("id = ? AND tenant_id = ?", productUUID, tenantID).
+		Updates(map[string]any{"photo_url": newURL, "is_ai_enhanced": true}).Error; err != nil {
+		return fmt.Errorf("error al actualizar producto: %w", err)
 	}
-	log.Printf("[UPRIGHT-ROTATION] ángulo estimado: %.1f°", deg)
-	return deg
+	return nil
 }
 
 // enhancePhotoWorker builds the background worker for an enhance job:
@@ -610,6 +580,26 @@ func uprightRotation(ctx context.Context, geminiSvc *services.GeminiService, ima
 // Spec: specs/016-ia-foto-async-polling/spec.md — §3, FR-01.
 func enhancePhotoWorker(db *gorm.DB, geminiSvc *services.GeminiService, storageSvc services.FileStorage, catalogSvc *services.CatalogService, product models.Product, tenantID, productUUID, sourceURL, productInfo, instruction, mode string) aiPhotoWorker {
 	return func(ctx context.Context) (string, error) {
+		// Camino FIEL default (sin mode, sin indicación): extraído a
+		// services.RunFaithfulEnhance (Spec 101) porque lo comparte el
+		// lote de retoque. El contrato individual NO cambia: descarga →
+		// máscara fail-safe → ComposeFaithful + rotación → upload
+		// -enhanced + ?v= → aplicar al producto + aporte automático.
+		if instruction == "" && mode != "studio" && mode != "improve" {
+			newURL, err := services.RunFaithfulEnhance(ctx, services.FaithfulEnhanceDeps{
+				Gemini:  geminiSvc,
+				Storage: storageSvc,
+			}, tenantID, productUUID, sourceURL)
+			if err != nil {
+				return "", err
+			}
+			if err := applyEnhancedProductPhoto(db, tenantID, productUUID, newURL); err != nil {
+				return "", err
+			}
+			autoContributePhoto(db, catalogSvc, geminiSvc, tenantID, productUUID)
+			return newURL, nil
+		}
+
 		imageData, contentType, err := downloadSourceImage(ctx, sourceURL)
 		if err != nil {
 			return "", err
@@ -656,13 +646,9 @@ func enhancePhotoWorker(db *gorm.DB, geminiSvc *services.GeminiService, storageS
 			enhanced, err = geminiSvc.EnhancePhoto(ctx, imageData, contentType, productInfo, "")
 			outMime, ext = "image/png", "png"
 		default:
-			// "Quitar fondo" FIEL (Opción A): realce suave. Si la máscara falla →
-			// fail-safe: solo realce de la foto original.
-			mask, mErr := geminiSvc.SegmentProductMask(ctx, imageData, contentType)
-			if mErr != nil {
-				mask = nil
-			}
-			enhanced, err = services.ComposeFaithful(imageData, mask, uprightRotation(ctx, geminiSvc, imageData, contentType))
+			// Inalcanzable: el camino fiel (sin instruction/mode) ya
+			// retornó arriba vía services.RunFaithfulEnhance (Spec 101).
+			return "", fmt.Errorf("modo de mejora no reconocido: %q", mode)
 		}
 		if err != nil {
 			return "", fmt.Errorf("error al mejorar foto: %w", err)
@@ -677,10 +663,8 @@ func enhancePhotoWorker(db *gorm.DB, geminiSvc *services.GeminiService, storageS
 		// versión vieja en caché al re-mejorar el mismo producto. Spec 094.
 		newURL = fmt.Sprintf("%s?v=%d", newURL, time.Now().UnixNano())
 
-		if err := db.Model(&models.Product{}).
-			Where("id = ? AND tenant_id = ?", productUUID, tenantID).
-			Updates(map[string]any{"photo_url": newURL, "is_ai_enhanced": true}).Error; err != nil {
-			return "", fmt.Errorf("error al actualizar producto: %w", err)
+		if err := applyEnhancedProductPhoto(db, tenantID, productUUID, newURL); err != nil {
+			return "", err
 		}
 
 		// Spec 096 Adenda A: ya NO se aporta al catálogo compartido en
