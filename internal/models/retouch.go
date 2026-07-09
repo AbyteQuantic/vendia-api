@@ -35,16 +35,17 @@ const (
 //     atiende siempre el lote menos recientemente servido.
 //   - PausedUntil: backoff persistido — 429 del proveedor (pausa global que
 //     sobrevive reinicios, AC-10) o circuit breaker paused_error.
+//
+// Sin contadores desnormalizados: el progreso (queued/processed/failed/
+// ready_for_review) se recalcula SIEMPRE de retouch_items con GROUP BY en el
+// summary — una sola fuente de verdad, nada que se desincronice.
 type RetouchBatch struct {
 	BaseModel
 
-	TenantID       string     `gorm:"type:uuid;not null;index" json:"tenant_id"`
-	Status         string     `gorm:"default:'running';index" json:"status"`
-	QueuedCount    int        `gorm:"default:0" json:"queued_count"`
-	ProcessedCount int        `gorm:"default:0" json:"processed_count"`
-	FailedCount    int        `gorm:"default:0" json:"failed_count"`
-	LastServedAt   *time.Time `json:"last_served_at,omitempty"`
-	PausedUntil    *time.Time `json:"paused_until,omitempty"`
+	TenantID     string     `gorm:"type:uuid;not null;index" json:"tenant_id"`
+	Status       string     `gorm:"default:'running';index" json:"status"`
+	LastServedAt *time.Time `json:"last_served_at,omitempty"`
+	PausedUntil  *time.Time `json:"paused_until,omitempty"`
 }
 
 // RetouchItem es una foto dentro de un lote.

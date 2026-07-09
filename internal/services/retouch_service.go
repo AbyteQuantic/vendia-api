@@ -89,6 +89,23 @@ func IsRetouchActiveUniqueViolation(err error) bool {
 		strings.Contains(msg, "UNIQUE constraint failed: retouch_items")
 }
 
+// RetouchBatchActiveUniqueIndex es el índice único parcial (tenant_id) sobre
+// lotes activos (running/paused_error) — máx 1 batch activo por tenant (D3).
+const RetouchBatchActiveUniqueIndex = "idx_retouch_batches_active_tenant"
+
+// IsRetouchBatchActiveUniqueViolation detecta la violación del índice de
+// lotes activos: la carrera de dos POST /batches simultáneos. El handler la
+// captura y re-selecciona el lote ganador (idempotencia D3). Mismo criterio
+// string-match multi-dialecto que IsRetouchActiveUniqueViolation.
+func IsRetouchBatchActiveUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, RetouchBatchActiveUniqueIndex) ||
+		strings.Contains(msg, "UNIQUE constraint failed: retouch_batches")
+}
+
 // IsRateLimitMessage reconoce un error de cuota/límite del proveedor de IA
 // (429). Fuente única de patrones: la comparte el clasificador de jobs de
 // foto (handlers/ai_job_error_classify.go) y el backoff del worker de

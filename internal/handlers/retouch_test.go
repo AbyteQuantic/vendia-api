@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -146,7 +147,6 @@ func TestCreateRetouchBatch_EmptyBodyQueuesAllEligible(t *testing.T) {
 	require.NoError(t, db.First(&batch, "id = ?", resp.Data.BatchID).Error)
 	assert.Equal(t, models.RetouchBatchStatusRunning, batch.Status)
 	assert.Equal(t, retouchTenantA, batch.TenantID)
-	assert.Equal(t, 3, batch.QueuedCount)
 }
 
 // IDs explícitos: los ajenos e inelegibles van a skipped[], nunca a la cola.
@@ -200,9 +200,9 @@ func TestCreateRetouchBatch_ActiveBatchAppendsNewProduct(t *testing.T) {
 	db.Model(&models.RetouchBatch{}).Where("tenant_id = ?", retouchTenantA).Count(&batchCount)
 	assert.EqualValues(t, 1, batchCount)
 
-	var batch models.RetouchBatch
-	require.NoError(t, db.First(&batch, "id = ?", first.Data.BatchID).Error)
-	assert.Equal(t, 2, batch.QueuedCount, "el contador del lote refleja el append")
+	var itemCount int64
+	db.Model(&models.RetouchItem{}).Where("batch_id = ?", first.Data.BatchID).Count(&itemCount)
+	assert.EqualValues(t, 2, itemCount, "los ítems del lote reflejan el append")
 }
 
 // Re-encolar un producto ya activo en el lote → skipped, sin duplicar (FR-13).
@@ -228,6 +228,28 @@ func TestCreateRetouchBatch_AlreadyQueuedProductIsSkipped(t *testing.T) {
 	var count int64
 	db.Model(&models.RetouchItem{}).Where("product_id = ?", p1.ID).Count(&count)
 	assert.EqualValues(t, 1, count, "AC-11: re-encolar no duplica trabajo")
+}
+
+// MEDIUM 1 review — la carrera de doble POST (secuencial, estilo CAS): si
+// otro request creó el lote running entre nuestro SELECT y nuestro INSERT,
+// el índice único dispara y createActiveRetouchBatch devuelve el lote
+// GANADOR en vez de fallar (máx 1 batch activo por tenant, D3).
+func TestCreateActiveRetouchBatch_LosingRaceReturnsWinner(t *testing.T) {
+	db := setupRetouchHandlerDB(t)
+	// El "otro request" ya ganó: hay un running del tenant.
+	winner := models.RetouchBatch{TenantID: retouchTenantA,
+		Status: models.RetouchBatchStatusRunning}
+	require.NoError(t, db.Create(&winner).Error)
+
+	// Nuestro INSERT (que en el handler solo corre tras un SELECT que no vio
+	// al ganador) debe recuperarse de la violación y devolver el existente.
+	got, err := createActiveRetouchBatch(db, retouchTenantA)
+	require.NoError(t, err)
+	assert.Equal(t, winner.ID, got.ID, "perder la carrera devuelve el lote ganador")
+
+	var count int64
+	db.Model(&models.RetouchBatch{}).Where("tenant_id = ?", retouchTenantA).Count(&count)
+	assert.EqualValues(t, 1, count, "jamás quedan dos lotes activos")
 }
 
 // Sin nada elegible y sin lote activo → 202 sin crear un lote vacío.
@@ -354,7 +376,7 @@ func seedReadyItem(t *testing.T, db *gorm.DB, tenantID, name string) (models.Pro
 	t.Helper()
 	p := rawProduct(t, db, tenantID, name)
 	batch := models.RetouchBatch{TenantID: tenantID,
-		Status: models.RetouchBatchStatusCompleted, QueuedCount: 1, ProcessedCount: 1}
+		Status: models.RetouchBatchStatusCompleted}
 	require.NoError(t, db.Create(&batch).Error)
 	item := models.RetouchItem{
 		BatchID: batch.ID, TenantID: tenantID, ProductID: p.ID,
@@ -469,6 +491,136 @@ func TestConfirmRetouchItems_EmptyBodyIs400(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+// countQueries instrumenta la conexión GORM para contar TODOS los statements
+// (query/exec) que dispara un bloque — el fix del N+1 se verifica de verdad.
+func countQueries(t *testing.T, db *gorm.DB, counter *int) {
+	t.Helper()
+	bump := func(*gorm.DB) { *counter++ }
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register("test_count_query", bump))
+	require.NoError(t, db.Callback().Update().After("gorm:update").Register("test_count_update", bump))
+	require.NoError(t, db.Callback().Create().After("gorm:create").Register("test_count_create", bump))
+	require.NoError(t, db.Callback().Delete().After("gorm:delete").Register("test_count_delete", bump))
+	require.NoError(t, db.Callback().Row().After("gorm:row").Register("test_count_row", bump))
+	require.NoError(t, db.Callback().Raw().After("gorm:raw").Register("test_count_raw", bump))
+}
+
+// MEDIUM 3 review — "Aplicar las N" es LOTE de verdad: mezcla de 30 listas +
+// 1 en cola + 1 ajena + 1 inexistente se resuelve con lecturas/updates de
+// ítems agrupados (no 2-3 queries por ítem), manteniendo idempotencia,
+// skipped por diferencia y el aporte automático por ítem confirmado.
+func TestConfirmRetouchItems_BatchIsEfficientForApplyAll(t *testing.T) {
+	db := setupRetouchHandlerDB(t)
+	const n = 30
+	ids := make([]string, 0, n+3)
+	wantProducts := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		p, _, item := seedReadyItem(t, db, retouchTenantA, fmt.Sprintf("p%02d", i))
+		ids = append(ids, item.ID)
+		wantProducts = append(wantProducts, p.ID)
+	}
+	queuedProd := rawProduct(t, db, retouchTenantA, "encola")
+	batch := models.RetouchBatch{TenantID: retouchTenantA, Status: models.RetouchBatchStatusRunning}
+	require.NoError(t, db.Create(&batch).Error)
+	queuedItem := models.RetouchItem{BatchID: batch.ID, TenantID: retouchTenantA,
+		ProductID: queuedProd.ID, SourcePhotoURL: queuedProd.PhotoURL,
+		Status: models.RetouchItemStatusQueued}
+	require.NoError(t, db.Create(&queuedItem).Error)
+	_, _, foreign := seedReadyItem(t, db, retouchTenantB, "ajena")
+	ids = append(ids, queuedItem.ID, foreign.ID, "99999999-9999-4999-8999-999999999999")
+
+	contributed := overrideAutoContribute(t)
+	r := mountRetouch(db, retouchTenantA)
+
+	var queries int
+	countQueries(t, db, &queries)
+	w := retouchJSON(t, r, http.MethodPost, "/inventory/retouch/items/confirm",
+		map[string]any{"item_ids": ids})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var resp struct {
+		Data struct {
+			Confirmed int      `json:"confirmed"`
+			Skipped   []string `json:"skipped"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, n, resp.Data.Confirmed)
+	assert.ElementsMatch(t, []string{queuedItem.ID, foreign.ID,
+		"99999999-9999-4999-8999-999999999999"}, resp.Data.Skipped)
+
+	assert.ElementsMatch(t, wantProducts, *contributed,
+		"aporte automático por cada ítem confirmado, y solo por esos")
+
+	var confirmedCount int64
+	db.Model(&models.RetouchItem{}).Where("tenant_id = ? AND status = ?",
+		retouchTenantA, models.RetouchItemStatusConfirmed).Count(&confirmedCount)
+	assert.EqualValues(t, n, confirmedCount)
+
+	// Presupuesto: 1 SELECT de ítems + N updates de products (por ítem, con
+	// candidate distinta) + ≤2 updates agrupados de ítems + margen. El N+1
+	// viejo gastaba ~3 queries por ítem (≈100).
+	assert.LessOrEqual(t, queries, n+10,
+		"confirm masivo debe agrupar lecturas/updates de ítems, no 2-3 queries por ítem")
+}
+
+func TestDiscardRetouchItems_BatchIsEfficient(t *testing.T) {
+	db := setupRetouchHandlerDB(t)
+	const n = 20
+	ids := make([]string, 0, n+1)
+	for i := 0; i < n; i++ {
+		_, _, item := seedReadyItem(t, db, retouchTenantA, fmt.Sprintf("d%02d", i))
+		ids = append(ids, item.ID)
+	}
+	ids = append(ids, "88888888-8888-4888-8888-888888888888")
+
+	r := mountRetouch(db, retouchTenantA)
+	var queries int
+	countQueries(t, db, &queries)
+	w := retouchJSON(t, r, http.MethodPost, "/inventory/retouch/items/discard",
+		map[string]any{"item_ids": ids})
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var resp struct {
+		Data struct {
+			Discarded int      `json:"discarded"`
+			Skipped   []string `json:"skipped"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, n, resp.Data.Discarded)
+	assert.ElementsMatch(t, []string{"88888888-8888-4888-8888-888888888888"}, resp.Data.Skipped)
+
+	assert.LessOrEqual(t, queries, 5,
+		"descartar N debe ser un puñado de queries, no una por ítem")
+}
+
+// LOW (a) review — Art. III en discard: los item_ids de OTRO tenant son
+// invisibles (skipped) y su candidata sigue lista para SU dueño.
+func TestDiscardRetouchItems_ForeignItemsAreInvisible(t *testing.T) {
+	db := setupRetouchHandlerDB(t)
+	_, _, foreign := seedReadyItem(t, db, retouchTenantB, "ajena")
+
+	r := mountRetouch(db, retouchTenantA)
+	w := retouchJSON(t, r, http.MethodPost, "/inventory/retouch/items/discard",
+		map[string]any{"item_ids": []string{foreign.ID}})
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Data struct {
+			Discarded int      `json:"discarded"`
+			Skipped   []string `json:"skipped"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Zero(t, resp.Data.Discarded)
+	assert.ElementsMatch(t, []string{foreign.ID}, resp.Data.Skipped)
+
+	var it models.RetouchItem
+	require.NoError(t, db.First(&it, "id = ?", foreign.ID).Error)
+	assert.Equal(t, models.RetouchItemStatusReadyForReview, it.Status,
+		"el ítem ajeno queda intacto — Art. III")
+}
+
 // Descartar deja el producto INTACTO (AC-06) y vuelve a contar como sin
 // retocar; jamás dispara el aporte automático.
 func TestDiscardRetouchItems_LeavesProductUntouched(t *testing.T) {
@@ -508,7 +660,7 @@ func TestRetouchSummary_CountsProgressAndReviewItems(t *testing.T) {
 	rawProduct(t, db, retouchTenantA, "libre2")
 	inFlight := rawProduct(t, db, retouchTenantA, "envuelo")
 	batch := models.RetouchBatch{TenantID: retouchTenantA,
-		Status: models.RetouchBatchStatusRunning, QueuedCount: 2, ProcessedCount: 1}
+		Status: models.RetouchBatchStatusRunning}
 	require.NoError(t, db.Create(&batch).Error)
 	require.NoError(t, db.Create(&models.RetouchItem{BatchID: batch.ID,
 		TenantID: retouchTenantA, ProductID: inFlight.ID,

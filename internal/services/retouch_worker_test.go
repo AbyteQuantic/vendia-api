@@ -249,7 +249,7 @@ func newTestWorker(t *testing.T, db *gorm.DB, enhance RetouchEnhancer) (*Retouch
 func seedBatchWithItems(t *testing.T, db *gorm.DB, tenantID string, n int) (models.RetouchBatch, []models.RetouchItem, []models.Product) {
 	t.Helper()
 	batch := models.RetouchBatch{TenantID: tenantID,
-		Status: models.RetouchBatchStatusRunning, QueuedCount: n}
+		Status: models.RetouchBatchStatusRunning}
 	require.NoError(t, db.Create(&batch).Error)
 	items := make([]models.RetouchItem, 0, n)
 	products := make([]models.Product, 0, n)
@@ -306,7 +306,6 @@ func TestRetouchWorker_TickStoresCandidateWithoutTouchingProduct(t *testing.T) {
 	assert.False(t, p.IsAIEnhanced)
 
 	b := reloadBatch(t, db, batch.ID)
-	assert.Equal(t, 1, b.ProcessedCount)
 	assert.Equal(t, models.RetouchBatchStatusCompleted, b.Status,
 		"sin queued/processing restantes el lote queda completed")
 }
@@ -466,6 +465,60 @@ func TestRetouchWorker_RateLimitPausesGloballyAndRequeues(t *testing.T) {
 		"backoff exponencial 30s→60s")
 }
 
+// MEDIUM 2 review: el nivel de backoff sobrevive un deploy/restart en plena
+// racha de 429 — el worker nuevo lo deriva del paused_until persistido en
+// vez de arrancar en 0 (y volver a martillar al proveedor cada 30s).
+func TestRetouchWorker_BackoffLevelSurvivesRestart(t *testing.T) {
+	db := setupRetouchDB(t)
+	batch, _, _ := seedBatchWithItems(t, db, retouchTestTenantA, 1)
+
+	enhance := funcEnhancer(func(ctx context.Context, tenantID, productID, sourceURL string) (string, error) {
+		return "", errors.New("gemini API returned 429")
+	})
+	w, current := newTestWorker(t, db, enhance)
+
+	// Estado heredado del proceso anterior: primer 429 → pausa base 30s.
+	pausedUntil := current.Add(30 * time.Second)
+	require.NoError(t, db.Model(&models.RetouchBatch{}).Where("id = ?", batch.ID).
+		Update("paused_until", pausedUntil).Error)
+
+	// "Restart": worker recién construido. Mientras la pausa rige, nada corre.
+	assert.False(t, w.Tick(context.Background()))
+
+	// Vencida la pausa, el siguiente 429 debe escalar a 60s (nivel 1), no
+	// resetear a 30s como si fuera el primero.
+	*current = current.Add(31 * time.Second)
+	require.True(t, w.Tick(context.Background()))
+	b := reloadBatch(t, db, batch.ID)
+	require.NotNil(t, b.PausedUntil)
+	assert.Equal(t, current.Add(60*time.Second).Unix(), b.PausedUntil.Unix(),
+		"tras restart el backoff continúa la escalera (60s), no vuelve a 30s")
+}
+
+// Tras un restart con una pausa LARGA vigente (racha avanzada), el nivel
+// derivado es proporcional — p. ej. ~4min restantes → siguiente 429 ≈ 8min.
+func TestRetouchWorker_BackoffRestoreScalesWithRemainingPause(t *testing.T) {
+	db := setupRetouchDB(t)
+	batch, _, _ := seedBatchWithItems(t, db, retouchTestTenantA, 1)
+	enhance := funcEnhancer(func(ctx context.Context, tenantID, productID, sourceURL string) (string, error) {
+		return "", errors.New("rate limit")
+	})
+	w, current := newTestWorker(t, db, enhance)
+
+	pausedUntil := current.Add(4 * time.Minute) // pausa de nivel 3 (30s<<3)
+	require.NoError(t, db.Model(&models.RetouchBatch{}).Where("id = ?", batch.ID).
+		Update("paused_until", pausedUntil).Error)
+
+	assert.False(t, w.Tick(context.Background()))
+	*current = current.Add(4*time.Minute + time.Second)
+	require.True(t, w.Tick(context.Background()))
+
+	b := reloadBatch(t, db, batch.ID)
+	require.NotNil(t, b.PausedUntil)
+	assert.Equal(t, current.Add(8*time.Minute).Unix(), b.PausedUntil.Unix(),
+		"pausa vigente ~4min = nivel 3 → el siguiente 429 pausa 8min (nivel 4)")
+}
+
 func TestRetouchWorker_BackoffIsCappedAt10Minutes(t *testing.T) {
 	db := setupRetouchDB(t)
 	seedBatchWithItems(t, db, retouchTestTenantA, 1)
@@ -510,7 +563,6 @@ func TestRetouchWorker_ConsecutiveFailuresTripBreaker(t *testing.T) {
 	assert.NotEmpty(t, it0.ErrorMessage)
 	assert.False(t, strings.Contains(it0.ErrorMessage, "gemini"),
 		"el error crudo no llega al tendero — Art. V")
-	assert.Equal(t, 1, reloadBatch(t, db, batch.ID).FailedCount)
 
 	it1 := reloadItem(t, db, items[1].ID)
 	assert.Equal(t, models.RetouchItemStatusQueued, it1.Status)
@@ -563,6 +615,40 @@ func TestRetouchWorker_CanceledBatchIsNotServed(t *testing.T) {
 		Update("status", models.RetouchBatchStatusCanceled).Error)
 	w, _ := newTestWorker(t, db, okEnhancer())
 	assert.False(t, w.Tick(context.Background()))
+}
+
+// HIGH review: un panic dentro del enhancer (o de cualquier parte de
+// processItem) JAMÁS tumba el proceso Go — es el POS de todos los tenants.
+// Mismo contrato que runAIJob ("never panics the process"): el ítem queda
+// failed con el mensaje en español y el worker sigue vivo al próximo tick.
+func TestRetouchWorker_RecoversEnhancerPanic(t *testing.T) {
+	db := setupRetouchDB(t)
+	_, items, _ := seedBatchWithItems(t, db, retouchTestTenantA, 2)
+
+	calls := 0
+	enhance := funcEnhancer(func(ctx context.Context, tenantID, productID, sourceURL string) (string, error) {
+		calls++
+		if calls == 1 {
+			panic("boom en el enhancer")
+		}
+		return "https://r2/ok-enhanced.jpg", nil
+	})
+	w, current := newTestWorker(t, db, enhance)
+
+	assert.NotPanics(t, func() { w.Tick(context.Background()) },
+		"un panic del enhancer no puede escapar del tick")
+	*current = current.Add(time.Second)
+
+	it0 := reloadItem(t, db, items[0].ID)
+	assert.Equal(t, models.RetouchItemStatusFailed, it0.Status,
+		"el ítem del panic queda failed, no colgado en processing")
+	assert.Equal(t, retouchFailedMessage, it0.ErrorMessage,
+		"mensaje en español, sin el panic crudo — Art. V")
+
+	// El worker sigue vivo: el siguiente tick procesa el otro ítem.
+	require.True(t, w.Tick(context.Background()))
+	assert.Equal(t, models.RetouchItemStatusReadyForReview,
+		reloadItem(t, db, items[1].ID).Status)
 }
 
 // Backstop del cron: recupera huérfanos y procesa hasta maxItems.

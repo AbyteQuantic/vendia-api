@@ -37,6 +37,33 @@ var retouchActiveBatchStatuses = []string{
 	models.RetouchBatchStatusPausedError,
 }
 
+// findActiveRetouchBatch devuelve el lote activo del tenant, si existe.
+func findActiveRetouchBatch(db *gorm.DB, tenantID string) (models.RetouchBatch, bool) {
+	var batch models.RetouchBatch
+	err := db.Where("tenant_id = ? AND status IN ?", tenantID, retouchActiveBatchStatuses).
+		Order("created_at DESC").First(&batch).Error
+	return batch, err == nil
+}
+
+// createActiveRetouchBatch crea el lote running del tenant. Si pierde la
+// carrera contra otro request (doble-tap, dueño+empleado a la vez), el
+// índice único idx_retouch_batches_active_tenant dispara y devolvemos el
+// lote GANADOR — jamás quedan dos activos (D3, y el summary siempre refleja
+// el progreso real, AC-09).
+func createActiveRetouchBatch(db *gorm.DB, tenantID string) (models.RetouchBatch, error) {
+	batch := models.RetouchBatch{TenantID: tenantID, Status: models.RetouchBatchStatusRunning}
+	err := db.Create(&batch).Error
+	if err == nil {
+		return batch, nil
+	}
+	if services.IsRetouchBatchActiveUniqueViolation(err) {
+		if winner, ok := findActiveRetouchBatch(db, tenantID); ok {
+			return winner, nil
+		}
+	}
+	return models.RetouchBatch{}, err
+}
+
 // CreateRetouchBatch — POST /api/v1/inventory/retouch/batches.
 // Body {product_ids?:[]}: vacío = todos los elegibles. El servidor RECALCULA
 // la elegibilidad (Art. III — jamás confía en la lista del cliente). Si el
@@ -85,9 +112,7 @@ func CreateRetouchBatch(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		// Lote activo del tenant (si existe) — se reutiliza SIEMPRE.
-		var batch models.RetouchBatch
-		hasBatch := db.Where("tenant_id = ? AND status IN ?", tenantID, retouchActiveBatchStatuses).
-			Order("created_at DESC").First(&batch).Error == nil
+		batch, hasBatch := findActiveRetouchBatch(db, tenantID)
 
 		if !hasBatch && len(targets) == 0 {
 			// Nada que encolar y nada corriendo: no se crea un lote vacío.
@@ -97,8 +122,9 @@ func CreateRetouchBatch(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		if !hasBatch {
-			batch = models.RetouchBatch{TenantID: tenantID, Status: models.RetouchBatchStatusRunning}
-			if err := db.Create(&batch).Error; err != nil {
+			var err error
+			batch, err = createActiveRetouchBatch(db, tenantID)
+			if err != nil {
 				c.JSON(http.StatusInternalServerError,
 					gin.H{"error": "no se pudo crear el lote de retoque"})
 				return
@@ -125,15 +151,6 @@ func CreateRetouchBatch(db *gorm.DB) gin.HandlerFunc {
 				return
 			}
 			appended++
-		}
-
-		if appended > 0 {
-			if err := db.Model(&models.RetouchBatch{}).Where("id = ?", batch.ID).
-				Update("queued_count", gorm.Expr("queued_count + ?", appended)).Error; err != nil {
-				c.JSON(http.StatusInternalServerError,
-					gin.H{"error": "no se pudo actualizar el lote de retoque"})
-				return
-			}
 		}
 
 		c.JSON(http.StatusAccepted, gin.H{"data": gin.H{
@@ -251,10 +268,7 @@ func RetouchSummary(db *gorm.DB) gin.HandlerFunc {
 
 		// Lote a mostrar: el activo (running/paused_error) o, si no hay, el
 		// más reciente con fotos aún por revisar.
-		var batch models.RetouchBatch
-		hasBatch := db.Where("tenant_id = ? AND status IN ?",
-			tenantID, retouchActiveBatchStatuses).
-			Order("created_at DESC").First(&batch).Error == nil
+		batch, hasBatch := findActiveRetouchBatch(db, tenantID)
 		if !hasBatch {
 			hasBatch = db.Where(`tenant_id = ? AND status != ? AND id IN (
 				SELECT batch_id FROM retouch_items
@@ -352,12 +366,34 @@ func ConfirmRetouchItems(db *gorm.DB, catalogSvc *services.CatalogService, gemin
 			return
 		}
 
+		// LOTE de verdad (MEDIUM 3): 1 SELECT de todos los ítems del tenant,
+		// clasificación en memoria, updates de ítems agrupados. El UPDATE de
+		// products sí es por ítem (cada candidata es distinta) — eso está
+		// bien; lo que no escala son 2-3 round-trips de ítems por id.
+		var items []models.RetouchItem
+		if err := db.Where("tenant_id = ? AND id IN ?", tenantID, req.ItemIDs).
+			Find(&items).Error; err != nil {
+			c.JSON(http.StatusInternalServerError,
+				gin.H{"error": "no se pudo consultar las fotos"})
+			return
+		}
+		byID := make(map[string]models.RetouchItem, len(items))
+		for _, it := range items {
+			byID[it.ID] = it
+		}
+
 		confirmed := 0
 		skipped := []string{}
+		seen := map[string]bool{}
+		var toApply []models.RetouchItem // en el orden del request
 		for _, itemID := range req.ItemIDs {
-			var item models.RetouchItem
-			if err := db.Where("id = ? AND tenant_id = ?", itemID, tenantID).
-				First(&item).Error; err != nil {
+			if seen[itemID] {
+				continue
+			}
+			seen[itemID] = true
+			item, ok := byID[itemID]
+			if !ok {
+				// Inexistente o de otro tenant — invisible (Art. III).
 				skipped = append(skipped, itemID)
 				continue
 			}
@@ -365,14 +401,16 @@ func ConfirmRetouchItems(db *gorm.DB, catalogSvc *services.CatalogService, gemin
 			case models.RetouchItemStatusConfirmed:
 				// Ya aplicado (otro dispositivo ganó) → no-op idempotente.
 				confirmed++
-				continue
 			case models.RetouchItemStatusReadyForReview:
-				// sigue abajo
+				toApply = append(toApply, item)
 			default:
 				skipped = append(skipped, itemID)
-				continue
 			}
+		}
 
+		var confirmedIDs, staleIDs []string
+		var contributeProducts []string
+		for _, item := range toApply {
 			res := db.Model(&models.Product{}).
 				Where("id = ? AND tenant_id = ?", item.ProductID, tenantID).
 				Updates(map[string]any{
@@ -387,20 +425,36 @@ func ConfirmRetouchItems(db *gorm.DB, catalogSvc *services.CatalogService, gemin
 			if res.RowsAffected == 0 {
 				// El producto se borró mientras la foto esperaba revisión
 				// (spec §9): el ítem se cierra sin romper el flujo.
-				db.Model(&models.RetouchItem{}).Where("id = ?", item.ID).
-					Updates(map[string]any{
-						"status":        models.RetouchItemStatusSkippedStale,
-						"error_message": "El producto ya no existe.",
-					})
-				skipped = append(skipped, itemID)
+				staleIDs = append(staleIDs, item.ID)
+				skipped = append(skipped, item.ID)
 				continue
 			}
+			confirmedIDs = append(confirmedIDs, item.ID)
+			contributeProducts = append(contributeProducts, item.ProductID)
+		}
 
-			db.Model(&models.RetouchItem{}).Where("id = ?", item.ID).
-				Update("status", models.RetouchItemStatusConfirmed)
-			confirmed++
-			// Aporte automático (098 F2) — SOLO al confirmar, nunca antes.
-			retouchAutoContribute(db, catalogSvc, geminiSvc, tenantID, item.ProductID)
+		if len(confirmedIDs) > 0 {
+			if err := db.Model(&models.RetouchItem{}).
+				Where("id IN ? AND status = ?", confirmedIDs,
+					models.RetouchItemStatusReadyForReview).
+				Update("status", models.RetouchItemStatusConfirmed).Error; err != nil {
+				c.JSON(http.StatusInternalServerError,
+					gin.H{"error": "no se pudo confirmar las fotos"})
+				return
+			}
+			confirmed += len(confirmedIDs)
+		}
+		if len(staleIDs) > 0 {
+			db.Model(&models.RetouchItem{}).Where("id IN ?", staleIDs).
+				Updates(map[string]any{
+					"status":        models.RetouchItemStatusSkippedStale,
+					"error_message": "El producto ya no existe.",
+				})
+		}
+		// Aporte automático (098 F2) — SOLO al confirmar, por ítem
+		// confirmado y en el orden del request.
+		for _, productID := range contributeProducts {
+			retouchAutoContribute(db, catalogSvc, geminiSvc, tenantID, productID)
 		}
 
 		c.JSON(http.StatusOK, gin.H{"data": gin.H{
@@ -425,32 +479,50 @@ func DiscardRetouchItems(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// LOTE (MEDIUM 3): 1 UPDATE agrupado + 1 SELECT de verificación —
+		// nunca una query por ítem.
+		if err := db.Model(&models.RetouchItem{}).
+			Where("tenant_id = ? AND id IN ? AND status = ?",
+				tenantID, req.ItemIDs, models.RetouchItemStatusReadyForReview).
+			Update("status", models.RetouchItemStatusDiscarded).Error; err != nil {
+			c.JSON(http.StatusInternalServerError,
+				gin.H{"error": "no se pudo descartar la foto"})
+			return
+		}
+
+		// Estado final de los ids pedidos: discarded (recién o de antes —
+		// idempotente) cuenta; el resto (otro estado, ajeno o inexistente)
+		// sale en skipped por diferencia de conjuntos.
+		var rows []struct {
+			ID     string
+			Status string
+		}
+		if err := db.Model(&models.RetouchItem{}).
+			Select("id, status").
+			Where("tenant_id = ? AND id IN ?", tenantID, req.ItemIDs).
+			Scan(&rows).Error; err != nil {
+			c.JSON(http.StatusInternalServerError,
+				gin.H{"error": "no se pudo verificar las fotos descartadas"})
+			return
+		}
+		statusByID := make(map[string]string, len(rows))
+		for _, r := range rows {
+			statusByID[r.ID] = r.Status
+		}
+
 		discarded := 0
 		skipped := []string{}
+		seen := map[string]bool{}
 		for _, itemID := range req.ItemIDs {
-			res := db.Model(&models.RetouchItem{}).
-				Where("id = ? AND tenant_id = ? AND status = ?",
-					itemID, tenantID, models.RetouchItemStatusReadyForReview).
-				Update("status", models.RetouchItemStatusDiscarded)
-			if res.Error != nil {
-				c.JSON(http.StatusInternalServerError,
-					gin.H{"error": "no se pudo descartar la foto"})
-				return
-			}
-			if res.RowsAffected == 0 {
-				// Ya descartado u otro estado → idempotente si ya está
-				// discarded; skipped para lo demás.
-				var item models.RetouchItem
-				if err := db.Where("id = ? AND tenant_id = ?", itemID, tenantID).
-					First(&item).Error; err == nil &&
-					item.Status == models.RetouchItemStatusDiscarded {
-					discarded++
-				} else {
-					skipped = append(skipped, itemID)
-				}
+			if seen[itemID] {
 				continue
 			}
-			discarded++
+			seen[itemID] = true
+			if statusByID[itemID] == models.RetouchItemStatusDiscarded {
+				discarded++
+			} else {
+				skipped = append(skipped, itemID)
+			}
 		}
 
 		c.JSON(http.StatusOK, gin.H{"data": gin.H{

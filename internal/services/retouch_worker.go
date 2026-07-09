@@ -71,6 +71,10 @@ type RetouchWorker struct {
 	mu          sync.Mutex
 	rateLevel   int            // 429 consecutivos → exponente del backoff
 	consecFails map[string]int // batchID → fallos no-429 consecutivos
+
+	// restoreOnce deriva rateLevel del paused_until persistido en el primer
+	// tick — el backoff sobrevive deploys/restarts en plena racha de 429.
+	restoreOnce sync.Once
 }
 
 // NewRetouchWorker construye el worker. interval <= 0 cae al default.
@@ -159,6 +163,11 @@ func (w *RetouchWorker) Backstop(ctx context.Context, maxItems int) (recovered, 
 func (w *RetouchWorker) Tick(ctx context.Context) bool {
 	now := w.now()
 
+	// Restaurar el nivel de backoff heredado (una sola vez, perezoso: acá y
+	// no en el constructor para que use el reloj inyectado en tests y corra
+	// con las tablas ya migradas).
+	w.restoreOnce.Do(func() { w.restoreBackoffLevel(now) })
+
 	// Reanudar lotes en paused_error cuya pausa venció (AC-10: solo).
 	w.db.Model(&models.RetouchBatch{}).
 		Where("status = ? AND paused_until IS NOT NULL AND paused_until <= ?",
@@ -189,9 +198,67 @@ func (w *RetouchWorker) Tick(ctx context.Context) bool {
 		return false
 	}
 
-	w.processItem(ctx, batchID, item)
+	w.safeProcessItem(ctx, batchID, item)
 	w.finishBatchIfDrained(batchID)
 	return true
+}
+
+// safeProcessItem corre processItem con recover(): un panic del enhancer (o
+// de cualquier colaborador) JAMÁS tumba el proceso Go — es el POS de todos
+// los tenants. Mismo contrato que runAIJob ("never panics the process",
+// handlers/ai_jobs.go): el ítem queda failed con el mensaje en español y el
+// worker sigue vivo para el próximo tick.
+func (w *RetouchWorker) safeProcessItem(ctx context.Context, batchID string, item *models.RetouchItem) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		log.Printf("[retouch-item-panic batch=%s item=%s] %v", batchID, item.ID, r)
+		w.db.Model(&models.RetouchItem{}).Where("id = ?", item.ID).
+			Updates(map[string]any{
+				"status":        models.RetouchItemStatusFailed,
+				"error_message": retouchFailedMessage,
+			})
+	}()
+	w.processItem(ctx, batchID, item)
+}
+
+// restoreBackoffLevel — MEDIUM 2 review: rateLevel vive en memoria, pero el
+// paused_until del 429 queda persistido en los lotes running. Tras un
+// restart, derivamos el nivel del tiempo de pausa RESTANTE más largo: una
+// pausa vigente de ~30s fue el nivel 0 → el próximo 429 debe escalar a 60s
+// (nivel 1), no volver a martillar al proveedor cada 30s. Sin tabla nueva.
+func (w *RetouchWorker) restoreBackoffLevel(now time.Time) {
+	var stamps []time.Time
+	if err := w.db.Model(&models.RetouchBatch{}).
+		Where("status = ? AND paused_until IS NOT NULL", models.RetouchBatchStatusRunning).
+		Order("paused_until DESC").Limit(1).
+		Pluck("paused_until", &stamps).Error; err != nil {
+		log.Printf("[retouch] restore backoff: %v", err)
+		return
+	}
+	if len(stamps) == 0 {
+		return
+	}
+	remaining := stamps[0].Sub(now)
+	if remaining <= 0 {
+		return
+	}
+	// Nivel cuya pausa cubre lo restante (la pausa persistida de nivel n es
+	// base<<n + jitter). Como hay una pausa vigente, al menos un 429 ya
+	// ocurrió → el PRÓXIMO usa el nivel siguiente (+1).
+	level := 0
+	for d := retouchBackoffBase; d < remaining && d < retouchBackoffCap; d <<= 1 {
+		level++
+	}
+	w.mu.Lock()
+	if level+1 > w.rateLevel {
+		w.rateLevel = level + 1
+	}
+	w.mu.Unlock()
+	log.Printf("[retouch] backoff restaurado tras restart: nivel %d (pausa restante %s)",
+		level+1, remaining)
 }
 
 // pickBatch elige el lote running no pausado con ítems queued, el menos
@@ -284,12 +351,12 @@ func (w *RetouchWorker) processItem(ctx context.Context, batchID string, item *m
 	var product models.Product
 	if err := w.db.Where("id = ? AND tenant_id = ?", item.ProductID, item.TenantID).
 		First(&product).Error; err != nil {
-		w.resolveSkippedStale(batchID, item, retouchStaleReasonGone)
+		w.resolveSkippedStale(item, retouchStaleReasonGone)
 		return
 	}
 	if RetouchSourcePhotoURL(product) != item.SourcePhotoURL ||
 		!IsProductRetouchEligible(product, item.TenantID) {
-		w.resolveSkippedStale(batchID, item, retouchStaleReasonChanged)
+		w.resolveSkippedStale(item, retouchStaleReasonChanged)
 		return
 	}
 
@@ -305,8 +372,6 @@ func (w *RetouchWorker) processItem(ctx context.Context, batchID string, item *m
 				"candidate_url": candidateURL,
 				"error_message": "",
 			})
-		w.db.Model(&models.RetouchBatch{}).Where("id = ?", batchID).
-			Update("processed_count", gorm.Expr("processed_count + 1"))
 		w.mu.Lock()
 		w.rateLevel = 0
 		delete(w.consecFails, batchID)
@@ -324,14 +389,12 @@ func (w *RetouchWorker) processItem(ctx context.Context, batchID string, item *m
 }
 
 // resolveSkippedStale cierra el ítem sin gastar IA, con razón honesta.
-func (w *RetouchWorker) resolveSkippedStale(batchID string, item *models.RetouchItem, reason string) {
+func (w *RetouchWorker) resolveSkippedStale(item *models.RetouchItem, reason string) {
 	w.db.Model(&models.RetouchItem{}).Where("id = ?", item.ID).
 		Updates(map[string]any{
 			"status":        models.RetouchItemStatusSkippedStale,
 			"error_message": reason,
 		})
-	w.db.Model(&models.RetouchBatch{}).Where("id = ?", batchID).
-		Update("processed_count", gorm.Expr("processed_count + 1"))
 }
 
 // pauseAllForRateLimit persiste paused_until en TODOS los lotes activos
@@ -379,8 +442,6 @@ func (w *RetouchWorker) resolveFailure(batchID string, item *models.RetouchItem,
 				"attempts":      attempts,
 				"error_message": retouchFailedMessage,
 			})
-		w.db.Model(&models.RetouchBatch{}).Where("id = ?", batchID).
-			Update("failed_count", gorm.Expr("failed_count + 1"))
 	} else {
 		w.db.Model(&models.RetouchItem{}).Where("id = ?", item.ID).
 			Updates(map[string]any{

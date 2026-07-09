@@ -123,27 +123,36 @@ func TestEligibleRetouchProducts_CountsOnlyRawOwnPhotos(t *testing.T) {
 
 // ── T-01 — UNIQUE parcial: un producto no vive en dos lotes activos ──────
 
-func TestRetouchActiveIndex_BlocksSameProductInTwoActiveBatches(t *testing.T) {
+func TestRetouchActiveIndex_BlocksSameProductTwiceWhileActive(t *testing.T) {
 	db := setupRetouchDB(t)
 	productID := "33333333-3333-3333-3333-333333333333"
 
+	// (El caso "dos lotes activos" ya es imposible por el índice de lotes —
+	// ver TestRetouchBatchIndex_*; acá el invariante de ÍTEM: el mismo
+	// producto no puede tener dos ítems activos, ni siquiera en el mismo
+	// lote, p. ej. dos requests que pasaron el pre-check a la vez.)
 	b1 := models.RetouchBatch{TenantID: retouchTestTenantA, Status: models.RetouchBatchStatusRunning}
-	b2 := models.RetouchBatch{TenantID: retouchTestTenantA, Status: models.RetouchBatchStatusRunning}
 	require.NoError(t, db.Create(&b1).Error)
-	require.NoError(t, db.Create(&b2).Error)
 
 	first := models.RetouchItem{BatchID: b1.ID, TenantID: retouchTestTenantA,
 		ProductID: productID, SourcePhotoURL: "https://r2/x.jpg",
 		Status: models.RetouchItemStatusQueued}
 	require.NoError(t, db.Create(&first).Error)
 
-	dup := models.RetouchItem{BatchID: b2.ID, TenantID: retouchTestTenantA,
+	dup := models.RetouchItem{BatchID: b1.ID, TenantID: retouchTestTenantA,
 		ProductID: productID, SourcePhotoURL: "https://r2/x.jpg",
 		Status: models.RetouchItemStatusQueued}
 	err := db.Create(&dup).Error
 	require.Error(t, err, "el índice UNIQUE parcial debe impedir el duplicado activo")
 	assert.True(t, IsRetouchActiveUniqueViolation(err),
 		"la violación debe ser reconocible para mapearla a skipped[]: %v", err)
+
+	// ready_for_review sigue siendo activo → también bloquea.
+	require.NoError(t, db.Model(&models.RetouchItem{}).Where("id = ?", first.ID).
+		Update("status", models.RetouchItemStatusReadyForReview).Error)
+	assert.Error(t, db.Create(&models.RetouchItem{BatchID: b1.ID,
+		TenantID: retouchTestTenantA, ProductID: productID,
+		Status: models.RetouchItemStatusQueued}).Error)
 }
 
 func TestRetouchActiveIndex_AllowsRequeueAfterTerminalState(t *testing.T) {
@@ -163,6 +172,46 @@ func TestRetouchActiveIndex_AllowsRequeueAfterTerminalState(t *testing.T) {
 	again := models.RetouchItem{BatchID: b2.ID, TenantID: retouchTestTenantA,
 		ProductID: productID, Status: models.RetouchItemStatusQueued}
 	assert.NoError(t, db.Create(&again).Error)
+}
+
+// MEDIUM 1 review: máx 1 lote ACTIVO por tenant hecho físico — la carrera de
+// dos POST simultáneos (doble-tap, dueño+empleado) no puede dejar dos lotes
+// running (el summary solo muestra uno → el progreso del otro sería
+// invisible, rompiendo AC-09).
+func TestRetouchBatchIndex_BlocksTwoActiveBatchesPerTenant(t *testing.T) {
+	db := setupRetouchDB(t)
+	b1 := models.RetouchBatch{TenantID: retouchTestTenantA, Status: models.RetouchBatchStatusRunning}
+	require.NoError(t, db.Create(&b1).Error)
+
+	dupRunning := models.RetouchBatch{TenantID: retouchTestTenantA, Status: models.RetouchBatchStatusRunning}
+	err := db.Create(&dupRunning).Error
+	require.Error(t, err, "dos lotes running del mismo tenant deben chocar")
+	assert.True(t, IsRetouchBatchActiveUniqueViolation(err),
+		"la violación debe ser reconocible para re-seleccionar el ganador: %v", err)
+
+	// paused_error también es activo (se reanuda solo) → también bloquea.
+	dupPaused := models.RetouchBatch{TenantID: retouchTestTenantA, Status: models.RetouchBatchStatusPausedError}
+	assert.Error(t, db.Create(&dupPaused).Error)
+}
+
+func TestRetouchBatchIndex_TerminalBatchesDoNotBlockNewOne(t *testing.T) {
+	db := setupRetouchDB(t)
+	done := models.RetouchBatch{TenantID: retouchTestTenantA, Status: models.RetouchBatchStatusCompleted}
+	canceled := models.RetouchBatch{TenantID: retouchTestTenantA, Status: models.RetouchBatchStatusCanceled}
+	require.NoError(t, db.Create(&done).Error)
+	require.NoError(t, db.Create(&canceled).Error)
+
+	fresh := models.RetouchBatch{TenantID: retouchTestTenantA, Status: models.RetouchBatchStatusRunning}
+	assert.NoError(t, db.Create(&fresh).Error,
+		"completed/canceled no bloquean un lote nuevo")
+}
+
+func TestRetouchBatchIndex_DifferentTenantsDoNotCollide(t *testing.T) {
+	db := setupRetouchDB(t)
+	require.NoError(t, db.Create(&models.RetouchBatch{
+		TenantID: retouchTestTenantA, Status: models.RetouchBatchStatusRunning}).Error)
+	assert.NoError(t, db.Create(&models.RetouchBatch{
+		TenantID: retouchTestTenantB, Status: models.RetouchBatchStatusRunning}).Error)
 }
 
 func TestRetouchActiveIndex_DifferentTenantsSameProductIDDoNotCollide(t *testing.T) {
