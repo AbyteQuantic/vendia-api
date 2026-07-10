@@ -52,6 +52,28 @@ func TestIsProductRetouchEligible_ImageURLFallback(t *testing.T) {
 	assert.True(t, IsProductRetouchEligible(p, retouchTestTenantA))
 }
 
+// Ajuste Spec 101: las fotos EXTERNAS de enriquecimiento por barcode
+// (OpenFoodFacts, VTEX…) suelen ser crudas — una mano sosteniendo la botella —
+// y deben contar como "sin retocar". Externa = host fuera de nuestro storage.
+func TestIsProductRetouchEligible_ExternalEnrichmentPhotoIsEligible(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{"OpenFoodFacts (caso Gatorade maracuyá)",
+			"https://images.openfoodfacts.org/images/products/775/510/431/1652/front_fr.3.200.jpg"},
+		{"VTEX", "https://exitocol.vteximg.com.br/arquivos/ids/1234567/gatorade.jpg"},
+		{"host externo genérico", "https://cdn.example.com/fotos/botella.png"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := models.Product{TenantID: retouchTestTenantA, ImageURL: tc.url}
+			assert.True(t, IsProductRetouchEligible(p, retouchTestTenantA),
+				"externa cruda debe ser ELEGIBLE: %s", tc.url)
+		})
+	}
+}
+
 func TestIsProductRetouchEligible_Exclusions(t *testing.T) {
 	own := "https://r2.vendia.co/products/" + retouchTestTenantA + "/abc.jpg"
 	cases := []struct {
@@ -69,12 +91,15 @@ func TestIsProductRetouchEligible_Exclusions(t *testing.T) {
 		{"URL -generated (creada con IA)", models.Product{
 			TenantID: retouchTestTenantA,
 			PhotoURL: "https://r2.vendia.co/products/" + retouchTestTenantA + "/abc-generated.png"}},
-		{"foto del catálogo compartido / externa", models.Product{
+		{"URL -enhanced en host EXTERNO (mejorada re-referenciada)", models.Product{
 			TenantID: retouchTestTenantA,
-			PhotoURL: "https://images.openfoodfacts.org/products/salsa.jpg"}},
-		{"foto del bucket de OTRO tenant", models.Product{
+			PhotoURL: "https://cdn.example.com/fotos/abc-enhanced.jpg"}},
+		{"catálogo compartido: bucket R2 de OTRO tenant (curada)", models.Product{
 			TenantID: retouchTestTenantA,
 			PhotoURL: "https://r2.vendia.co/products/" + retouchTestTenantB + "/abc.jpg"}},
+		{"catálogo compartido: Supabase storage de OTRO tenant (curada)", models.Product{
+			TenantID: retouchTestTenantA,
+			PhotoURL: "https://xyz.supabase.co/storage/v1/object/public/product-photos/products/" + retouchTestTenantB + "/abc.jpg"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -85,8 +110,10 @@ func TestIsProductRetouchEligible_Exclusions(t *testing.T) {
 }
 
 // EligibleRetouchProducts recalcula server-side (Art. III): mezcla AC-01 —
-// 3 crudas propias, 1 mejorada, 1 de catálogo, 1 muestra, 1 sin foto → 3.
-func TestEligibleRetouchProducts_CountsOnlyRawOwnPhotos(t *testing.T) {
+// 3 crudas propias + 1 externa (enriquecimiento) cuentan; 1 mejorada, 1 del
+// catálogo compartido (storage de otro tenant), 1 muestra, 1 sin foto y 1
+// draft no.
+func TestEligibleRetouchProducts_CountsRawOwnAndExternalPhotos(t *testing.T) {
 	db := setupRetouchDB(t)
 	own := func(name string) models.Product {
 		return models.Product{
@@ -97,8 +124,8 @@ func TestEligibleRetouchProducts_CountsOnlyRawOwnPhotos(t *testing.T) {
 	raw1, raw2, raw3 := own("p1"), own("p2"), own("p3")
 	enhanced := own("p4")
 	enhanced.IsAIEnhanced = true
-	catalog := models.Product{TenantID: retouchTestTenantA, Name: "p5", Price: 1,
-		PhotoURL: "https://off.example/x.jpg"}
+	external := models.Product{TenantID: retouchTestTenantA, Name: "p5", Price: 1,
+		ImageURL: "https://images.openfoodfacts.org/images/products/775/510/431/1652/front_fr.3.200.jpg"}
 	sample := own("p6")
 	sample.PhotoIsSample = true
 	noPhoto := models.Product{TenantID: retouchTestTenantA, Name: "p7", Price: 1}
@@ -106,19 +133,22 @@ func TestEligibleRetouchProducts_CountsOnlyRawOwnPhotos(t *testing.T) {
 	draft.IsDraft = true
 	otherTenant := models.Product{TenantID: retouchTestTenantB, Name: "p9", Price: 1,
 		PhotoURL: "https://r2.vendia.co/products/" + retouchTestTenantB + "/p9.jpg"}
+	sharedCatalog := models.Product{TenantID: retouchTestTenantA, Name: "p10", Price: 1,
+		PhotoURL: "https://r2.vendia.co/products/" + retouchTestTenantB + "/p10.jpg"}
 
-	for _, p := range []*models.Product{&raw1, &raw2, &raw3, &enhanced, &catalog, &sample, &noPhoto, &draft, &otherTenant} {
+	for _, p := range []*models.Product{&raw1, &raw2, &raw3, &enhanced, &external, &sample, &noPhoto, &draft, &otherTenant, &sharedCatalog} {
 		require.NoError(t, db.Create(p).Error)
 	}
 
 	eligible, err := EligibleRetouchProducts(db, retouchTestTenantA)
 	require.NoError(t, err)
-	assert.Len(t, eligible, 3, "AC-01: solo las 3 fotos crudas propias cuentan")
+	assert.Len(t, eligible, 4,
+		"AC-01 ajustado: 3 crudas propias + 1 externa de enriquecimiento")
 	ids := map[string]bool{}
 	for _, p := range eligible {
 		ids[p.ID] = true
 	}
-	assert.True(t, ids[raw1.ID] && ids[raw2.ID] && ids[raw3.ID])
+	assert.True(t, ids[raw1.ID] && ids[raw2.ID] && ids[raw3.ID] && ids[external.ID])
 }
 
 // ── T-01 — UNIQUE parcial: un producto no vive en dos lotes activos ──────

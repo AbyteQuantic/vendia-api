@@ -7,6 +7,7 @@
 package services
 
 import (
+	"regexp"
 	"strings"
 
 	"vendia-backend/internal/models"
@@ -29,11 +30,33 @@ func RetouchSourcePhotoURL(p models.Product) string {
 	return p.ImageURL
 }
 
-// IsProductRetouchEligible decide si la foto actual del producto es una
-// original propia sin retocar (FR-01). Elegible = foto propia del bucket del
-// tenant (URL contiene products/<tenantID>/ sin sufijo -enhanced/-generated),
-// !is_ai_enhanced, !photo_is_sample y foto no vacía. Las fotos del catálogo
-// compartido / externas no contienen el prefijo del tenant → excluidas.
+// vendiaStorageProductPath reconoce las claves de NUESTRO storage de fotos de
+// producto: siempre `products/<tenantUUID>/…` (así suben inventory.go y
+// retouch_enhance.go, sea al bucket R2 público o a Supabase storage). Las
+// URLs externas de enriquecimiento (OpenFoodFacts usa segmentos numéricos,
+// VTEX usa /arquivos/ids/) nunca traen un UUID tras "products/".
+var vendiaStorageProductPath = regexp.MustCompile(
+	`(?i)products/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/`)
+
+// isVendiaStorageURL decide si la foto vive en NUESTRO storage (Supabase
+// storage, endpoint R2 o dominio público con la clave products/<uuid>/). El
+// frontend replica este mismo criterio en isPhotoUnretouched — mantener
+// ambos idénticos (Spec 101, ajuste fotos externas).
+func isVendiaStorageURL(url string) bool {
+	lower := strings.ToLower(url)
+	return strings.Contains(lower, ".supabase.co/storage/") ||
+		strings.Contains(lower, ".r2.cloudflarestorage.com/") ||
+		vendiaStorageProductPath.MatchString(url)
+}
+
+// IsProductRetouchEligible decide si la foto actual del producto está "sin
+// retocar" (FR-01, ajuste fotos externas). Elegible = foto efectiva no vacía,
+// sin sufijo -enhanced/-generated, !is_ai_enhanced, !photo_is_sample Y
+// además: es del bucket PROPIO (products/<tenantID>/) O de un host EXTERNO
+// fuera de nuestro storage (enriquecimiento por barcode — OpenFoodFacts,
+// VTEX… — suele venir cruda y merece retoque). Quedan EXCLUIDAS las fotos
+// del catálogo compartido VendIA: viven en nuestro storage bajo el path de
+// OTRO tenant y ya están curadas.
 func IsProductRetouchEligible(p models.Product, tenantID string) bool {
 	if tenantID == "" || p.IsAIEnhanced || p.PhotoIsSample {
 		return false
@@ -42,13 +65,15 @@ func IsProductRetouchEligible(p models.Product, tenantID string) bool {
 	if photo == "" {
 		return false
 	}
-	if !strings.Contains(photo, "products/"+tenantID+"/") {
-		return false
-	}
 	if strings.Contains(photo, "-enhanced.") || strings.Contains(photo, "-generated.") {
 		return false
 	}
-	return true
+	if strings.Contains(photo, "products/"+tenantID+"/") {
+		return true // foto propia cruda
+	}
+	// Externa (fuera de nuestro storage) → elegible; storage de otro
+	// tenant (catálogo compartido curado) → no.
+	return !isVendiaStorageURL(photo)
 }
 
 // EligibleRetouchProducts recalcula server-side (Art. III) las referencias

@@ -107,12 +107,15 @@ func TestCreateRetouchBatch_EmptyBodyQueuesAllEligible(t *testing.T) {
 	p1 := rawProduct(t, db, retouchTenantA, "p1")
 	p2 := rawProduct(t, db, retouchTenantA, "p2")
 	p3 := rawProduct(t, db, retouchTenantA, "p3")
-	// Inelegibles: mejorada, catálogo externo, muestra, sin foto.
+	// Inelegibles: mejorada, catálogo compartido (nuestro storage bajo el
+	// path de OTRO tenant — curada), muestra, sin foto. Las EXTERNAS de
+	// enriquecimiento sí son elegibles (ajuste Spec 101, ver services).
 	require.NoError(t, db.Create(&models.Product{TenantID: retouchTenantA,
 		Name: "enh", Price: 1, IsAIEnhanced: true,
 		PhotoURL: "https://r2.vendia.co/products/" + retouchTenantA + "/enh-enhanced.jpg"}).Error)
 	require.NoError(t, db.Create(&models.Product{TenantID: retouchTenantA,
-		Name: "cat", Price: 1, PhotoURL: "https://off.example/x.jpg"}).Error)
+		Name: "cat", Price: 1,
+		PhotoURL: "https://r2.vendia.co/products/" + retouchTenantB + "/cat.jpg"}).Error)
 	sample := models.Product{TenantID: retouchTenantA, Name: "sam", Price: 1,
 		PhotoURL: "https://r2.vendia.co/products/" + retouchTenantA + "/sam.jpg", PhotoIsSample: true}
 	require.NoError(t, db.Create(&sample).Error)
