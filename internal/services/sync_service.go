@@ -123,7 +123,7 @@ func (s *SyncService) processOperation(tx *gorm.DB, tenantID string, op SyncOper
 	case "credit_account":
 		return s.syncEntity(tx, &models.CreditAccount{}, tenantID, op)
 	case "credit_payment":
-		return s.syncCreditPayment(tx, op)
+		return s.syncCreditPayment(tx, tenantID, op)
 	case "event":
 		var ev models.Event
 		return s.syncJSONEntity(tx, tenantID, op, &ev)
@@ -164,6 +164,16 @@ func (s *SyncService) syncJSONEntity(tx *gorm.DB, tenantID string, op SyncOperat
 			return false, nil
 		}
 		return true, tx.Where("id = ?", op.ID).Delete(dst).Error
+	}
+
+	// Art. III — un id que ya vive en OTRO tenant jamás se toca: sin este
+	// guard, el Save de abajo sobreescribía la fila ajena y SetIdentity le
+	// re-estampaba el tenant del atacante (los ids de eventos circulan en
+	// landings públicas). Se trata como conflicto no aplicado.
+	var foreign int64
+	if err := tx.Model(dst).Where("id = ? AND tenant_id <> ?", op.ID, tenantID).
+		Count(&foreign).Error; err == nil && foreign > 0 {
+		return false, nil
 	}
 
 	// Last-Write-Wins: discard a write older than the server's row.
@@ -247,8 +257,20 @@ func (s *SyncService) syncProductWrite(tx *gorm.DB, tenantID string, op SyncOper
 	if op.Action != "create" {
 		return s.syncEntity(tx, &models.Product{}, tenantID, op)
 	}
+	// Data nil (cliente viejo/corrupto) → jamás un panic que envenene el
+	// lote; conflicto no aplicado y el lote sigue (patrón syncEventScan).
+	if op.Data == nil {
+		return false, nil
+	}
+	// Art. III — el lookup del re-sync idempotente va SIEMPRE con tenant:
+	// sin el filtro, un create re-enviado con el id de un producto AJENO
+	// (los UUID circulan en el catálogo público) caía en applyLWW y
+	// sobreescribía la fila del otro tenant. Si el id existe bajo otro
+	// tenant, el Create de abajo choca contra products_pkey y el ON
+	// CONFLICT (id) DO NOTHING lo absorbe sin tocar la fila ajena.
 	model := &models.Product{}
-	if err := tx.Where("id = ?", op.ID).First(model).Error; err == nil {
+	if err := tx.Where("id = ? AND tenant_id = ?", op.ID, tenantID).
+		First(model).Error; err == nil {
 		return s.applyLWW(tx, model, op)
 	}
 	op.Data["id"] = op.ID
@@ -274,7 +296,15 @@ func syncProductBarcode(op SyncOperation) string {
 func (s *SyncService) syncEntity(tx *gorm.DB, model any, tenantID string, op SyncOperation) (bool, error) {
 	switch op.Action {
 	case "create":
-		result := tx.Where("id = ?", op.ID).First(model)
+		// Data nil → jamás un panic que envenene el lote (ver syncProductWrite).
+		if op.Data == nil {
+			return false, nil
+		}
+		// Art. III — mismo guard que syncProductWrite: el lookup idempotente
+		// filtra por tenant para que un id AJENO nunca caiga en applyLWW; la
+		// colisión de pkey con la fila ajena la absorbe el ON CONFLICT DO
+		// NOTHING sin escribir nada.
+		result := tx.Where("id = ? AND tenant_id = ?", op.ID, tenantID).First(model)
 		if result.Error == nil {
 			return s.applyLWW(tx, model, op)
 		}
@@ -310,7 +340,21 @@ func (s *SyncService) applyLWW(tx *gorm.DB, model any, op SyncOperation) (bool, 
 		return false, nil
 	}
 
-	return true, tx.Model(model).Where("id = ?", op.ID).Updates(op.Data).Error
+	// Art. III — la identidad de la fila NO es reescribible por el payload
+	// del cliente: sin este filtro, un update podía mover el producto a otro
+	// tenant ("tenant_id" en op.Data) o re-apuntar su id. Copia nueva (no se
+	// muta op.Data — otros caminos la estampan después).
+	updates := make(map[string]any, len(op.Data))
+	for k, v := range op.Data {
+		if k == "id" || k == "tenant_id" {
+			continue
+		}
+		updates[k] = v
+	}
+	if len(updates) == 0 {
+		return true, nil
+	}
+	return true, tx.Model(model).Where("id = ?", op.ID).Updates(updates).Error
 }
 
 func applyUpdate(tx *gorm.DB, model any, op SyncOperation) (bool, error) {
@@ -391,8 +435,23 @@ func (s *SyncService) syncSale(tx *gorm.DB, tenantID string, op SyncOperation) (
 	return applied, nil
 }
 
-func (s *SyncService) syncCreditPayment(tx *gorm.DB, op SyncOperation) (bool, error) {
-	if op.Action != "create" {
+// syncCreditPayment inserta un abono offline idempotente. Art. III: la cuenta
+// de fiado debe pertenecer al tenant del JWT — CreditPayment no tiene columna
+// tenant_id, su pertenencia se hereda de credit_accounts, así que sin esta
+// verificación un cliente autenticado de otro tenant podía "abonar" (falsear)
+// la deuda de una tienda ajena con solo conocer el id de la cuenta.
+func (s *SyncService) syncCreditPayment(tx *gorm.DB, tenantID string, op SyncOperation) (bool, error) {
+	if op.Action != "create" || op.Data == nil {
+		return false, nil
+	}
+	accountID, _ := op.Data["credit_account_id"].(string)
+	if accountID == "" {
+		return false, nil
+	}
+	var account models.CreditAccount
+	if err := tx.Where("id = ? AND tenant_id = ?", accountID, tenantID).
+		First(&account).Error; err != nil {
+		// Cuenta ajena o inexistente → conflicto no aplicado, jamás se escribe.
 		return false, nil
 	}
 	op.Data["id"] = op.ID
