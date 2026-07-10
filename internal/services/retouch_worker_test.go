@@ -671,3 +671,87 @@ func TestRetouchWorker_Backstop(t *testing.T) {
 		Where("status = ?", models.RetouchItemStatusReadyForReview).Count(&ready)
 	assert.EqualValues(t, 3, ready)
 }
+
+// Auditoría 2026-07-10 — BUG: un ítem que vuelve a queued dentro de un lote
+// ya NO activo (cancelado) queda atrapado PARA SIEMPRE: pickBatch solo sirve
+// lotes running, así que nadie lo procesará jamás, y su estado activo
+// (queued) bloquea al producto vía idx_retouch_items_active_product — el
+// producto no puede re-encolarse nunca ("ya_en_lote") y deja de contar en
+// eligible_count. Escenario real: el worker reclama el ítem (processing), el
+// tendero cancela el lote (cancel no toca processing — FR-15) y luego el
+// proceso se reinicia (deploy de Render) o el enhance falla transitorio →
+// el ítem vuelve a queued dentro del lote cancelado. RecoverStale debe
+// LIBERAR esos ítems (canceled) para que el producto vuelva a ser elegible.
+func TestRetouchWorker_RecoverStaleReleasesQueuedItemsOfInactiveBatches(t *testing.T) {
+	db := setupRetouchDB(t)
+	batch, items, products := seedBatchWithItems(t, db, retouchTestTenantA, 2)
+	w, current := newTestWorker(t, db, okEnhancer())
+
+	// items[0]: quedó processing y el proceso murió a mitad de foto.
+	old := current.Add(-11 * time.Minute)
+	require.NoError(t, db.Model(&models.RetouchItem{}).Where("id = ?", items[0].ID).
+		Updates(map[string]any{
+			"status":     models.RetouchItemStatusProcessing,
+			"started_at": old,
+		}).Error)
+	// El tendero canceló el lote mientras tanto: los queued pasaron a
+	// canceled (items[1] simulado abajo re-encolado por un 429 posterior)
+	// y el processing quedó intacto (FR-15).
+	require.NoError(t, db.Model(&models.RetouchBatch{}).Where("id = ?", batch.ID).
+		Update("status", models.RetouchBatchStatusCanceled).Error)
+
+	_, err := w.RecoverStale()
+	require.NoError(t, err)
+
+	// Ninguno queda en estado ACTIVO dentro del lote muerto.
+	assert.Equal(t, models.RetouchItemStatusCanceled,
+		reloadItem(t, db, items[0].ID).Status,
+		"huérfano de lote cancelado NO puede volver a queued eterno")
+	assert.Equal(t, models.RetouchItemStatusCanceled,
+		reloadItem(t, db, items[1].ID).Status,
+		"queued atrapado en lote cancelado se libera")
+
+	// Y el producto vuelve a poder encolarse en un lote nuevo: el índice
+	// único de activos ya no lo bloquea.
+	newBatch := models.RetouchBatch{TenantID: retouchTestTenantA,
+		Status: models.RetouchBatchStatusRunning}
+	require.NoError(t, db.Create(&newBatch).Error)
+	require.NoError(t, db.Create(&models.RetouchItem{
+		BatchID:        newBatch.ID,
+		TenantID:       retouchTestTenantA,
+		ProductID:      products[0].ID,
+		SourcePhotoURL: products[0].PhotoURL,
+		Status:         models.RetouchItemStatusQueued,
+	}).Error, "el producto liberado debe poder re-encolarse")
+}
+
+// Auditoría 2026-07-10 — BUG: si el breaker dispara en el ÚLTIMO fallo
+// terminal del lote (attempts agotados y sin más queued), el lote queda
+// paused_error; al vencer la pausa el Tick lo devuelve a running, pero
+// pickBatch ya nunca lo elige (sin queued) y finishBatchIfDrained jamás
+// vuelve a correr → lote zombi "running" para siempre (el summary muestra un
+// lote activo con 0 trabajo eternamente). Un lote drenado debe quedar
+// completed aunque el breaker haya disparado en su último ítem.
+func TestRetouchWorker_BreakerOnLastItemStillCompletesBatch(t *testing.T) {
+	db := setupRetouchDB(t)
+	batch, items, _ := seedBatchWithItems(t, db, retouchTestTenantA, 1)
+
+	// El ítem va por su último intento: el próximo fallo es terminal.
+	require.NoError(t, db.Model(&models.RetouchItem{}).Where("id = ?", items[0].ID).
+		Update("attempts", retouchMaxAttempts-1).Error)
+
+	failing := funcEnhancer(func(ctx context.Context, tenantID, productID, sourceURL string) (string, error) {
+		return "", errors.New("proveedor caído")
+	})
+	w, _ := newTestWorker(t, db, failing)
+	// Racha al borde del umbral: este fallo dispara el breaker.
+	w.consecFails[batch.ID] = retouchBreakerThreshold - 1
+
+	require.True(t, w.Tick(context.Background()))
+
+	assert.Equal(t, models.RetouchItemStatusFailed,
+		reloadItem(t, db, items[0].ID).Status)
+	assert.Equal(t, models.RetouchBatchStatusCompleted,
+		reloadBatch(t, db, batch.ID).Status,
+		"lote drenado queda completed, nunca zombi paused_error/running")
+}

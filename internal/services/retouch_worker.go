@@ -122,6 +122,15 @@ func (w *RetouchWorker) Start(ctx context.Context) {
 // RecoverStale re-encola los processing huérfanos (>10 min sin terminar:
 // el proceso murió a mitad de foto). Idempotente; corre en boot, en cada
 // tick (barato) y en el backstop del cron.
+//
+// Además LIBERA los queued atrapados en lotes NO activos: un ítem puede
+// volver a queued dentro de un lote ya cancelado (huérfano recuperado,
+// reintento no-429, re-encolado por 429 — el cancel no toca processing,
+// FR-15). pickBatch solo sirve lotes running, así que ese queued jamás se
+// procesaría y su estado ACTIVO bloquearía al producto para siempre vía
+// idx_retouch_items_active_product (re-encolar daría "ya_en_lote" eterno y
+// el chip lo excluiría de eligible_count). Se cierran como canceled — el
+// mismo desenlace que habrían tenido en el cancel del lote.
 func (w *RetouchWorker) RecoverStale() (int, error) {
 	cutoff := w.now().Add(-retouchStaleAfter)
 	res := w.db.Model(&models.RetouchItem{}).
@@ -131,7 +140,23 @@ func (w *RetouchWorker) RecoverStale() (int, error) {
 			"status":     models.RetouchItemStatusQueued,
 			"started_at": nil,
 		})
-	return int(res.RowsAffected), res.Error
+	if res.Error != nil {
+		return int(res.RowsAffected), res.Error
+	}
+
+	activeBatches := w.db.Model(&models.RetouchBatch{}).Select("id").
+		Where("status IN ?", []string{
+			models.RetouchBatchStatusRunning,
+			models.RetouchBatchStatusPausedError,
+		})
+	release := w.db.Model(&models.RetouchItem{}).
+		Where("status = ? AND batch_id NOT IN (?)",
+			models.RetouchItemStatusQueued, activeBatches).
+		Update("status", models.RetouchItemStatusCanceled)
+	if release.Error != nil {
+		return int(res.RowsAffected), release.Error
+	}
+	return int(res.RowsAffected), nil
 }
 
 // Backstop es el cuerpo del cron interno retouch-tick: recovery + hasta
@@ -470,9 +495,13 @@ func (w *RetouchWorker) resolveFailure(batchID string, item *models.RetouchItem,
 	}
 }
 
-// finishBatchIfDrained marca completed un lote running sin trabajo activo.
-// Los ready_for_review pendientes de revisión NO bloquean el cierre: el
-// lote terminó de PROCESAR; revisar es del tendero (FR-14).
+// finishBatchIfDrained marca completed un lote sin trabajo activo. Los
+// ready_for_review pendientes de revisión NO bloquean el cierre: el lote
+// terminó de PROCESAR; revisar es del tendero (FR-14). Cubre también
+// paused_error: si el breaker disparó justo en el ÚLTIMO fallo terminal, no
+// queda nada que proteger con la pausa — sin esto el lote quedaba zombi
+// (paused_error → running al vencer la pausa, pero pickBatch ya nunca lo
+// elige sin queued y este cierre jamás volvía a evaluarse).
 func (w *RetouchWorker) finishBatchIfDrained(batchID string) {
 	var remaining int64
 	if err := w.db.Model(&models.RetouchItem{}).
@@ -482,6 +511,12 @@ func (w *RetouchWorker) finishBatchIfDrained(batchID string) {
 		return
 	}
 	w.db.Model(&models.RetouchBatch{}).
-		Where("id = ? AND status = ?", batchID, models.RetouchBatchStatusRunning).
-		Update("status", models.RetouchBatchStatusCompleted)
+		Where("id = ? AND status IN ?", batchID, []string{
+			models.RetouchBatchStatusRunning,
+			models.RetouchBatchStatusPausedError,
+		}).
+		Updates(map[string]any{
+			"status":       models.RetouchBatchStatusCompleted,
+			"paused_until": nil,
+		})
 }

@@ -19,6 +19,17 @@ import (
 
 const maxCategoryLen = 40
 
+// truncateCategory recorta una categoría a maxCategoryLen por RUNAS, nunca
+// por bytes: un corte a mitad de una tilde/eñe ("categoría" en el byte 40)
+// dejaba UTF-8 inválido que se persistía y se mostraba como mojibake.
+func truncateCategory(cat string) string {
+	runes := []rune(cat)
+	if len(runes) > maxCategoryLen {
+		runes = runes[:maxCategoryLen]
+	}
+	return strings.TrimSpace(string(runes))
+}
+
 // SuggestProductCategories — POST /api/v1/products/suggest-categories. Para los
 // productos SIN categoría, Gemini infiere una categoría corta desde el nombre
 // (reusando las categorías que el tenant ya tiene). NO aplica nada: devuelve
@@ -109,12 +120,9 @@ func parseCategorySuggestions(text string, nameByID map[string]string) []gin.H {
 		if !ok || seen[id] {
 			continue // id inventado o duplicado → descartar
 		}
-		cat := strings.TrimSpace(it.Category)
+		cat := truncateCategory(it.Category)
 		if cat == "" {
 			continue
-		}
-		if len(cat) > maxCategoryLen {
-			cat = strings.TrimSpace(cat[:maxCategoryLen])
 		}
 		seen[id] = true
 		out = append(out, gin.H{"id": id, "name": name, "suggested": cat})
@@ -145,10 +153,7 @@ func BulkUpdateCategories(db *gorm.DB) gin.HandlerFunc {
 				if id == "" {
 					continue
 				}
-				cat := strings.TrimSpace(it.Category)
-				if len(cat) > maxCategoryLen {
-					cat = strings.TrimSpace(cat[:maxCategoryLen])
-				}
+				cat := truncateCategory(it.Category)
 				res := tx.Model(&models.Product{}).
 					Where("id = ? AND tenant_id = ?", id, tenantID).
 					Update("category", cat)
