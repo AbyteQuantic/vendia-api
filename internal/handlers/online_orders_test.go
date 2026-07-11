@@ -640,3 +640,37 @@ func TestPublicCreateOnlineOrder_NoAgeRestriction_NoBirthDateNeeded(t *testing.T
 	assert.False(t, row.AgeConfirmed)
 	assert.Equal(t, "", row.CustomerBirthDate)
 }
+
+// ── Spec 103 — B02: el chequeo 18+ debe fallar CERRADO ──────────────────────
+
+// Si la BD falla al validar si el pedido incluye productos 18+, el pedido se
+// RECHAZA (503, fail-closed) en vez de crearse sin validación (Ley 124/1994:
+// jamás vender licor sin haber podido verificar la edad, y siempre con rastro).
+func TestPublicCreateOnlineOrder_AgeCheckDBError_FailsClosed(t *testing.T) {
+	db := setupOnlineOrdersDB(t)
+	tenantID, _ := seedTenantWithBranch(t, db, "licorera-tres")
+	licorID := seedAgeRestrictedProduct(t, db, tenantID)
+
+	// Simula el fallo de BD en el chequeo: la tabla products desaparece
+	// DESPUÉS de armar el pedido (hiccup transitorio en producción).
+	require.NoError(t, db.Exec(`DROP TABLE products`).Error)
+
+	w := postOnlineOrder(t, db, "licorera-tres", map[string]any{
+		"customer_name":       "Adulto Cualquiera",
+		"customer_birth_date": "1990-05-20",
+		"items": []map[string]any{{
+			"product_id": licorID, "name": "Aguardiente", "quantity": 1, "price": 30000,
+		}},
+	})
+
+	require.Equal(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "age_check_unavailable", resp["code"])
+
+	// El pedido NO se crea: mejor perder un pedido que vender 18+ sin validar.
+	var n int64
+	db.Model(&models.OnlineOrder{}).Count(&n)
+	assert.Equal(t, int64(0), n, "no debe crear el pedido si la validación 18+ falló")
+}

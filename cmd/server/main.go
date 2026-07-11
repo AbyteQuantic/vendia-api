@@ -676,8 +676,9 @@ func main() {
 		v1.POST("/products/:id/enhance", handlers.EnhanceProductPhoto(db, geminiSvc, storageSvc, catalogSvc))
 		v1.POST("/products/:id/generate-image", handlers.GenerateProductImage(db, geminiSvc, storageSvc, catalogSvc))
 		// Spec 096 Adenda A — consentimiento explícito para compartir la foto
-		// propia al catálogo compartido (nunca automático).
-		v1.POST("/products/:id/share-to-catalog", handlers.ShareProductPhotoToCatalog(db, catalogSvc))
+		// propia al catálogo compartido (nunca automático). Spec 103: con los
+		// mismos gates que la vía automática (ToS vigentes + verificación IA).
+		v1.POST("/products/:id/share-to-catalog", handlers.ShareProductPhotoToCatalog(db, catalogSvc, geminiSvc))
 		// Spec 095 -- variantes de producto (talla/color).
 		v1.POST("/products/:id/adopt-variant-group", handlers.AdoptProductToVariantGroup(db))
 		v1.GET("/product-variant-groups", handlers.ListVariantGroups(db))

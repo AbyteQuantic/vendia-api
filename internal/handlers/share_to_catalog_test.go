@@ -2,6 +2,7 @@
 package handlers_test
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
@@ -26,6 +27,15 @@ func setupShareToCatalogDB(t *testing.T) *gorm.DB {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&models.Product{}))
+	// Tabla mínima de tenants para el gate de ToS (Spec 103): el handler solo
+	// selecciona id + terms_accepted_version.
+	require.NoError(t, db.Exec(`
+		CREATE TABLE tenants (
+			id TEXT PRIMARY KEY,
+			terms_accepted_version TEXT DEFAULT '',
+			deleted_at DATETIME
+		);
+	`).Error)
 	require.NoError(t, db.Exec(`
 		CREATE TABLE catalog_products (
 			id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
@@ -50,7 +60,27 @@ func setupShareToCatalogDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func mountShareToCatalog(db *gorm.DB, tenantID string) *gin.Engine {
+// fakePhotoVerifier — doble de test del gate IA de Spec 103.
+type fakePhotoVerifier struct {
+	ok  bool
+	err error
+}
+
+func (f fakePhotoVerifier) VerifyImageMatchesProduct(_ context.Context, _, _, _ string) (bool, error) {
+	return f.ok, f.err
+}
+
+// seedTenantWithCurrentTerms deja al tenant con la versión VIGENTE de los
+// ToS aceptada — requisito del gate de Spec 103 para compartir fotos.
+func seedTenantWithCurrentTerms(t *testing.T, db *gorm.DB, tenantID string) {
+	t.Helper()
+	require.NoError(t, db.Exec(
+		`INSERT INTO tenants (id, terms_accepted_version) VALUES (?, ?)`,
+		tenantID, models.CatalogTermsVersion,
+	).Error)
+}
+
+func mountShareToCatalog(db *gorm.DB, tenantID string, verifier handlers.PhotoVerifier) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.Use(func(c *gin.Context) {
@@ -58,7 +88,7 @@ func mountShareToCatalog(db *gorm.DB, tenantID string) *gin.Engine {
 		c.Next()
 	})
 	catalogSvc := services.NewCatalogService(db, nil)
-	r.POST("/products/:id/share-to-catalog", handlers.ShareProductPhotoToCatalog(db, catalogSvc))
+	r.POST("/products/:id/share-to-catalog", handlers.ShareProductPhotoToCatalog(db, catalogSvc, verifier))
 	return r
 }
 
@@ -74,8 +104,9 @@ func TestShareProductPhotoToCatalog_HappyPath_StaysPendingAlone(t *testing.T) {
 		Barcode: "7702090000012", PhotoURL: "https://r2.vendia.store/tenant-a/coca.jpg",
 	}
 	require.NoError(t, db.Create(&product).Error)
+	seedTenantWithCurrentTerms(t, db, tenant)
 
-	r := mountShareToCatalog(db, tenant)
+	r := mountShareToCatalog(db, tenant, fakePhotoVerifier{ok: true})
 	w := doJSON(t, r, http.MethodPost, "/products/"+product.ID+"/share-to-catalog", nil)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 
@@ -94,7 +125,7 @@ func TestShareProductPhotoToCatalog_MissingBarcode_ReturnsBadRequest(t *testing.
 	}
 	require.NoError(t, db.Create(&product).Error)
 
-	r := mountShareToCatalog(db, tenant)
+	r := mountShareToCatalog(db, tenant, fakePhotoVerifier{ok: true})
 	w := doJSON(t, r, http.MethodPost, "/products/"+product.ID+"/share-to-catalog", nil)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
@@ -109,7 +140,7 @@ func TestShareProductPhotoToCatalog_MissingPhoto_ReturnsBadRequest(t *testing.T)
 	}
 	require.NoError(t, db.Create(&product).Error)
 
-	r := mountShareToCatalog(db, tenant)
+	r := mountShareToCatalog(db, tenant, fakePhotoVerifier{ok: true})
 	w := doJSON(t, r, http.MethodPost, "/products/"+product.ID+"/share-to-catalog", nil)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
@@ -125,7 +156,7 @@ func TestShareProductPhotoToCatalog_CrossTenantProduct_ReturnsNotFound(t *testin
 	}
 	require.NoError(t, db.Create(&product).Error)
 
-	r := mountShareToCatalog(db, "tenant-intruso")
+	r := mountShareToCatalog(db, "tenant-intruso", fakePhotoVerifier{ok: true})
 	w := doJSON(t, r, http.MethodPost, "/products/"+product.ID+"/share-to-catalog", nil)
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
@@ -147,16 +178,78 @@ func TestShareProductPhotoToCatalog_SecondDistinctTenant_VerifiesForSuggestion(t
 	}
 	require.NoError(t, db.Create(&productA).Error)
 	require.NoError(t, db.Create(&productB).Error)
+	seedTenantWithCurrentTerms(t, db, "tenant-a")
+	seedTenantWithCurrentTerms(t, db, "tenant-b")
 
-	rA := mountShareToCatalog(db, "tenant-a")
+	rA := mountShareToCatalog(db, "tenant-a", fakePhotoVerifier{ok: true})
 	wA := doJSON(t, rA, http.MethodPost, "/products/"+productA.ID+"/share-to-catalog", nil)
 	require.Equal(t, http.StatusOK, wA.Code, wA.Body.String())
 
-	rB := mountShareToCatalog(db, "tenant-b")
+	rB := mountShareToCatalog(db, "tenant-b", fakePhotoVerifier{ok: true})
 	wB := doJSON(t, rB, http.MethodPost, "/products/"+productB.ID+"/share-to-catalog", nil)
 	require.Equal(t, http.StatusOK, wB.Code, wB.Body.String())
 
 	var status string
 	db.Table("catalog_products").Where("barcode = ?", "7702090000012").Pluck("status", &status)
 	assert.Equal(t, "verified", status)
+}
+
+// ── Spec 103 — B03: la vía manual exige los mismos gates que la automática ──
+
+// Sin ToS vigentes aceptados NO hay licencia contractual sobre la foto: el
+// share se rechaza con 403 y no se escribe nada en el catálogo compartido.
+func TestShareProductPhotoToCatalog_SinTerminosVigentes_Rechaza403(t *testing.T) {
+	db := setupShareToCatalogDB(t)
+	const tenant = "tenant-sin-tos"
+	// Tenant existe pero con una versión VIEJA de los términos.
+	require.NoError(t, db.Exec(
+		`INSERT INTO tenants (id, terms_accepted_version) VALUES (?, '2025-01-01')`, tenant,
+	).Error)
+	product := models.Product{
+		TenantID: tenant, Name: "Coca-Cola 400ml", Price: 2500,
+		Barcode: "7702090000012", PhotoURL: "https://r2.vendia.store/x/coca.jpg",
+	}
+	require.NoError(t, db.Create(&product).Error)
+
+	r := mountShareToCatalog(db, tenant, fakePhotoVerifier{ok: true})
+	w := doJSON(t, r, http.MethodPost, "/products/"+product.ID+"/share-to-catalog", nil)
+
+	require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "terms_required")
+
+	var n int64
+	db.Table("catalog_images").Count(&n)
+	assert.Equal(t, int64(0), n, "no debe aportar nada sin ToS vigentes")
+}
+
+// Si la IA no confirma que la foto corresponde al producto (mismatch, error
+// de Gemini o servicio ausente), el aporte se rechaza — fail-closed.
+func TestShareProductPhotoToCatalog_IANoConfirma_Rechaza422(t *testing.T) {
+	casos := map[string]handlers.PhotoVerifier{
+		"mismatch":        fakePhotoVerifier{ok: false},
+		"error de gemini": fakePhotoVerifier{ok: true, err: assert.AnError},
+		"servicio nil":    nil,
+	}
+	for nombre, verifier := range casos {
+		t.Run(nombre, func(t *testing.T) {
+			db := setupShareToCatalogDB(t)
+			const tenant = "tenant-con-tos"
+			seedTenantWithCurrentTerms(t, db, tenant)
+			product := models.Product{
+				TenantID: tenant, Name: "Coca-Cola 400ml", Price: 2500,
+				Barcode: "7702090000012", PhotoURL: "https://r2.vendia.store/x/coca.jpg",
+			}
+			require.NoError(t, db.Create(&product).Error)
+
+			r := mountShareToCatalog(db, tenant, verifier)
+			w := doJSON(t, r, http.MethodPost, "/products/"+product.ID+"/share-to-catalog", nil)
+
+			require.Equal(t, http.StatusUnprocessableEntity, w.Code, w.Body.String())
+			assert.Contains(t, w.Body.String(), "photo_unverified")
+
+			var n int64
+			db.Table("catalog_images").Count(&n)
+			assert.Equal(t, int64(0), n, "no debe aportar sin confirmación de la IA")
+		})
+	}
 }
