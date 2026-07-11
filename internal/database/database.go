@@ -72,6 +72,7 @@ func Migrate(db *gorm.DB) error {
 		&models.PurchaseErrandLine{},  // Spec 077 — líneas de mandado
 		&models.TaskDismissal{},       // Spec 078 — snooze de tareas agregadas
 		&models.ProductVariantGroup{}, // Spec 095 — variantes de producto (talla/color)
+		&models.ModerationLog{},       // Spec 104 — decisiones de moderación (append-only)
 
 		&models.Sale{},
 		&models.SaleItem{},

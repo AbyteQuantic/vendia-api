@@ -93,6 +93,14 @@ func main() {
 		log.Printf("[BOOTSTRAP] backfill catalog product image_url: %d filas reparadas", touched)
 	}
 
+	// Spec 104 — evalúa el léxico de moderación sobre filas anteriores al
+	// feature (moderation_status vacío). Idempotente, CPU puro.
+	if touched, err := database.BackfillProductModeration(db); err != nil {
+		log.Printf("[BOOTSTRAP] backfill moderación falló: %v", err)
+	} else if touched > 0 {
+		log.Printf("[BOOTSTRAP] backfill moderación: %d productos evaluados", touched)
+	}
+
 	// Self-heal: every tenant must have at least the "Efectivo"
 	// payment method seeded. Pre-fix tenants registered before the
 	// seed landed and would otherwise render zero chips on the POS.

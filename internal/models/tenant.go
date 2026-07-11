@@ -331,6 +331,12 @@ type Tenant struct {
 	TermsAcceptedVersion string     `gorm:"type:varchar(32)" json:"terms_accepted_version"`
 	TermsAcceptedAt      *time.Time `json:"terms_accepted_at,omitempty"`
 
+	// Spec 104 — suspensión del catálogo público (no del POS). Non-nil =
+	// tienda.vendia.store/<slug> y el pedido público responden "no
+	// disponible"; el POS y la API autenticada siguen intactos. En F1 se
+	// setea solo manualmente (god-mode/SQL); los strikes automáticos son F3.
+	CatalogSuspendedAt *time.Time `json:"catalog_suspended_at,omitempty"`
+
 	// Spec F037 — capabilities migrated from byType→optional. F037 reverts
 	// F036's auto-activation by business_type: every tenant now arrives with
 	// zero optional capabilities and discovers them through the Dashboard

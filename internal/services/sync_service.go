@@ -246,6 +246,11 @@ func (s *SyncService) syncProduct(tx *gorm.DB, tenantID string, op SyncOperation
 		// Carrera entre lotes concurrentes: el índice detuvo la escritura.
 		return false, nil
 	}
+	// Spec 104 — el sync escribe desde MAPAS (op.Data): el hook BeforeSave
+	// del modelo no corre. Re-evaluar el léxico sobre la fila real.
+	if applied && err == nil && op.Action != "delete" {
+		EnsureProductModeration(tx, tenantID, op.ID)
+	}
 	return applied, err
 }
 
