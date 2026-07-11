@@ -46,24 +46,24 @@ func defaultBranchForTenant(db *gorm.DB, tenantID string) *string {
 }
 
 // orderHasAgeRestrictedProduct reports whether any of the given product IDs
-// belongs to a product the tenant marked as age-restricted (Spec 063). It
-// fails OPEN on a query error (returns false) because in production the
-// products table always exists — a transient DB hiccup must not block every
-// order; the only callers that care already gate on the result, and a false
-// here simply means "no extra age check", matching the no-restricted-product
-// path. The product IDs are assumed pre-validated as UUIDs by the caller.
-func orderHasAgeRestrictedProduct(db *gorm.DB, tenantID string, productIDs []string) bool {
+// belongs to a product the tenant marked as age-restricted (Spec 063). A
+// query error propagates to the caller, which must REJECT the order (Spec
+// 103, fail-closed): la Ley 124/1994 prohíbe expender licor a menores, y un
+// fallo transitorio de BD jamás puede traducirse en "sin chequeo de edad" ni
+// en una venta sin rastro. The product IDs are assumed pre-validated as
+// UUIDs by the caller.
+func orderHasAgeRestrictedProduct(db *gorm.DB, tenantID string, productIDs []string) (bool, error) {
 	if len(productIDs) == 0 {
-		return false
+		return false, nil
 	}
 	var count int64
 	err := db.Model(&models.Product{}).
 		Where("tenant_id = ? AND id IN ? AND is_age_restricted = ?", tenantID, productIDs, true).
 		Count(&count).Error
 	if err != nil {
-		return false
+		return false, err
 	}
-	return count > 0
+	return count > 0, nil
 }
 
 // PublicCreateOnlineOrder creates an order from the public catalog.
@@ -176,7 +176,17 @@ func PublicCreateOnlineOrder(db *gorm.DB, dispatcher *push.Dispatcher) gin.Handl
 				productIDs = append(productIDs, item.ProductID)
 			}
 		}
-		hasAgeRestricted := orderHasAgeRestrictedProduct(db, tenant.ID, productIDs)
+		hasAgeRestricted, ageErr := orderHasAgeRestrictedProduct(db, tenant.ID, productIDs)
+		if ageErr != nil {
+			// Spec 103 (B02): fail-CLOSED con rastro. Prefijo estable para
+			// alertar sobre estos logs en Render.
+			log.Printf("[AGE-CHECK] fallo al validar productos 18+ (tenant=%s): %v — pedido rechazado (fail-closed)", tenant.ID, ageErr)
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error": "No pudimos validar su pedido en este momento. Intente de nuevo en unos segundos.",
+				"code":  "age_check_unavailable",
+			})
+			return
+		}
 		ageConfirmed := false
 		if hasAgeRestricted {
 			if !isAdultISO(birthDate, time.Now()) {

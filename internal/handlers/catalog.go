@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"vendia-backend/internal/middleware"
@@ -230,12 +231,26 @@ func TakedownCatalogPhoto(catalogSvc *services.CatalogService) gin.HandlerFunc {
 	}
 }
 
+// PhotoVerifier — subconjunto de GeminiService que confirma que una imagen
+// corresponde a un producto (Spec 098). Interfaz para poder inyectar un fake
+// en tests; en producción la implementa *services.GeminiService.
+type PhotoVerifier interface {
+	VerifyImageMatchesProduct(ctx context.Context, imageURL, name, presentation string) (bool, error)
+}
+
 // ShareProductPhotoToCatalog — POST /api/v1/products/:id/share-to-catalog
 // Spec 096 Adenda A. El tendero, tras confirmar explícitamente (el frontend
 // SIEMPRE pregunta antes de llamar este endpoint — nunca automático), comparte
 // la foto de SU producto para ayudar a otros tenderos con el mismo barcode.
 // Requiere que el producto (del propio tenant) tenga barcode + foto.
-func ShareProductPhotoToCatalog(db *gorm.DB, catalogSvc *services.CatalogService) gin.HandlerFunc {
+//
+// Spec 103 (B03): esta vía manual exige los MISMOS gates que el aporte
+// automático de Spec 098 — ToS vigentes aceptados (la licencia contractual
+// sobre la foto) y verificación IA imagen↔producto. Sin ellos, VendIA estaría
+// redistribuyendo fotos a otras tiendas sin licencia ni diligencia (Ley
+// 23/1982; sin safe harbor en Colombia). Fail-closed: si la IA no puede
+// confirmar (Gemini ausente, error o mismatch), NO se aporta.
+func ShareProductPhotoToCatalog(db *gorm.DB, catalogSvc *services.CatalogService, verifier PhotoVerifier) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tenantID := middleware.GetTenantID(c)
 		productID := c.Param("id")
@@ -256,6 +271,29 @@ func ShareProductPhotoToCatalog(db *gorm.DB, catalogSvc *services.CatalogService
 		}
 		if photo == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "el producto no tiene foto para compartir"})
+			return
+		}
+
+		var t models.Tenant
+		if err := db.Select("id", "terms_accepted_version").
+			First(&t, "id = ?", tenantID).Error; err != nil || !t.AcceptedCurrentTerms() {
+			c.JSON(http.StatusForbidden, gin.H{
+				"error": "Debe aceptar los Términos y Condiciones vigentes para compartir fotos con otras tiendas.",
+				"code":  "terms_required",
+			})
+			return
+		}
+
+		verified := false
+		if verifier != nil {
+			ok, vErr := verifier.VerifyImageMatchesProduct(c.Request.Context(), photo, product.Name, product.Presentation)
+			verified = ok && vErr == nil
+		}
+		if !verified {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{
+				"error": "No pudimos confirmar que la foto corresponda al producto. Intente de nuevo más tarde.",
+				"code":  "photo_unverified",
+			})
 			return
 		}
 
