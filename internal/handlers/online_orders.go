@@ -119,6 +119,11 @@ func PublicCreateOnlineOrder(db *gorm.DB, dispatcher *push.Dispatcher) gin.Handl
 			c.JSON(http.StatusNotFound, gin.H{"error": "tienda no encontrada"})
 			return
 		}
+		// Spec 104 — catálogo suspendido: tampoco recibe pedidos.
+		if tenant.CatalogSuspendedAt != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "catálogo no disponible temporalmente"})
+			return
+		}
 
 		var req Request
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -176,6 +181,30 @@ func PublicCreateOnlineOrder(db *gorm.DB, dispatcher *push.Dispatcher) gin.Handl
 				productIDs = append(productIDs, item.ProductID)
 			}
 		}
+		// Spec 104 — un producto review/blocked no debía estar visible; si un
+		// pedido lo trae (carrito viejo, URL directa), se rechaza. Mismo
+		// fail-closed que el 18+: error de BD → 503, nunca "sin chequeo".
+		if len(productIDs) > 0 {
+			var moderated int64
+			if err := db.Model(&models.Product{}).
+				Where("tenant_id = ? AND id IN ? AND moderation_status IN ('review','blocked')", tenant.ID, productIDs).
+				Count(&moderated).Error; err != nil {
+				log.Printf("[MODERATION] fallo al validar productos moderados (tenant=%s): %v — pedido rechazado (fail-closed)", tenant.ID, err)
+				c.JSON(http.StatusServiceUnavailable, gin.H{
+					"error": "No pudimos validar su pedido en este momento. Intente de nuevo en unos segundos.",
+					"code":  "moderation_check_unavailable",
+				})
+				return
+			}
+			if moderated > 0 {
+				c.JSON(http.StatusUnprocessableEntity, gin.H{
+					"error": "Este pedido incluye un producto que no está disponible para venta en línea.",
+					"code":  "product_not_sellable_online",
+				})
+				return
+			}
+		}
+
 		hasAgeRestricted, ageErr := orderHasAgeRestrictedProduct(db, tenant.ID, productIDs)
 		if ageErr != nil {
 			// Spec 103 (B02): fail-CLOSED con rastro. Prefijo estable para

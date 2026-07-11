@@ -2,12 +2,14 @@
 package handlers
 
 import (
+	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
+	"vendia-backend/internal/moderation"
 	"vendia-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
@@ -133,6 +135,22 @@ func ListBroadcastPromotions(db *gorm.DB) gin.HandlerFunc {
 // valid_from; an empty title is rejected. A fresh UUID v4 public_token is
 // always generated server-side so the public link is unguessable.
 // POST /api/v1/broadcast-promotions
+// registerPromoModerationLog — registro auditable del rechazo (fail-silent).
+func registerPromoModerationLog(db *gorm.DB, tenantID, promoID, title string, v moderation.Verdict) {
+	logRow := models.ModerationLog{
+		TenantID:   tenantID,
+		EntityType: "broadcast_promotion",
+		EntityID:   promoID,
+		EntityName: title,
+		Verdict:    v.Status,
+		Category:   v.Category,
+		Actor:      "lexicon:f1",
+	}
+	if err := db.Create(&logRow).Error; err != nil {
+		log.Printf("[MODERATION] no se pudo escribir moderation_log de promo (%s): %v", title, err)
+	}
+}
+
 func CreateBroadcastPromotion(db *gorm.DB) gin.HandlerFunc {
 	type request struct {
 		ID              string         `json:"id"`
@@ -159,6 +177,18 @@ func CreateBroadcastPromotion(db *gorm.DB) gin.HandlerFunc {
 
 		if strings.TrimSpace(req.Title) == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "el título de la promoción es obligatorio"})
+			return
+		}
+
+		// Spec 104 — difusión fail-closed DURO: una promo con hit del léxico
+		// (tabaco, pólvora, apuestas…) NO se crea. Es push proactivo con
+		// marca VendIA (Ley 1335/2009: publicitar tabaco es ilegal de plano).
+		if v := moderation.EvaluateText(req.Title, req.Description, req.MessageTemplate); v.Status != moderation.StatusAllowed {
+			registerPromoModerationLog(db, tenantID, "", req.Title, v)
+			c.JSON(http.StatusUnprocessableEntity, gin.H{
+				"error": "Esta promoción incluye un producto que la ley no permite publicitar por internet (por ejemplo tabaco, pólvora o medicamentos). Ajuste el texto y vuelva a intentar.",
+				"code":  "moderation_blocked",
+			})
 			return
 		}
 
@@ -308,6 +338,27 @@ func UpdateBroadcastPromotion(db *gorm.DB) gin.HandlerFunc {
 		var req request
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		// Spec 104 — mismo gate fail-closed que en la creación, sobre el
+		// TEXTO FINAL (campo editado o, si no viene, el ya guardado).
+		finalTitle, finalDesc, finalMsg := promo.Title, promo.Description, promo.MessageTemplate
+		if req.Title != nil {
+			finalTitle = *req.Title
+		}
+		if req.Description != nil {
+			finalDesc = *req.Description
+		}
+		if req.MessageTemplate != nil {
+			finalMsg = *req.MessageTemplate
+		}
+		if v := moderation.EvaluateText(finalTitle, finalDesc, finalMsg); v.Status != moderation.StatusAllowed {
+			registerPromoModerationLog(db, promo.TenantID, promo.ID, finalTitle, v)
+			c.JSON(http.StatusUnprocessableEntity, gin.H{
+				"error": "Esta promoción incluye un producto que la ley no permite publicitar por internet (por ejemplo tabaco, pólvora o medicamentos). Ajuste el texto y vuelva a intentar.",
+				"code":  "moderation_blocked",
+			})
 			return
 		}
 

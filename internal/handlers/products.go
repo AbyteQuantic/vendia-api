@@ -746,6 +746,9 @@ func UpdateProduct(db *gorm.DB, catalogSvc *services.CatalogService) gin.Handler
 			catalogSvc.AcceptImage(*req.CatalogImageID)
 		}
 
+		// Spec 104 — el write de arriba es Updates(map): el hook BeforeSave no
+		// persiste el veredicto ahí. Re-evaluar desde la fila real (fail-silent).
+		services.EnsureProductModeration(db, tenantID, product.ID)
 		c.JSON(http.StatusOK, gin.H{"data": product})
 	}
 }

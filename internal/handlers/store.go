@@ -284,6 +284,11 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 			c.JSON(http.StatusNotFound, gin.H{"error": "tienda no encontrada"})
 			return
 		}
+		// Spec 104 — catálogo suspendido (no el POS): no disponible.
+		if tenant.CatalogSuspendedAt != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "catálogo no disponible temporalmente"})
+			return
+		}
 
 		// Fetch every product of the tenant. We intentionally do NOT
 		// filter by `is_available` or `price > 0` here:
@@ -300,7 +305,12 @@ func PublicCatalog(db *gorm.DB) gin.HandlerFunc {
 		var products []models.Product
 		// Spec 082 F3 — los productos ocultos no salen en el catálogo público
 		// (siguen visibles en el POS). Los destacados primero.
+		// Spec 104 — review/blocked quedan FUERA del catálogo público (el POS
+		// del tendero no se toca). NULL/'' = fila legacy aún sin evaluar por
+		// el backfill: se trata como allowed para no vaciar catálogos en el
+		// arranque; el backfill converge en el primer boot.
 		db.Where("tenant_id = ? AND hidden_in_catalog = ?", tenant.ID, false).
+			Where("moderation_status IS NULL OR moderation_status NOT IN ('review','blocked')").
 			Order("is_featured DESC, name ASC").
 			Find(&products)
 
@@ -676,8 +686,15 @@ func PublicProductDetail(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// Spec 104 — catálogo suspendido o producto moderado: no existe de
+		// cara al público (el POS del tendero no se toca).
+		if tenant.CatalogSuspendedAt != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "catálogo no disponible temporalmente"})
+			return
+		}
 		var product models.Product
 		if err := db.Where("id = ? AND tenant_id = ? AND is_available = true", productUUID, tenant.ID).
+			Where("moderation_status IS NULL OR moderation_status NOT IN ('review','blocked')").
 			First(&product).Error; err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "producto no encontrado"})
 			return

@@ -1,5 +1,13 @@
 package models
 
+import (
+	"log"
+
+	"gorm.io/gorm"
+
+	"vendia-backend/internal/moderation"
+)
+
 type Product struct {
 	BaseModel
 
@@ -118,6 +126,19 @@ type Product struct {
 	// confirmar mayoría de edad antes de mostrarlos y los etiqueta "+18".
 	IsAgeRestricted bool `gorm:"default:false" json:"is_age_restricted"`
 
+	// ── Spec 104 — moderación de superficies públicas (aditivo) ─────────
+	// ModerationStatus: allowed | review | blocked (léxico F1; IA en F2).
+	// review/blocked EXCLUYEN al producto del catálogo en línea y de la
+	// difusión; el POS presencial del tendero NUNCA se bloquea. Vacío =
+	// fila anterior al feature (el backfill de bootstrap la evalúa). Se
+	// calcula en BeforeSave (caminos struct) y en
+	// services.EnsureProductModeration (caminos por mapa: update y sync).
+	ModerationStatus   string `gorm:"type:varchar(16);default:'';index" json:"moderation_status,omitempty"`
+	ModerationCategory string `gorm:"type:varchar(32);default:''" json:"moderation_category,omitempty"`
+	// moderationPrev — estado antes del save (no persiste; lo usa AfterSave
+	// para loggear solo transiciones). Unexported: GORM lo ignora.
+	moderationPrev string `gorm:"-"`
+
 	// ── Spec F029 — precios multi-tier por tipo de cliente ──────────────
 	// PriceTier1 / PriceTier2 / PriceTier3 are optional per-tier prices
 	// applied when Tenant.EnablePriceTiers is ON. Nullable (pointer)
@@ -147,4 +168,39 @@ type Product struct {
 	// taxonomy wouldn't fit every tenant's products (same reasoning as the
 	// existing free-text Category).
 	VariantAttributes string `gorm:"type:jsonb;not null;default:'{}'" json:"variant_attributes,omitempty"`
+}
+
+// BeforeSave — Spec 104: evalúa el léxico de moderación en cada escritura
+// basada en struct (CreateProduct, ImportProducts, saves de GORM). Los
+// caminos por MAPA (UpdateProduct, sync offline) no disparan este hook y
+// llaman services.EnsureProductModeration tras escribir. Nunca devuelve
+// error: la moderación jamás rompe una escritura del tendero.
+func (p *Product) BeforeSave(tx *gorm.DB) error {
+	p.moderationPrev = p.ModerationStatus
+	v := moderation.EvaluateProduct(p.Name, p.Category, p.Description)
+	p.ModerationStatus = v.Status
+	p.ModerationCategory = v.Category
+	return nil
+}
+
+// AfterSave — registro auditable SOLO en la transición a un estado
+// restrictivo, ya con el ID generado (BaseModel.BeforeCreate corre después
+// de BeforeSave). Fail-silent: un log jamás tumba la escritura del tendero.
+func (p *Product) AfterSave(tx *gorm.DB) error {
+	if p.ModerationStatus == moderation.StatusAllowed || p.ModerationStatus == p.moderationPrev {
+		return nil
+	}
+	logRow := ModerationLog{
+		TenantID:   p.TenantID,
+		EntityType: "product",
+		EntityID:   p.ID,
+		EntityName: p.Name,
+		Verdict:    p.ModerationStatus,
+		Category:   p.ModerationCategory,
+		Actor:      "lexicon:f1",
+	}
+	if err := tx.Session(&gorm.Session{NewDB: true}).Create(&logRow).Error; err != nil {
+		log.Printf("[MODERATION] no se pudo escribir moderation_log (%s %q): %v", p.ID, p.Name, err)
+	}
+	return nil
 }

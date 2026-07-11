@@ -42,6 +42,7 @@ func setupOnlineOrdersDB(t *testing.T) *gorm.DB {
 			id TEXT PRIMARY KEY, deleted_at DATETIME,
 			business_name TEXT DEFAULT '', phone TEXT DEFAULT '',
 			store_slug TEXT DEFAULT '',
+			catalog_suspended_at DATETIME,
 			created_at DATETIME
 		)`,
 		`CREATE TABLE branches (
@@ -86,7 +87,8 @@ func setupOnlineOrdersDB(t *testing.T) *gorm.DB {
 		`CREATE TABLE products (
 			id TEXT PRIMARY KEY, created_at DATETIME, updated_at DATETIME,
 			deleted_at DATETIME, tenant_id TEXT NOT NULL,
-			name TEXT DEFAULT '', is_age_restricted INTEGER DEFAULT 0
+			name TEXT DEFAULT '', is_age_restricted INTEGER DEFAULT 0,
+			moderation_status TEXT DEFAULT 'allowed'
 		)`,
 	}
 	for _, s := range stmts {
@@ -665,9 +667,14 @@ func TestPublicCreateOnlineOrder_AgeCheckDBError_FailsClosed(t *testing.T) {
 
 	require.Equal(t, http.StatusServiceUnavailable, w.Code, w.Body.String())
 
+	// Spec 104 añadió un segundo chequeo fail-closed (moderación) ANTES del
+	// de edad; ambos usan la tabla products. El invariante es el mismo: BD
+	// caída → 503 y CERO pedidos, sin importar cuál chequeo lo atrapó.
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "age_check_unavailable", resp["code"])
+	assert.Contains(t,
+		[]string{"age_check_unavailable", "moderation_check_unavailable"},
+		resp["code"])
 
 	// El pedido NO se crea: mejor perder un pedido que vender 18+ sin validar.
 	var n int64
