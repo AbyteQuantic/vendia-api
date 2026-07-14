@@ -175,3 +175,40 @@ func TestAutoContribute_NoAporta_IANoConfirma(t *testing.T) {
 		"si la IA no confirma la imagen, no se aporta")
 	assert.Equal(t, "", catalogStatus(db, p.Barcode))
 }
+
+// ── Decisión del fundador 2026-07-14 (recomendación del concilio, B03) ──────
+// El aporte AUTOMÁTICO usa el MISMO consenso que el manual: verified solo con
+// 2 tenants DISTINTOS. Un tenant solo (aunque la IA confirme) deja el
+// producto pending; el mismo tenant aportando dos veces nunca cuenta doble.
+
+func TestAutoContribute_UnSoloTenant_QuedaPending(t *testing.T) {
+	db := setupAutoContributeDB(t)
+	svc := NewCatalogService(db, nil)
+
+	p := validProduct("tenant-a")
+	svc.contributeVerifiedPhoto("tenant-a", p, p.PhotoURL)
+
+	require.Equal(t, int64(1), countCatalogRows(db, p.Barcode))
+	assert.Equal(t, "pending", catalogStatus(db, p.Barcode),
+		"1 solo tenant (aun con IA confirmando) no basta para verified")
+
+	// Re-aporte del MISMO tenant: sigue pending (no cuenta doble).
+	svc.contributeVerifiedPhoto("tenant-a", p, p.PhotoURL)
+	assert.Equal(t, "pending", catalogStatus(db, p.Barcode))
+}
+
+func TestAutoContribute_SegundoTenantDistinto_Verifica(t *testing.T) {
+	db := setupAutoContributeDB(t)
+	svc := NewCatalogService(db, nil)
+
+	pA := validProduct("tenant-a")
+	svc.contributeVerifiedPhoto("tenant-a", pA, pA.PhotoURL)
+	require.Equal(t, "pending", catalogStatus(db, pA.Barcode))
+
+	pB := validProduct("tenant-b")
+	pB.PhotoURL = "https://r2.vendia.store/tenant-b/coca.jpg"
+	svc.contributeVerifiedPhoto("tenant-b", pB, pB.PhotoURL)
+
+	assert.Equal(t, "verified", catalogStatus(db, pA.Barcode),
+		"2 tenants distintos = consenso → verified (igual que la vía manual)")
+}
