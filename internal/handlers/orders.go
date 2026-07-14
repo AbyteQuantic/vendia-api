@@ -3,6 +3,8 @@ package handlers
 import (
 	"errors"
 	"net/http"
+	"strings"
+	"time"
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
 	"vendia-backend/internal/services"
@@ -23,6 +25,8 @@ func CreateOrder(db *gorm.DB) gin.HandlerFunc {
 		Quantity    int     `json:"quantity"      binding:"required,min=1"`
 		UnitPrice   float64 `json:"unit_price"    binding:"required,gt=0"`
 		Emoji       string  `json:"emoji"`
+		// Spec 105 — indicación del cliente por ítem ("sin cebolla").
+		Notes string `json:"notes"`
 	}
 
 	type Request struct {
@@ -35,6 +39,9 @@ func CreateOrder(db *gorm.DB) gin.HandlerFunc {
 		DeliveryAddress string           `json:"delivery_address"`
 		CustomerPhone   string           `json:"customer_phone"`
 		Items           []ItemRequest    `json:"items"          binding:"required,min=1"`
+		// Spec 105 — mostrador PREPAGO: el POS ya registró la venta y manda
+		// su UUID; el ticket nace pagado y su estado terminal es 'entregado'.
+		SaleUUID string `json:"sale_uuid"`
 	}
 
 	return func(c *gin.Context) {
@@ -57,6 +64,29 @@ func CreateOrder(db *gorm.DB) gin.HandlerFunc {
 			req.Type = models.OrderTypeMesa
 		}
 
+		// Spec 105 — snapshot SERVER-SIDE del tiempo de preparación: se lee
+		// Product.DurationMin de la BD (nunca del cliente) y se congela en el
+		// ítem (patrón anti-drift Spec 083). Fail-open: sin fila/valor → nil.
+		durationByProduct := map[string]*int{}
+		{
+			ids := make([]string, 0, len(req.Items))
+			for _, it := range req.Items {
+				if models.IsValidUUID(it.ProductUUID) {
+					ids = append(ids, it.ProductUUID)
+				}
+			}
+			if len(ids) > 0 {
+				var rows []models.Product
+				if err := db.Select("id", "duration_min").
+					Where("tenant_id = ? AND id IN ?", tenantID, ids).
+					Find(&rows).Error; err == nil {
+					for _, r := range rows {
+						durationByProduct[r.ID] = r.DurationMin
+					}
+				}
+			}
+		}
+
 		var total float64
 		var items []models.OrderItem
 		for _, item := range req.Items {
@@ -68,6 +98,8 @@ func CreateOrder(db *gorm.DB) gin.HandlerFunc {
 				Quantity:    item.Quantity,
 				UnitPrice:   item.UnitPrice,
 				Emoji:       item.Emoji,
+				Notes:       strings.TrimSpace(item.Notes),
+				DurationMin: durationByProduct[item.ProductUUID],
 			})
 		}
 
@@ -85,6 +117,12 @@ func CreateOrder(db *gorm.DB) gin.HandlerFunc {
 			DeliveryAddress: req.DeliveryAddress,
 			CustomerPhone:   req.CustomerPhone,
 			Items:           items,
+		}
+		// Spec 105 — mostrador prepago: atar la venta ya registrada en el POS.
+		if models.IsValidUUID(req.SaleUUID) {
+			now := time.Now()
+			order.PaidAt = &now
+			order.SaleUUID = &req.SaleUUID
 		}
 		if req.ID != "" {
 			order.ID = req.ID
@@ -162,10 +200,22 @@ func UpdateOrderStatus(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// Spec 105 — 'entregado' es logística (listo→entregado→cobrado) y
+		// listo→cobrado se CONSERVA para las cuentas de mesa existentes.
 		validTransitions := map[models.OrderStatus][]models.OrderStatus{
 			models.OrderStatusNuevo:      {models.OrderStatusPreparando, models.OrderStatusCancelado},
 			models.OrderStatusPreparando: {models.OrderStatusListo, models.OrderStatusCancelado},
-			models.OrderStatusListo:      {models.OrderStatusCobrado, models.OrderStatusCancelado},
+			models.OrderStatusListo:      {models.OrderStatusEntregado, models.OrderStatusCobrado, models.OrderStatusCancelado},
+			models.OrderStatusEntregado:  {models.OrderStatusCobrado},
+		}
+
+		// Spec 105 — guard IDEMPOTENTE (patrón concurrencia Spec 083): mesero
+		// y cajero pueden marcar 'entregado' a la vez; el segundo PATCH no es
+		// un error, devuelve el ticket tal cual (el chef solo necesita que
+		// desaparezca UNA vez).
+		if req.Status == order.Status && req.Status == models.OrderStatusEntregado {
+			c.JSON(http.StatusOK, gin.H{"data": order, "message": "pedido ya estaba entregado"})
+			return
 		}
 
 		allowed, ok := validTransitions[order.Status]
@@ -193,6 +243,16 @@ func UpdateOrderStatus(db *gorm.DB) gin.HandlerFunc {
 		updates := map[string]any{"status": req.Status}
 		if req.PaymentMethod != "" {
 			updates["payment_method"] = req.PaymentMethod
+		}
+		// Spec 105 — estampar el timestamp de la transición (semáforo del KDS
+		// y reporte prometido-vs-real).
+		switch req.Status {
+		case models.OrderStatusPreparando:
+			updates["preparando_at"] = time.Now()
+		case models.OrderStatusListo:
+			updates["listo_at"] = time.Now()
+		case models.OrderStatusEntregado:
+			updates["entregado_at"] = time.Now()
 		}
 
 		if err := db.Model(&order).Updates(updates).Error; err != nil {
@@ -346,6 +406,16 @@ func CloseOrder(db *gorm.DB) gin.HandlerFunc {
 
 		if order.Status == models.OrderStatusCobrado || order.Status == models.OrderStatusCancelado {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "el pedido ya está cerrado"})
+			return
+		}
+		// Spec 105 — mostrador PREPAGO: la venta YA se registró en el cobro
+		// POS (paid_at/sale_uuid). Cerrar aquí crearía una SEGUNDA venta y
+		// descontaría stock dos veces. Estado terminal correcto: 'entregado'.
+		if order.PaidAt != nil {
+			c.JSON(http.StatusConflict, gin.H{
+				"error": "este pedido ya fue pagado en caja; márquelo como entregado",
+				"code":  "already_paid",
+			})
 			return
 		}
 

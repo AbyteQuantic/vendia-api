@@ -13,6 +13,10 @@ const (
 	OrderStatusNuevo     OrderStatus = "nuevo"
 	OrderStatusPreparando OrderStatus = "preparando"
 	OrderStatusListo     OrderStatus = "listo"
+	// OrderStatusEntregado — Spec 105: el pedido llegó a la mesa/mostrador.
+	// Es LOGÍSTICA, no dinero: en mostrador prepago (paid_at != nil) es el
+	// estado terminal; en mesas se conserva listo→cobrado directo (retro-compat).
+	OrderStatusEntregado OrderStatus = "entregado"
 	OrderStatusCobrado   OrderStatus = "cobrado"
 	OrderStatusCancelado OrderStatus = "cancelado"
 )
@@ -56,7 +60,20 @@ type OrderTicket struct {
 	// 2 min" and rate-limit repeated calls. Nullable because the
 	// vast majority of tickets never trigger the affordance.
 	WaiterCalledAt *time.Time  `json:"waiter_called_at,omitempty"`
-	Items          []OrderItem `gorm:"foreignKey:OrderUUID;references:ID" json:"items"`
+
+	// ── Spec 105 — comandas con tiempos y mostrador prepago (aditivos) ────
+	// Timestamps por transición: alimentan el semáforo del KDS y el reporte
+	// prometido-vs-real. Los estampa UpdateOrderStatus.
+	PreparandoAt *time.Time `json:"preparando_at,omitempty"`
+	ListoAt      *time.Time `json:"listo_at,omitempty"`
+	EntregadoAt  *time.Time `json:"entregado_at,omitempty"`
+	// Mostrador PREPAGO: la venta se registró en el cobro POS ANTES de
+	// cocinar. PaidAt+SaleUUID atan el ticket a esa Sale; CloseOrder rechaza
+	// estos tickets (la venta ya existe — jamás doble venta/doble stock).
+	PaidAt   *time.Time `json:"paid_at,omitempty"`
+	SaleUUID *string    `gorm:"type:uuid;index" json:"sale_uuid,omitempty"`
+
+	Items []OrderItem `gorm:"foreignKey:OrderUUID;references:ID" json:"items"`
 }
 
 // BeforeCreate runs after BaseModel.BeforeCreate (same hook name,
@@ -89,4 +106,11 @@ type OrderItem struct {
 	// atribución de la cuenta de mesa/comanda.
 	EmployeeUUID *string `gorm:"type:uuid;index" json:"employee_uuid,omitempty"`
 	EmployeeName string  `gorm:"type:varchar(128);not null;default:''" json:"employee_name,omitempty"`
+
+	// ── Spec 105 — comanda de cocina (aditivos) ───────────────────────────
+	// Notes: indicación del cliente por ítem ("sin cebolla"). DurationMin:
+	// SNAPSHOT del Product.DurationMin al crear la comanda (patrón anti-drift
+	// Spec 083) — el tiempo objetivo del ticket es el MAX de sus ítems.
+	Notes       string `gorm:"type:varchar(200);not null;default:''" json:"notes,omitempty"`
+	DurationMin *int   `json:"duration_min,omitempty"`
 }
