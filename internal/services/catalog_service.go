@@ -330,19 +330,32 @@ func (s *CatalogService) AutoContributeProductPhoto(ctx context.Context, gemini 
 		return
 	}
 
-	// 4. Aportar: buscar/crear el producto de catálogo por barcode.
+	// 4-7. Registrar el aporte con el MISMO criterio de consenso que la vía
+	// manual (decisión del fundador 2026-07-14 sobre la recomendación del
+	// concilio legal, Spec 103): verified exige 2 tenants DISTINTOS.
+	s.contributeVerifiedPhoto(tenantID, p, photo)
+}
+
+// contributeVerifiedPhoto — registra la foto (ya verificada por IA) en el
+// catálogo compartido y promueve a 'verified' SOLO con el consenso de 2
+// tenants distintos — el mismo umbral de ShareProductPhotoToCatalog. Antes la
+// vía automática marcaba verified con 1 solo tenant (asimetría señalada por
+// el concilio legal, B03): la verificación IA confirma que la foto muestra el
+// producto, pero el consenso humano independiente sigue siendo la señal de
+// calidad para sugerirla a OTRAS tiendas. Extraído para testearse sin red.
+func (s *CatalogService) contributeVerifiedPhoto(tenantID string, p models.Product, photo string) {
 	cp, err := s.FindOrCreateCatalogProduct(p.Barcode, p.Name, "", p.Presentation, p.Content, p.Category)
 	if err != nil {
 		return
 	}
 
-	// 5. No pisar una foto YA establecida distinta: si el producto de catálogo
+	// No pisar una foto YA establecida distinta: si el producto de catálogo
 	// ya está verificado con OTRA imagen, respetarla.
 	if cp.Status == "verified" && cp.ImageURL != "" && cp.ImageURL != photo {
 		return
 	}
 
-	// 6. Registrar la imagen del tenant si aún no la tiene (mismo patrón que
+	// Registrar la imagen del tenant si aún no la tiene (mismo patrón que
 	// ShareProductPhotoToCatalog: una por tenant, tope de 3 aceptadas).
 	var alreadySharedByTenant int64
 	if err := s.db.Model(&models.CatalogImage{}).
@@ -358,18 +371,29 @@ func (s *CatalogService) AutoContributeProductPhoto(ctx context.Context, gemini 
 		}
 	}
 
-	// 7. Marcar verified (sugerible a otras tiendas). Reflejar la foto en el
-	// producto de catálogo sólo si aún no tiene ninguna.
-	updates := map[string]any{
-		"status":      "verified",
-		"verified_at": time.Now(),
-		"source":      "user",
-	}
+	// Reflejar la primera foto en el producto de catálogo (Adenda B solo
+	// necesita ALGUNA foto real, no una verificada).
 	if cp.ImageURL == "" {
-		updates["image_url"] = photo
+		if err := s.db.Model(&models.CatalogProduct{}).Where("id = ?", cp.ID).
+			Update("image_url", photo).Error; err != nil {
+			return
+		}
 	}
-	if err := s.db.Model(&models.CatalogProduct{}).Where("id = ?", cp.ID).Updates(updates).Error; err != nil {
-		log.Printf("[CATALOG] auto-contribute: update verified failed for %s: %v", cp.ID, err)
+
+	// Promover a verified SOLO con 2 tenants distintos (consenso unificado).
+	var distinctTenants int64
+	if err := s.db.Model(&models.CatalogImage{}).
+		Where("catalog_product_id = ? AND is_accepted = true", cp.ID).
+		Distinct("created_by_tenant_id").
+		Count(&distinctTenants).Error; err != nil {
+		return
+	}
+	if distinctTenants >= 2 && cp.Status != "verified" {
+		if err := s.db.Model(&models.CatalogProduct{}).Where("id = ?", cp.ID).Updates(map[string]any{
+			"status": "verified", "verified_at": time.Now(), "source": "user",
+		}).Error; err != nil {
+			log.Printf("[CATALOG] auto-contribute: update verified failed for %s: %v", cp.ID, err)
+		}
 	}
 }
 
