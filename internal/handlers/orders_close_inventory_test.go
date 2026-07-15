@@ -76,6 +76,7 @@ func setupCloseOrderDB(t *testing.T) *gorm.DB {
 			source TEXT NOT NULL DEFAULT 'POS',
 			receipt_image_url TEXT DEFAULT '',
 			price_tier TEXT NOT NULL DEFAULT 'retail',
+			cash_shift_uuid TEXT,
 			-- Spec F031: link back to the converted quote.
 			quote_id TEXT,
 			cost_amount REAL DEFAULT 0,

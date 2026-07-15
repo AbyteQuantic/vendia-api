@@ -76,6 +76,7 @@ func setupSaleCreditDB(t *testing.T) *gorm.DB {
 			dynamic_qr_payload TEXT,
 			source TEXT NOT NULL DEFAULT 'POS',
 			price_tier TEXT NOT NULL DEFAULT 'retail',
+			cash_shift_uuid TEXT,
 			-- Spec F031: link back to the converted quote.
 			quote_id TEXT,
 			cost_amount REAL DEFAULT 0,

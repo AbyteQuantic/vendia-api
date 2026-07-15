@@ -90,6 +90,7 @@ func setupIsolationDB(t *testing.T) *gorm.DB {
 			receipt_image_url TEXT DEFAULT '',
 			-- Spec F029: tier metadata on the sale row.
 			price_tier TEXT NOT NULL DEFAULT 'retail',
+			cash_shift_uuid TEXT,
 			-- Spec F031: link back to the converted quote.
 			quote_id TEXT,
 			cost_amount REAL DEFAULT 0,

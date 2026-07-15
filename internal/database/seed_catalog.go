@@ -181,6 +181,40 @@ func BackfillEventsCatalogModule(db *gorm.DB) error {
 	return db.Create(&rel).Error
 }
 
+// BackfillCashShiftCatalogModule — Spec 105 F5: módulo "Turno de Caja"
+// (arqueo) en el catálogo dinámico. CORE (sin capability): todo negocio
+// con cajón lo necesita — es el control antirrobo del dueño ausente.
+// Idempotente: corre en cada boot.
+func BackfillCashShiftCatalogModule(db *gorm.DB) error {
+	var n int64
+	if err := db.Model(&models.BusinessModule{}).
+		Where("key = ?", "turno_caja").Count(&n).Error; err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+
+	var maxSort int
+	db.Model(&models.BusinessModule{}).
+		Select("COALESCE(MAX(sort_order),0)").Scan(&maxSort)
+
+	m := models.BusinessModule{
+		Key:             "turno_caja",
+		Name:            "Turno de Caja",
+		Description:     "Abra con base, cierre contando y vea la diferencia",
+		IconKey:         "point_of_sale_rounded",
+		Color:           "#0D9668",
+		Category:        models.CategoryMiNegocio,
+		RenderType:      models.RenderNative,
+		NativeScreenKey: strp("cash_shift"),
+		Active:          true,
+		SortOrder:       maxSort + 1,
+		CreatedBy:       "backfill_f105_f5",
+	}
+	return db.Create(&m).Error
+}
+
 // BackfillComandasCatalogModule — Spec 105 F2: inserta el módulo "Comandas"
 // (KDS de cocina) en el catálogo dinámico si falta. Implícito para
 // restaurante/comidas rápidas/bar (aparece en la grilla sin toggle);

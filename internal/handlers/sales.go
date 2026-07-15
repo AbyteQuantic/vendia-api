@@ -500,6 +500,13 @@ func CreateSale(db *gorm.DB, dispatcher *push.Dispatcher) gin.HandlerFunc {
 				priceTier = models.PriceTierRetail
 			}
 
+			// Spec 105 F5 — atar la venta al turno de caja abierto (si hay).
+			// Best-effort: sin turno la venta sale igual (tenants sin arqueo).
+			var shiftUUID *string
+			if shift, err := openShiftFor(tx, tenantID, branchID); err == nil && shift != nil {
+				shiftUUID = &shift.ID
+			}
+
 			sale = models.Sale{
 				TenantID:              tenantID,
 				CreatedBy:             middleware.UUIDPtr(userID),
@@ -519,6 +526,7 @@ func CreateSale(db *gorm.DB, dispatcher *push.Dispatcher) gin.HandlerFunc {
 				DynamicQRPayload:      req.DynamicQRPayload,
 				ReceiptImageURL:       receiptURL,
 				PriceTier:             priceTier,
+				CashShiftUUID:         shiftUUID,
 				Items:                 items,
 			}
 			if req.ID != "" {

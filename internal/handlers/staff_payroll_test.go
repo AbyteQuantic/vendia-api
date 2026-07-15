@@ -34,7 +34,7 @@ func setupPayrollDB(t *testing.T) *gorm.DB {
 			deleted_at DATETIME, tenant_id TEXT NOT NULL, branch_id TEXT, employee_uuid TEXT,
 			employee_name TEXT DEFAULT '', total REAL DEFAULT 0, tax_amount REAL DEFAULT 0,
 			tip_amount REAL DEFAULT 0, payment_method TEXT DEFAULT 'cash',
-			payment_status TEXT DEFAULT 'COMPLETED', source TEXT DEFAULT 'POS', price_tier TEXT DEFAULT 'retail')`,
+			payment_status TEXT DEFAULT 'COMPLETED', source TEXT DEFAULT 'POS', price_tier TEXT DEFAULT 'retail', cash_shift_uuid TEXT)`,
 		`CREATE TABLE sale_items (id TEXT PRIMARY KEY, created_at DATETIME, updated_at DATETIME,
 			deleted_at DATETIME, sale_id TEXT NOT NULL, product_id TEXT, name TEXT DEFAULT '',
 			price REAL DEFAULT 0, quantity INTEGER DEFAULT 1, subtotal REAL DEFAULT 0,

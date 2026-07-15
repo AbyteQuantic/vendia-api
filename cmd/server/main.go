@@ -164,6 +164,10 @@ func main() {
 	if err := database.BackfillComandasCatalogModule(db); err != nil {
 		log.Printf("[BOOTSTRAP] comandas catalog backfill failed: %v", err)
 	}
+	// Spec 105 F5 — top-up idempotente del módulo Turno de Caja (arqueo).
+	if err := database.BackfillCashShiftCatalogModule(db); err != nil {
+		log.Printf("[BOOTSTRAP] turno_caja catalog backfill failed: %v", err)
+	}
 	// F042 — contabiliza las inscripciones confirmadas (de pago) como ventas
 	// del negocio (canal "Eventos"). Run-every-boot e idempotente: solo crea la
 	// venta de inscripciones que aún no la tienen. Pone al día las confirmadas
@@ -643,6 +647,15 @@ func main() {
 		v1.PATCH("/employees/:uuid", backOffice, handlers.UpdateEmployee(db))
 		v1.DELETE("/employees/:uuid", backOffice, handlers.DeleteEmployee(db))
 		v1.POST("/employees/verify-pin", handlers.VerifyPin(db))
+		// Spec 105 F5 — salida del día (el clock-in lo estampa verify-pin).
+		v1.POST("/employees/clock-out", handlers.ClockOut(db))
+
+		// Spec 105 F5 — turno de caja con arqueo. Abrir/cerrar/actual lo usa
+		// el CAJERO (permitido); el historial con diferencias es del dueño.
+		v1.POST("/cash-shifts", handlers.OpenCashShift(db))
+		v1.GET("/cash-shifts/current", handlers.CurrentCashShift(db))
+		v1.POST("/cash-shifts/:uuid/close", handlers.CloseCashShift(db))
+		v1.GET("/cash-shifts", backOffice, handlers.ListCashShifts(db))
 		// Owner-only credential reset — also upserts the User +
 		// UserWorkspace rows so the staff can log in via the
 		// multi-tenant flow. See handler for the

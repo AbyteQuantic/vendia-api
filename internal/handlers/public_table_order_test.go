@@ -89,7 +89,8 @@ func applyMesaSchema(t *testing.T, db *gorm.DB) {
 			is_credit INTEGER DEFAULT 0, credit_account_id TEXT,
 			payment_status TEXT DEFAULT 'COMPLETED', dynamic_qr_payload TEXT,
 			source TEXT NOT NULL DEFAULT 'POS', receipt_image_url TEXT DEFAULT '',
-			price_tier TEXT NOT NULL DEFAULT 'retail', quote_id TEXT,
+			price_tier TEXT NOT NULL DEFAULT 'retail',
+			cash_shift_uuid TEXT, quote_id TEXT,
 			cost_amount REAL DEFAULT 0, event_registration_id TEXT
 		)`,
 		`CREATE TABLE sale_items (
