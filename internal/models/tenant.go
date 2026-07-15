@@ -84,6 +84,10 @@ type FeatureFlags struct {
 	// peluquerías/barberías; cualquier tenant puede activarlo (p. ej. comisión a
 	// meseros). Solo AGREGA capacidad (Art. X).
 	EnableStaffCommissions bool `json:"enable_staff_commissions"`
+	// Spec 105 F3 — "el mesero puede cobrar": OFF por defecto (mesero puro);
+	// ON habilita cobro en la vista del mesero. Nunca type-implied — decisión
+	// explícita del dueño (fundador 2026-07-14 #1).
+	EnableWaiterCharge bool `json:"enable_waiter_charge"`
 }
 
 // CapabilityToggles carries the three optional capability toggles that a

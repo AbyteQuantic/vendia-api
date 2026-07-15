@@ -5,7 +5,24 @@ type EmployeeRole string
 const (
 	RoleAdmin   EmployeeRole = "admin"
 	RoleCashier EmployeeRole = "cashier"
+	// Spec 105 F3 — roles de restaurante. Enum FIJO aditivo, UN rol por
+	// empleado, presets de módulos fijos, CERO matriz de permisos.
+	RoleWaiter EmployeeRole = "waiter" // mesero: mesas + entregar (+ cobrar si el tenant lo permite)
+	RoleChef   EmployeeRole = "chef"   // cocina: SOLO comandas, nada de dinero
+	// RoleCourier — Domiciliario: ETIQUETA sin vista propia en v1 (decisión
+	// del fundador 2026-07-14); se trata como waiter en visibilidad.
+	RoleCourier EmployeeRole = "courier"
 )
+
+// IsValidEmployeeRole — set cerrado del enum (Spec 105 F3: sin matriz de
+// permisos, un rol por empleado).
+func IsValidEmployeeRole(r EmployeeRole) bool {
+	switch r {
+	case RoleAdmin, RoleCashier, RoleWaiter, RoleChef, RoleCourier:
+		return true
+	}
+	return false
+}
 
 type Employee struct {
 	BaseModel

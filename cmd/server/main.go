@@ -616,14 +616,17 @@ func main() {
 		v1.GET("/sales/today", handlers.TodayStats(db))
 
 		// Employees
+		// Spec 105 F3 — waiter/chef/courier no tocan dinero ni configuración.
+		backOffice := middleware.RequireBackOffice()
+
 		v1.GET("/employees", handlers.ListEmployees(db))
-		v1.POST("/employees", handlers.CreateEmployee(db))
+		v1.POST("/employees", backOffice, handlers.CreateEmployee(db))
 		// Spec 084 — esquema de pago del profesional + liquidación. Gating de
 		// capacidad es client-side (EnableStaffCommissions, como el resto). TODO:
 		// gatear escrituras de payout a rol admin/owner cuando se confirme el rol
 		// en el contexto sin riesgo de lockout.
 		v1.GET("/employees/:uuid/pay-config", handlers.GetEmployeePayConfig(db))
-		v1.PUT("/employees/:uuid/pay-config", handlers.UpsertEmployeePayConfig(db))
+		v1.PUT("/employees/:uuid/pay-config", backOffice, handlers.UpsertEmployeePayConfig(db))
 		v1.GET("/payouts/liquidation", handlers.GetLiquidation(db))
 		v1.GET("/payouts", handlers.ListPayouts(db))
 		v1.POST("/payouts", handlers.CreatePayout(db))
@@ -637,8 +640,8 @@ func main() {
 		v1.GET("/staff-attendance", handlers.ListAttendance(db))
 		v1.POST("/staff-attendance", handlers.MarkAttendance(db))
 		v1.DELETE("/staff-attendance", handlers.DeleteAttendance(db))
-		v1.PATCH("/employees/:uuid", handlers.UpdateEmployee(db))
-		v1.DELETE("/employees/:uuid", handlers.DeleteEmployee(db))
+		v1.PATCH("/employees/:uuid", backOffice, handlers.UpdateEmployee(db))
+		v1.DELETE("/employees/:uuid", backOffice, handlers.DeleteEmployee(db))
 		v1.POST("/employees/verify-pin", handlers.VerifyPin(db))
 		// Owner-only credential reset — also upserts the User +
 		// UserWorkspace rows so the staff can log in via the
@@ -1045,7 +1048,7 @@ func main() {
 
 		// Business profile
 		v1.GET("/store/profile", handlers.GetBusinessProfile(db))
-		v1.PATCH("/store/profile", handlers.UpdateBusinessProfile(db))
+		v1.PATCH("/store/profile", backOffice, handlers.UpdateBusinessProfile(db))
 		// Spec 082 F2b — portada del catálogo con IA (generar desde cero o
 		// mejorar la imagen subida).
 		v1.POST("/store/cover-ai", handlers.GenerateStoreCover(db, geminiSvc, storageSvc))
@@ -1085,15 +1088,15 @@ func main() {
 		v1.POST("/tenant/owner-pin/verify", handlers.VerifyOwnerPin(db))
 
 		// Analytics / Reportes
-		v1.GET("/analytics/dashboard", handlers.AnalyticsDashboard(db))
-		v1.GET("/analytics/top-products", handlers.TopProducts(db))
-		v1.GET("/analytics/photo-coverage", handlers.PhotoCoverage(db))
-		v1.GET("/analytics/sales-by-employee", handlers.SalesByEmployee(db))
-		v1.GET("/analytics/inventory-health", handlers.InventoryHealth(db))
-		v1.GET("/analytics/ingestion-method", handlers.IngestionMethod(db))
-		v1.GET("/analytics/financial-summary", handlers.FinancialSummary(db))
-		v1.GET("/analytics/sales-history", handlers.SalesHistoryByPeriod(db))
-		v1.GET("/analytics/products-insights", handlers.ProductInsights(db))
+		v1.GET("/analytics/dashboard", backOffice, handlers.AnalyticsDashboard(db))
+		v1.GET("/analytics/top-products", backOffice, handlers.TopProducts(db))
+		v1.GET("/analytics/photo-coverage", backOffice, handlers.PhotoCoverage(db))
+		v1.GET("/analytics/sales-by-employee", backOffice, handlers.SalesByEmployee(db))
+		v1.GET("/analytics/inventory-health", backOffice, handlers.InventoryHealth(db))
+		v1.GET("/analytics/ingestion-method", backOffice, handlers.IngestionMethod(db))
+		v1.GET("/analytics/financial-summary", backOffice, handlers.FinancialSummary(db))
+		v1.GET("/analytics/sales-history", backOffice, handlers.SalesHistoryByPeriod(db))
+		v1.GET("/analytics/products-insights", backOffice, handlers.ProductInsights(db))
 
 		// Spec 038 — Push Notifications: registro y revocación de tokens.
 		v1.POST("/devices/register", handlers.RegisterDevice(db))
