@@ -57,8 +57,8 @@ func CreateEmployee(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		if req.Role != models.RoleAdmin && req.Role != models.RoleCashier {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "role debe ser 'admin' o 'cashier'"})
+		if !models.IsValidEmployeeRole(req.Role) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "role debe ser 'admin', 'cashier', 'waiter', 'chef' o 'courier'"})
 			return
 		}
 
@@ -168,6 +168,10 @@ func UpdateEmployee(db *gorm.DB) gin.HandlerFunc {
 			updates["pin"] = string(pinHash)
 		}
 		if req.Role != nil {
+			if !models.IsValidEmployeeRole(*req.Role) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "role debe ser 'admin', 'cashier', 'waiter', 'chef' o 'courier'"})
+				return
+			}
 			updates["role"] = *req.Role
 		}
 		if req.BranchID != nil {
@@ -429,13 +433,8 @@ func SetEmployeePassword(db *gorm.DB) gin.HandlerFunc {
 		// Map employee role onto the workspace vocab. EmployeeRole is
 		// admin/cashier; UserWorkspace also has owner/waiter/manager.
 		// IsOwner=true on the Employee row maps to RoleOwner.
-		wsRole := models.RoleWSCashier
-		switch {
-		case employee.IsOwner:
-			wsRole = models.RoleOwner
-		case employee.Role == models.RoleAdmin:
-			wsRole = models.RoleWSAdmin
-		}
+		// Spec 105 F3 — mapeo centralizado (waiter/chef/courier incluidos).
+		wsRole := models.WorkspaceRoleForEmployee(employee)
 
 		var ws models.UserWorkspace
 		err = db.Where("user_id = ? AND tenant_id = ?", user.ID, tenantID).

@@ -287,14 +287,8 @@ func reconcileWorkspacesFromEmployees(
 }
 
 func workspaceRoleFromEmployee(e models.Employee) models.WorkspaceRole {
-	switch {
-	case e.IsOwner:
-		return models.RoleOwner
-	case e.Role == models.RoleAdmin:
-		return models.RoleWSAdmin
-	default:
-		return models.RoleWSCashier
-	}
+	// Spec 105 F3 — mapeo centralizado (waiter/chef/courier incluidos).
+	return models.WorkspaceRoleForEmployee(e)
 }
 
 // respondAfterIdentityMatch loads every workspace for the user and

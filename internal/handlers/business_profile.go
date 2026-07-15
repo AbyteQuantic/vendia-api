@@ -138,6 +138,9 @@ type ProfileConfigInput struct {
 	// explícitamente en el recompute. Default OFF.
 	EnableEvents *bool `json:"enable_events"`
 
+	// Spec 105 F3 — "el mesero puede cobrar". Default OFF (mesero puro).
+	EnableWaiterCharge *bool `json:"enable_waiter_charge"`
+
 	// Spec F037 — capacidades reclasificadas de byType→opcional. Cada
 	// flag es un toggle simple que el reel del Dashboard puede activar
 	// vía PATCH. Default OFF. Pointer para distinguir "no enviado" de
@@ -318,6 +321,13 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 			flags.EnableEvents = flags.EnableEvents || tenant.FeatureFlags.EnableEvents
 			if req.Config.EnableEvents != nil {
 				flags.EnableEvents = *req.Config.EnableEvents
+			}
+
+			// Spec 105 F3 — "mesero puede cobrar": jamás type-implied; se
+			// preserva si ya estaba ON y el request explícito lo togglea.
+			flags.EnableWaiterCharge = tenant.FeatureFlags.EnableWaiterCharge
+			if req.Config.EnableWaiterCharge != nil {
+				flags.EnableWaiterCharge = *req.Config.EnableWaiterCharge
 			}
 
 			flagsJSON, err := json.Marshal(flags)
