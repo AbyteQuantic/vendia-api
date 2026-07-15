@@ -304,3 +304,66 @@ func indexOf(s, sub string) int {
 	}
 	return -1
 }
+
+// Spec 105 F4 — el QR localizador necesita: prep_minutes (MAX de los ítems),
+// is_paid (mostrador prepago oculta Pagar/Abonar) y listo_at; y el link debe
+// seguir VIVO en listo/entregado (el aviso "¡LISTO!" llega por esta página).
+func TestGetPublicTableSession_LocalizadorF4(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupTableSessionsDB(t)
+	tenant := seedTenant(t, db, uuid.NewString(), "brasas")
+
+	dur20, dur5 := 20, 5
+	now := time.Now()
+	sale := uuid.NewString()
+	order := models.OrderTicket{
+		BaseModel: models.BaseModel{ID: uuid.NewString()},
+		TenantID:  tenant.ID,
+		Label:     "Pedido 7",
+		Status:    models.OrderStatusListo,
+		Type:      models.OrderTypeTurno,
+		Total:     22_000,
+		PaidAt:    &now,
+		SaleUUID:  &sale,
+		ListoAt:   &now,
+		Items: []models.OrderItem{
+			{BaseModel: models.BaseModel{ID: uuid.NewString()}, ProductUUID: uuid.NewString(),
+				ProductName: "Frijoles", Quantity: 1, UnitPrice: 15_000, DurationMin: &dur20},
+			{BaseModel: models.BaseModel{ID: uuid.NewString()}, ProductUUID: uuid.NewString(),
+				ProductName: "Coca-Cola", Quantity: 1, UnitPrice: 7_000, DurationMin: &dur5},
+		},
+	}
+	if err := db.Create(&order).Error; err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	var fresh models.OrderTicket
+	db.First(&fresh, "id = ?", order.ID)
+
+	r := gin.New()
+	r.GET("/api/v1/public/table-sessions/:session_token",
+		GetPublicTableSession(db))
+
+	// LISTO no es 410: la página del cliente vive para gritar "¡LISTO!".
+	w := getJSON(r, "/api/v1/public/table-sessions/"+fresh.SessionToken)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := body.Data["prep_minutes"].(float64); got != 20 {
+		t.Fatalf("prep_minutes = %v, want 20 (MAX de los ítems)", got)
+	}
+	if body.Data["is_paid"] != true {
+		t.Fatalf("is_paid = %v, want true (prepago)", body.Data["is_paid"])
+	}
+	if body.Data["listo_at"] == nil {
+		t.Fatalf("listo_at ausente")
+	}
+	if body.Data["status"] != "listo" {
+		t.Fatalf("status = %v", body.Data["status"])
+	}
+}
