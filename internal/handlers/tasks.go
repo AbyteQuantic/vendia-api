@@ -178,9 +178,11 @@ func onlineOrderTasks(db *gorm.DB, tenantID string) []models.Task {
 
 // T3 — mesas/cuentas abiertas por cobrar (nuevo/preparando/listo).
 func tableAccountTasks(db *gorm.DB, tenantID, branchID string) []models.Task {
+	// Spec 105 F2: 'entregado' sin pagar sigue pendiente de cobro; los
+	// tickets PREPAGO no generan tarea "Cobrar" (su venta ya existe).
 	var rows []models.OrderTicket
-	q := scopeBranch(db.Where("tenant_id = ? AND status IN ?", tenantID,
-		[]string{string(models.OrderStatusNuevo), string(models.OrderStatusPreparando), string(models.OrderStatusListo)}), branchID)
+	q := scopeBranch(db.Where("tenant_id = ? AND status IN ? AND paid_at IS NULL", tenantID,
+		models.OpenOrderStatuses()), branchID)
 	q.Order("created_at ASC").Limit(50).Find(&rows)
 	out := make([]models.Task, 0, len(rows))
 	for _, o := range rows {
@@ -193,10 +195,14 @@ func tableAccountTasks(db *gorm.DB, tenantID, branchID string) []models.Task {
 			Title: label, DeepLink: "/orders/" + o.ID, Amount: o.Total, CreatedAt: o.CreatedAt,
 			ActionLabel: "Cobrar", SessionToken: o.SessionToken,
 		}
-		if o.Status == models.OrderStatusListo {
+		switch o.Status {
+		case models.OrderStatusListo:
 			t.Subtitle = "Lista para cobrar"
 			t.Urgency = models.TaskUrgencyCritical
-		} else {
+		case models.OrderStatusEntregado:
+			t.Subtitle = "Entregada · pendiente de cobro"
+			t.Urgency = models.TaskUrgencyCritical
+		default:
 			t.Subtitle = "En preparación · cuenta abierta"
 			t.Urgency = models.TaskUrgencyHigh
 		}

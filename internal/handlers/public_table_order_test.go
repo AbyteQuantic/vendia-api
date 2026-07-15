@@ -410,7 +410,7 @@ func TestPublicTableOrder_CancelOpenTab_DoesNotInflateStock(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rc := gin.New()
 	rc.Use(func(c *gin.Context) { c.Set(middleware.TenantIDKey, tenantID); c.Next() })
-	rc.PATCH("/orders/:uuid", handlers.UpdateOrderStatus(db))
+	rc.PATCH("/orders/:uuid", handlers.UpdateOrderStatus(db, nil))
 	w := doJSON(t, rc, http.MethodPatch, "/orders/"+o.ID, map[string]any{"status": "cancelado"})
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 
@@ -453,7 +453,7 @@ func mountCancelHandler(db *gorm.DB, tenantID string) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.Use(func(c *gin.Context) { c.Set(middleware.TenantIDKey, tenantID); c.Next() })
-	r.PATCH("/orders/:uuid", handlers.UpdateOrderStatus(db))
+	r.PATCH("/orders/:uuid", handlers.UpdateOrderStatus(db, nil))
 	return r
 }
 

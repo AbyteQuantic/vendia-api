@@ -21,6 +21,20 @@ const (
 	OrderStatusCancelado OrderStatus = "cancelado"
 )
 
+// OpenOrderStatuses — Spec 105 F2: estados en los que un ticket sigue VIVO
+// para la operación (cocina y/o cobro). Incluye 'entregado' porque una mesa
+// entregada y sin pagar sigue siendo una cuenta abierta — excluirla haría
+// desaparecer dinero pendiente del POS. Los tickets PREPAGO se filtran
+// aparte con `paid_at IS NULL` en cada consulta de cuentas.
+func OpenOrderStatuses() []OrderStatus {
+	return []OrderStatus{
+		OrderStatusNuevo,
+		OrderStatusPreparando,
+		OrderStatusListo,
+		OrderStatusEntregado,
+	}
+}
+
 type OrderType string
 
 const (

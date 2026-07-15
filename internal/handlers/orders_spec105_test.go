@@ -39,7 +39,7 @@ func mountOrders105(db *gorm.DB, tenantID string) *gin.Engine {
 		c.Next()
 	})
 	r.POST("/orders", handlers.CreateOrder(db))
-	r.PATCH("/orders/:uuid/status", handlers.UpdateOrderStatus(db))
+	r.PATCH("/orders/:uuid/status", handlers.UpdateOrderStatus(db, nil))
 	r.POST("/orders/:uuid/close", handlers.CloseOrder(db))
 	return r
 }

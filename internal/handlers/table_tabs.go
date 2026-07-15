@@ -88,15 +88,13 @@ func UpsertTableTab(db *gorm.DB) gin.HandlerFunc {
 		var result models.OrderTicket
 		txErr := db.Transaction(func(tx *gorm.DB) error {
 			var existing models.OrderTicket
-			openStatuses := []models.OrderStatus{
-				models.OrderStatusNuevo,
-				models.OrderStatusPreparando,
-				models.OrderStatusListo,
-			}
+			// Spec 105 F2: 'entregado' sin pagar sigue abierta (puede pedir
+			// más); un ticket PREPAGO nunca recibe ítems nuevos (ya se cobró).
+			openStatuses := models.OpenOrderStatuses()
 			// FOR UPDATE lock prevents concurrent syncs from racing
 			err := tx.Set("gorm:query_option", "FOR UPDATE").
 				Preload("Items").
-				Where("tenant_id = ? AND label = ? AND status IN ?",
+				Where("tenant_id = ? AND label = ? AND status IN ? AND paid_at IS NULL",
 					tenantID, label, openStatuses).
 				Order("created_at DESC").
 				First(&existing).Error
@@ -235,12 +233,8 @@ func AddItemsToTableTab(db *gorm.DB) gin.HandlerFunc {
 				// era no-op en GORM v2 → council BUG-RACE Spec 083).
 				err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 					Preload("Items").
-					Where("tenant_id = ? AND label = ? AND status IN ?",
-						tenantID, label, []models.OrderStatus{
-							models.OrderStatusNuevo,
-							models.OrderStatusPreparando,
-							models.OrderStatusListo,
-						}).
+					Where("tenant_id = ? AND label = ? AND status IN ? AND paid_at IS NULL",
+						tenantID, label, models.OpenOrderStatuses()).
 					Order("created_at DESC").
 					First(&existing).Error
 
@@ -360,12 +354,8 @@ func GetTableTab(db *gorm.DB) gin.HandlerFunc {
 
 		var ticket models.OrderTicket
 		err := db.Preload("Items").
-			Where("tenant_id = ? AND label = ? AND status IN ?",
-				tenantID, label, []models.OrderStatus{
-					models.OrderStatusNuevo,
-					models.OrderStatusPreparando,
-					models.OrderStatusListo,
-				}).
+			Where("tenant_id = ? AND label = ? AND status IN ? AND paid_at IS NULL",
+				tenantID, label, models.OpenOrderStatuses()).
 			Order("created_at DESC").
 			First(&ticket).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -405,11 +395,8 @@ func ListOpenTableTabs(db *gorm.DB) gin.HandlerFunc {
 		tenantID := middleware.GetTenantID(c)
 		var tickets []models.OrderTicket
 		if err := db.Preload("Items").
-			Where("tenant_id = ? AND status IN ?", tenantID, []models.OrderStatus{
-				models.OrderStatusNuevo,
-				models.OrderStatusPreparando,
-				models.OrderStatusListo,
-			}).
+			Where("tenant_id = ? AND status IN ? AND paid_at IS NULL", tenantID,
+				models.OpenOrderStatuses()).
 			Order("updated_at DESC").
 			Find(&tickets).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al obtener mesas abiertas"})
@@ -443,12 +430,8 @@ func RemoveItemFromTab(db *gorm.DB) gin.HandlerFunc {
 		itemID := c.Param("item_id")
 
 		var order models.OrderTicket
-		if err := db.Where("id = ? AND tenant_id = ? AND status IN ?",
-			orderUUID, tenantID, []models.OrderStatus{
-				models.OrderStatusNuevo,
-				models.OrderStatusPreparando,
-				models.OrderStatusListo,
-			}).First(&order).Error; err != nil {
+		if err := db.Where("id = ? AND tenant_id = ? AND status IN ? AND paid_at IS NULL",
+			orderUUID, tenantID, models.OpenOrderStatuses()).First(&order).Error; err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "cuenta no encontrada o ya cerrada"})
 			return
 		}

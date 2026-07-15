@@ -144,12 +144,8 @@ func PublicAddItemsToTableTab(db *gorm.DB) gin.HandlerFunc {
 				// era no-op en GORM v2 → council BUG-RACE).
 				err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 					Preload("Items").
-					Where("tenant_id = ? AND label = ? AND status IN ?",
-						tenant.ID, label, []models.OrderStatus{
-							models.OrderStatusNuevo,
-							models.OrderStatusPreparando,
-							models.OrderStatusListo,
-						}).
+					Where("tenant_id = ? AND label = ? AND status IN ? AND paid_at IS NULL",
+						tenant.ID, label, models.OpenOrderStatuses()).
 					Order("created_at DESC").
 					First(&existing).Error
 

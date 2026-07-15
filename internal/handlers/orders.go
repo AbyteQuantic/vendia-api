@@ -8,6 +8,7 @@ import (
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
 	"vendia-backend/internal/services"
+	"vendia-backend/internal/services/push"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -145,7 +146,14 @@ func ListOrders(db *gorm.DB) gin.HandlerFunc {
 
 		query := ApplyBranchScope(db.Where("tenant_id = ?", tenantID), scope)
 		if status != "" {
-			query = query.Where("status = ?", status)
+			// Spec 105 F2 — el KDS pide varios estados en un solo GET
+			// (?status=nuevo,preparando,listo). Un solo valor sigue
+			// funcionando igual (retro-compat).
+			statuses := strings.Split(status, ",")
+			for i := range statuses {
+				statuses[i] = strings.TrimSpace(statuses[i])
+			}
+			query = query.Where("status IN ?", statuses)
 		}
 
 		var orders []models.OrderTicket
@@ -177,7 +185,11 @@ func GetOrder(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-func UpdateOrderStatus(db *gorm.DB) gin.HandlerFunc {
+// UpdateOrderStatus avanza la máquina de estados del ticket. `dispatcher`
+// puede ser nil (entornos sin FCM): el PATCH funciona igual, solo se omite
+// el push. Spec 105 F2: al pasar a 'listo' se notifica al tenant (F038) para
+// que el mesero recoja — el targeting por empleado llega con F3 (roles).
+func UpdateOrderStatus(db *gorm.DB, dispatcher *push.Dispatcher) gin.HandlerFunc {
 	type Request struct {
 		Status        models.OrderStatus `json:"status"         binding:"required"`
 		PaymentMethod string             `json:"payment_method"`
@@ -260,6 +272,25 @@ func UpdateOrderStatus(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// Spec 105 F2 — push F038 al pasar a 'listo': el mesero/cajero se
+		// entera sin mirar la pantalla. Dedup por ticket (reintentos del
+		// chef no duplican). Best-effort: un fallo de push jamás rompe la
+		// transición.
+		if req.Status == models.OrderStatusListo && dispatcher != nil {
+			label := order.Label
+			if label == "" {
+				label = "Pedido"
+			}
+			_, _ = dispatcher.DispatchEvent(c.Request.Context(), db, push.Event{
+				TenantID: tenantID,
+				Type:     "order_ready",
+				Title:    "Pedido listo 🛎️",
+				Body:     label + " está listo para entregar",
+				DeepLink: "/comandas",
+				DedupKey: "order-listo:" + order.ID,
+			})
+		}
+
 		// Restaurar stock SOLO al cancelar una orden que YA había descontado
 		// (estaba 'cobrado'). En el modelo unificado de mesa el stock se descuenta
 		// únicamente al COBRAR (close); una cuenta abierta nunca tocó inventario,
@@ -335,10 +366,13 @@ func OpenAccounts(db *gorm.DB) gin.HandlerFunc {
 		tenantID := middleware.GetTenantID(c)
 		scope := ResolveBranchScope(c, db)
 
+		// Spec 105 F2 — 'entregado' sin pagar sigue siendo cuenta abierta
+		// (el mesero entregó, el cajero aún debe cobrar); los tickets
+		// PREPAGO (paid_at) nunca lo son: su venta ya existe.
 		var orders []models.OrderTicket
 		q := ApplyBranchScope(db.Preload("Items"), scope).
-			Where("tenant_id = ? AND status IN (?, ?, ?)", tenantID,
-				models.OrderStatusNuevo, models.OrderStatusPreparando, models.OrderStatusListo).
+			Where("tenant_id = ? AND status IN ? AND paid_at IS NULL", tenantID,
+				models.OpenOrderStatuses()).
 			Order("created_at ASC")
 		if err := q.Find(&orders).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "error al obtener cuentas abiertas"})
