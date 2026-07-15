@@ -164,6 +164,10 @@ func main() {
 	if err := database.BackfillComandasCatalogModule(db); err != nil {
 		log.Printf("[BOOTSTRAP] comandas catalog backfill failed: %v", err)
 	}
+	// Spec 105 F5 — top-up idempotente del módulo Turno de Caja (arqueo).
+	if err := database.BackfillCashShiftCatalogModule(db); err != nil {
+		log.Printf("[BOOTSTRAP] turno_caja catalog backfill failed: %v", err)
+	}
 	// F042 — contabiliza las inscripciones confirmadas (de pago) como ventas
 	// del negocio (canal "Eventos"). Run-every-boot e idempotente: solo crea la
 	// venta de inscripciones que aún no la tienen. Pone al día las confirmadas
