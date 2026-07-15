@@ -24,6 +24,9 @@ type Sale struct {
 	// re-parsing line items.
 	TipAmount     float64       `gorm:"type:numeric(12,2);not null;default:0" json:"tip_amount"`
 	PaymentMethod PaymentMethod `gorm:"not null;default:'cash'" json:"payment_method"`
+	// Spec 105 F5 — turno de caja: la venta queda atada al turno abierto
+	// al momento de crearla (arqueo: esperado = base + efectivo del turno).
+	CashShiftUUID *string `gorm:"type:uuid;index" json:"cash_shift_uuid,omitempty"`
 	// CustomerID links the sale to an identified Customer (Spec F030).
 	// Nullable: most cash sales stay anonymous (customer_id = null) and
 	// that is a valid state — association is opt-in. The composite

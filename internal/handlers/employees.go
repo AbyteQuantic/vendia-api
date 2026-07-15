@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
+
 	"vendia-backend/internal/middleware"
 	"vendia-backend/internal/models"
 
@@ -289,6 +291,11 @@ func VerifyPin(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// Spec 105 F5 — el PRIMER verify-pin del día es el clock-in del
+		// empleado (asistencia + hora). Idempotente por (tenant, empleado,
+		// día Bogotá); best-effort: un fallo aquí jamás bloquea el PIN.
+		stampClockIn(db, tenantID, employee.ID, middleware.GetBranchIDPtr(c))
+
 		c.JSON(http.StatusOK, gin.H{
 			"data": gin.H{
 				"employee_uuid": employee.ID,
@@ -478,5 +485,76 @@ func SetEmployeePassword(db *gorm.DB) gin.HandlerFunc {
 				"password_already_set": passwordAlreadySet,
 			},
 		})
+	}
+}
+
+// bogotaLocEmployees — día laboral en hora Colombia (patrón Spec 084).
+var bogotaLocEmployees = time.FixedZone("America/Bogota", -5*60*60)
+
+// stampClockIn crea (o completa) la asistencia de HOY con la hora de
+// entrada. Solo estampa la PRIMERA vez: verificaciones posteriores del
+// mismo día (cobros con PIN, cambios de turno de pantalla) no la mueven.
+func stampClockIn(db *gorm.DB, tenantID, employeeUUID string, branchID *string) {
+	today := time.Now().In(bogotaLocEmployees).Format("2006-01-02")
+	var rec models.StaffAttendance
+	err := db.Where("tenant_id = ? AND employee_uuid = ? AND date = ?",
+		tenantID, employeeUUID, today).First(&rec).Error
+	now := time.Now()
+	if err != nil {
+		rec = models.StaffAttendance{
+			TenantID:     tenantID,
+			BranchID:     branchID,
+			EmployeeUUID: employeeUUID,
+			Date:         today,
+			ClockIn:      &now,
+		}
+		_ = db.Create(&rec).Error
+		return
+	}
+	if rec.ClockIn == nil {
+		_ = db.Model(&rec).Update("clock_in", &now).Error
+	}
+}
+
+// ClockOut — POST /employees/clock-out {employee_uuid, pin}: cierra el día
+// del empleado (re-verifica el PIN — mismo gesto que el clock-in). Spec 105 F5.
+func ClockOut(db *gorm.DB) gin.HandlerFunc {
+	type Request struct {
+		EmployeeUUID string `json:"employee_uuid" binding:"required"`
+		Pin          string `json:"pin"           binding:"required,len=4"`
+	}
+	return func(c *gin.Context) {
+		tenantID := middleware.GetTenantID(c)
+
+		var req Request
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		var employee models.Employee
+		if err := db.Where("id = ? AND tenant_id = ? AND is_active = true",
+			req.EmployeeUUID, tenantID).First(&employee).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "empleado no encontrado"})
+			return
+		}
+		if err := bcrypt.CompareHashAndPassword([]byte(employee.Pin), []byte(req.Pin)); err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "PIN incorrecto"})
+			return
+		}
+
+		today := time.Now().In(bogotaLocEmployees).Format("2006-01-02")
+		var rec models.StaffAttendance
+		if err := db.Where("tenant_id = ? AND employee_uuid = ? AND date = ?",
+			tenantID, req.EmployeeUUID, today).First(&rec).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "no hay entrada registrada hoy"})
+			return
+		}
+		now := time.Now()
+		if err := db.Model(&rec).Update("clock_out", &now).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo registrar la salida"})
+			return
+		}
+		db.First(&rec, "id = ?", rec.ID)
+		c.JSON(http.StatusOK, gin.H{"data": rec})
 	}
 }

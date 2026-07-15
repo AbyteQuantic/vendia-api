@@ -80,6 +80,7 @@ func Migrate(db *gorm.DB) error {
 		&models.EmployeePayout{},    // Spec 084 — liquidaciones (append-only)
 		&models.Appointment{},       // Spec 084 Fase 2 — citas/turnos
 		&models.StaffAttendance{},   // Spec 084 backlog — asistencia (arriendo)
+		&models.CashShift{},         // Spec 105 F5 — turno de caja con arqueo
 		&models.SeasonalCampaign{},  // Spec 086 — branding estacional (global)
 		&models.RefreshToken{},
 		&models.Customer{},
