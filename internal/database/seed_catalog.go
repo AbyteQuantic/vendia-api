@@ -180,3 +180,56 @@ func BackfillEventsCatalogModule(db *gorm.DB) error {
 	}
 	return db.Create(&rel).Error
 }
+
+// BackfillComandasCatalogModule — Spec 105 F2: inserta el módulo "Comandas"
+// (KDS de cocina) en el catálogo dinámico si falta. Implícito para
+// restaurante/comidas rápidas/bar (aparece en la grilla sin toggle);
+// para el resto queda descubrible vía la capacidad de mesas. Idempotente:
+// corre en cada boot y es no-op si ya existe.
+func BackfillComandasCatalogModule(db *gorm.DB) error {
+	var n int64
+	if err := db.Model(&models.BusinessModule{}).
+		Where("key = ?", "comandas").Count(&n).Error; err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil // ya existe
+	}
+
+	var maxSort int
+	db.Model(&models.BusinessModule{}).
+		Select("COALESCE(MAX(sort_order),0)").Scan(&maxSort)
+
+	m := models.BusinessModule{
+		Key:             "comandas",
+		Name:            "Comandas de Cocina",
+		Description:     "Pedidos en vivo: prepare, marque listo y entregue",
+		IconKey:         "soup_kitchen_rounded",
+		Color:           "#EA580C",
+		Category:        models.CategoryVender,
+		RenderType:      models.RenderNative,
+		NativeScreenKey: strp("kds"),
+		CapabilityKey:   strp("enable_tables"),
+		Active:          true,
+		SortOrder:       maxSort + 1,
+		CreatedBy:       "backfill_f105",
+	}
+	if err := db.Create(&m).Error; err != nil {
+		return err
+	}
+	for _, tv := range []string{
+		models.BusinessTypeRestaurante,
+		models.BusinessTypeComidasRapidas,
+		models.BusinessTypeBar,
+	} {
+		rel := models.ModuleTypeRelation{
+			ModuleID:          m.ID,
+			BusinessTypeValue: tv,
+			RelationLevel:     models.RelationImplicit,
+		}
+		if err := db.Create(&rel).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}

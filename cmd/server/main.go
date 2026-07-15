@@ -160,6 +160,10 @@ func main() {
 	if err := database.BackfillEventsCatalogModule(db); err != nil {
 		log.Printf("[BOOTSTRAP] eventos catalog backfill failed: %v", err)
 	}
+	// Spec 105 F2 — top-up idempotente del módulo Comandas (KDS de cocina).
+	if err := database.BackfillComandasCatalogModule(db); err != nil {
+		log.Printf("[BOOTSTRAP] comandas catalog backfill failed: %v", err)
+	}
 	// F042 — contabiliza las inscripciones confirmadas (de pago) como ventas
 	// del negocio (canal "Eventos"). Run-every-boot e idempotente: solo crea la
 	// venta de inscripciones que aún no la tienen. Pone al día las confirmadas
@@ -525,6 +529,10 @@ func main() {
 	// Spec 101 — backstop del ticker de retoque (recovery + pocos ítems por
 	// invocación). Mismo modelo de auth: CRON_TOKEN Bearer, fail-closed 503.
 	r.POST("/api/v1/internal/jobs/retouch-tick", handlers.RetouchTickJob(retouchWorker))
+
+	// Spec 105 F2 — sweep de comandas prepago huérfanas en 'listo' > 45 min.
+	// Mismo modelo de auth: CRON_TOKEN Bearer, fail-closed 503.
+	r.POST("/api/v1/internal/jobs/orders-sweep", handlers.OrdersSweepJob(db))
 
 	// Public online orders (customer places order from catalog).
 	// Two paths hit the same handler: the legacy shape and the
@@ -892,7 +900,7 @@ func main() {
 		v1.POST("/orders", handlers.CreateOrder(db))
 		v1.GET("/orders", handlers.ListOrders(db))
 		v1.GET("/orders/:uuid", handlers.GetOrder(db))
-		v1.PATCH("/orders/:uuid/status", handlers.UpdateOrderStatus(db))
+		v1.PATCH("/orders/:uuid/status", handlers.UpdateOrderStatus(db, pushDispatcher))
 		v1.GET("/orders/open-accounts", handlers.OpenAccounts(db))
 		v1.POST("/orders/:uuid/close", handlers.CloseOrder(db))
 		// Live-tab partial payments — tendero registers a manual
