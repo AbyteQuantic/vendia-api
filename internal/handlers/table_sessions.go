@@ -50,6 +50,16 @@ type PublicTableSession struct {
 	TenantName      string             `json:"tenant_name,omitempty"`
 	TenantBrandLogo string             `json:"tenant_brand_logo,omitempty"`
 
+	// ── Spec 105 F4 — QR localizador ─────────────────────────────
+	// PrepMinutes: MAX(duration_min) de los ítems — alimenta el
+	// "En preparación (~X-Y min)" de la página del cliente. Nil si
+	// ningún ítem define tiempo (la página usa su default honesto).
+	PrepMinutes *int `json:"prep_minutes,omitempty"`
+	// IsPaid: mostrador PREPAGO (paid_at). La página oculta
+	// "Pagar/Abonar" y el saldo — ese dinero ya entró en el POS.
+	IsPaid  bool       `json:"is_paid"`
+	ListoAt *time.Time `json:"listo_at,omitempty"`
+
 	// Abonos aprobados (APPROVED). Pending payments are NOT
 	// surfaced publicly — they'd tempt the customer to believe
 	// they already settled when the tendero hasn't confirmed yet.
@@ -221,12 +231,25 @@ func GetPublicTableSession(db *gorm.DB) gin.HandlerFunc {
 			})
 		}
 
+		// Spec 105 F4 — tiempo objetivo del pedido: MAX de los ítems.
+		var prepMinutes *int
+		for _, it := range order.Items {
+			if it.DurationMin != nil && *it.DurationMin > 0 &&
+				(prepMinutes == nil || *it.DurationMin > *prepMinutes) {
+				v := *it.DurationMin
+				prepMinutes = &v
+			}
+		}
+
 		c.JSON(http.StatusOK, gin.H{
 			"data": PublicTableSession{
 				TableLabel:       order.Label,
 				Status:           order.Status,
 				Type:             order.Type,
 				Total:            order.Total,
+				PrepMinutes:      prepMinutes,
+				IsPaid:           order.PaidAt != nil,
+				ListoAt:          order.ListoAt,
 				CreatedAt:        order.CreatedAt,
 				UpdatedAt:        order.UpdatedAt,
 				WaiterCalledAt:   order.WaiterCalledAt,
