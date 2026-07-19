@@ -366,6 +366,10 @@ func main() {
 	// 300/min por TOKEN (no por IP — ver rateKey): holgura para un POS activo que
 	// hace polling (tareas/mesas/sync) sin 429 espurios; sigue frenando abuso.
 	globalLimiter := middleware.NewRateLimiter(300, 1*time.Minute)
+	// Spec 106 — onboarding conversacional: 30 turnos/min por token es más que
+	// una conversación humana real y frena cualquier loop que queme el
+	// presupuesto de IA (el tope duro por sesión vive en el handler, AC-14).
+	agentLimiter := middleware.NewRateLimiter(30, 1*time.Minute)
 
 	// ── Public routes ────────────────────────────────────────────────────────
 	r.GET("/ping", handlers.Ping)
@@ -611,6 +615,12 @@ func main() {
 		// Spec F041 — catálogo dinámico de módulos/tipos para el dashboard.
 		// Solo lectura; la app lo cachea (offline-first) y resuelve qué ver.
 		v1.GET("/catalog", handlers.GetBusinessCatalog(db))
+
+		// Spec 106 — onboarding conversacional con Vendi (autenticado).
+		// La IA caída degrada a 200 {degraded:true}; nunca bloquea (AC-10).
+		v1.POST("/onboarding/agent/turn", agentLimiter, handlers.OnboardingAgentTurn(db, geminiSvc))
+		v1.POST("/onboarding/agent/confirm", handlers.OnboardingAgentConfirm(db))
+		v1.POST("/onboarding/agent/fallback", handlers.OnboardingAgentFallback(db))
 		v1.POST("/subscription/checkout", handlers.CreateSubscriptionCheckout(db, epaycoSvc))
 
 		// Sync (offline-first)

@@ -40,6 +40,10 @@ func degradedOnboarding(reason string) onboardingParseResponse {
 // OnboardingParse — POST /api/v1/auth/onboarding-parse (PÚBLICO, pre-auth,
 // stateless). Extrae campos del onboarding desde texto y/o una nota de voz.
 // NO crea el tenant. Espejo del patrón de voice-inventory; rate-limit por IP.
+//
+// DEPRECATED (Spec 106): la UI nueva usa el onboarding conversacional
+// autenticado (/api/v1/onboarding/agent/*). Este endpoint se conserva SOLO
+// para apps instaladas viejas (Art. X) — no añadir features aquí.
 func OnboardingParse(geminiSvc *services.GeminiService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Nil-safe: sin IA configurada → 200 degraded, NUNCA 500 (D5).

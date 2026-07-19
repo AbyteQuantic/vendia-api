@@ -73,6 +73,8 @@ func Migrate(db *gorm.DB) error {
 		&models.TaskDismissal{},       // Spec 078 — snooze de tareas agregadas
 		&models.ProductVariantGroup{}, // Spec 095 — variantes de producto (talla/color)
 		&models.ModerationLog{},       // Spec 104 — decisiones de moderación (append-only)
+		&models.AgentSession{},        // Spec 106 — sesión conversacional de Vendi (corpus)
+		&models.AgentSessionEvent{},   // Spec 106 — turnos crudos + extracción (corpus)
 
 		&models.Sale{},
 		&models.SaleItem{},
