@@ -335,6 +335,12 @@ type Tenant struct {
 	TermsAcceptedVersion string     `gorm:"type:varchar(32)" json:"terms_accepted_version"`
 	TermsAcceptedAt      *time.Time `json:"terms_accepted_at,omitempty"`
 
+	// Spec 106 (FR-13) — aviso de tratamiento de datos del onboarding
+	// conversacional: la conversación con Vendi se guarda para mejorar el
+	// asistente. Informativo (los términos siguen siendo el fail-closed);
+	// NULL = el cliente no reportó haberlo mostrado. Aditivo (Art. X).
+	DataNoticeAcceptedAt *time.Time `json:"data_notice_accepted_at,omitempty"`
+
 	// Spec 104 — suspensión del catálogo público (no del POS). Non-nil =
 	// tienda.vendia.store/<slug> y el pedido público responden "no
 	// disponible"; el POS y la API autenticada siguen intactos. En F1 se

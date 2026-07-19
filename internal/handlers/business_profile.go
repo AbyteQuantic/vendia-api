@@ -292,40 +292,50 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 			updates["credit_label_mode"] = mode
 		}
 
-		// Spec F023 FR-07: when a config block is present, recompute
-		// feature_flags as (type-implied) OR (toggle values).
+		// Spec 106 (fix T-11): when a config block is present, START from the
+		// tenant's CURRENT feature_flags and apply ONLY the explicit toggles.
+		// The old behavior re-derived the matrix from business_types
+		// (DefaultFeatureFlags), which silently re-activated type-implied
+		// capabilities the registration/Vendi left OFF on purpose (F037
+		// minimal dashboard) the moment any unrelated toggle was PATCHed.
 		if req.Config != nil {
-			// Load the current tenant to get business_types and existing flags
+			// Load the current tenant to get existing flags
 			var tenant models.Tenant
 			if err := db.Where("id = ?", tenantID).First(&tenant).Error; err != nil {
 				c.JSON(http.StatusNotFound, gin.H{"error": "negocio no encontrado"})
 				return
 			}
 
-			// Use request-provided business_types if being updated, else current
-			businessTypes := tenant.BusinessTypes
-			if req.BusinessTypes != nil {
-				businessTypes = req.BusinessTypes
+			flags := tenant.FeatureFlags
+
+			if req.Config.HasTables != nil {
+				// Tables toggle grants mesas WITHOUT KDS/Tips (Spec F023 D3);
+				// KDS/Tips keep their current value (reel-activated later).
+				flags.EnableTables = *req.Config.HasTables
+			}
+			if req.Config.OffersServices != nil {
+				flags.EnableServices = *req.Config.OffersServices
+				flags.EnableCustomBilling = *req.Config.OffersServices
+			}
+			if req.Config.SellsByWeight != nil {
+				flags.EnableFractionalUnits = *req.Config.SellsByWeight
 			}
 
-			// Read toggles: use request value if provided, else derive from
-			// current feature_flags vs the type baseline (D1: no new column).
-			opts := resolveToggles(tenant, req.Config, businessTypes)
-
-			flags := models.DefaultFeatureFlags(businessTypes, opts)
-
-			// Spec F042: EnableEvents is type-implied for academias
-			// (DefaultFeatureFlags ya lo computó) OR self-activated. Se
-			// preserva si ya estaba ON, y un request explícito puede
-			// togglearlo (decisión #2 + tipo academias).
-			flags.EnableEvents = flags.EnableEvents || tenant.FeatureFlags.EnableEvents
+			// Spec F042: academias sigue implicando Eventos al AÑADIR el tipo
+			// (additive-only), y el request explícito puede togglearlo.
+			if req.BusinessTypes != nil {
+				for _, bt := range req.BusinessTypes {
+					if bt == models.BusinessTypeAcademias {
+						flags.EnableEvents = true
+						break
+					}
+				}
+			}
 			if req.Config.EnableEvents != nil {
 				flags.EnableEvents = *req.Config.EnableEvents
 			}
 
-			// Spec 105 F3 — "mesero puede cobrar": jamás type-implied; se
-			// preserva si ya estaba ON y el request explícito lo togglea.
-			flags.EnableWaiterCharge = tenant.FeatureFlags.EnableWaiterCharge
+			// Spec 105 F3 — "mesero puede cobrar": toggle explícito solamente.
 			if req.Config.EnableWaiterCharge != nil {
 				flags.EnableWaiterCharge = *req.Config.EnableWaiterCharge
 			}
@@ -430,38 +440,6 @@ func UpdateBusinessProfile(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		c.JSON(http.StatusOK, gin.H{"message": "perfil actualizado correctamente"})
-	}
-}
-
-// resolveToggles builds a CapabilityToggles from the config input, using the
-// request value when provided and falling back to the existing feature_flags
-// state for omitted fields (Spec F023 D1 — no dedicated column; state
-// derived from feature_flags vs the type baseline).
-func resolveToggles(tenant models.Tenant, cfg *ProfileConfigInput, businessTypes []string) models.CapabilityToggles {
-	// Compute the baseline implied by the type alone (opts all false)
-	baseline := models.DefaultFeatureFlags(businessTypes, models.CapabilityToggles{})
-
-	// For each toggle: use the explicit request value if given; otherwise
-	// derive from "flag is ON and not implied by type" (current toggle state).
-	tables := (tenant.FeatureFlags.EnableTables && !baseline.EnableTables)
-	if cfg.HasTables != nil {
-		tables = *cfg.HasTables
-	}
-
-	services := (tenant.FeatureFlags.EnableServices && !baseline.EnableServices)
-	if cfg.OffersServices != nil {
-		services = *cfg.OffersServices
-	}
-
-	fractional := (tenant.FeatureFlags.EnableFractionalUnits && !baseline.EnableFractionalUnits)
-	if cfg.SellsByWeight != nil {
-		fractional = *cfg.SellsByWeight
-	}
-
-	return models.CapabilityToggles{
-		Tables:          tables,
-		Services:        services,
-		FractionalUnits: fractional,
 	}
 }
 

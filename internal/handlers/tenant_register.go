@@ -3,6 +3,7 @@ package handlers
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 	"vendia-backend/internal/models"
 	"vendia-backend/internal/services"
@@ -13,14 +14,21 @@ import (
 )
 
 type TenantRegisterRequest struct {
-	Owner     OwnerInput      `json:"owner"     binding:"required"`
-	Business  BusinessInput   `json:"business"  binding:"required"`
-	Config    ConfigInput     `json:"config"    binding:"required"`
+	Owner OwnerInput `json:"owner" binding:"required"`
+	// Spec 106 — registro mínimo: el flujo corto de Vendi solo manda
+	// credenciales; business/config son opcionales (la conversación los
+	// define después). Las apps viejas siguen mandando el payload completo
+	// y se comportan igual (Art. X).
+	Business  *BusinessInput  `json:"business"`
+	Config    *ConfigInput    `json:"config"`
 	Employees []EmployeeInput `json:"employees"`
 	// Spec 098 — aceptación de Términos (incluye uso colaborativo de imágenes).
 	// Fail-closed: sin aceptación no se crea la cuenta. La UI lo captura con un
 	// checkbox obligatorio.
 	AcceptTerms bool `json:"accept_terms"`
+	// Spec 106 (FR-13) — el registro mostró el aviso de que la conversación
+	// con el asistente se guarda para mejorar el servicio. Informativo.
+	DataNoticeAccepted bool `json:"data_notice_accepted"`
 }
 
 type OwnerInput struct {
@@ -36,7 +44,9 @@ type OwnerInput struct {
 }
 
 type BusinessInput struct {
-	Name        string   `json:"name"         binding:"required"`
+	// Name es opcional desde Spec 106 (registro mínimo): vacío → placeholder
+	// "Mi negocio"; Vendi pregunta el nombre real en la conversación.
+	Name        string   `json:"name"`
 	Type        string   `json:"type"`
 	Types       []string `json:"types"`
 	RazonSocial string   `json:"razon_social"`
@@ -91,7 +101,25 @@ func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 			return
 		}
 
-		businessTypes, validationErr := validateBusinessTypes(resolveBusinessTypes(req.Business))
+		// Spec 106 — normalización del registro mínimo: bloques ausentes caen
+		// a defaults sensatos; el payload completo de apps viejas pasa intacto.
+		business := BusinessInput{}
+		if req.Business != nil {
+			business = *req.Business
+		}
+		businessName := strings.TrimSpace(business.Name)
+		if businessName == "" {
+			businessName = "Mi negocio"
+		}
+		cfg := ConfigInput{}
+		if req.Config != nil {
+			cfg = *req.Config
+		}
+		if len(cfg.SaleTypes) == 0 {
+			cfg.SaleTypes = []string{"products"}
+		}
+
+		businessTypes, validationErr := validateBusinessTypes(resolveBusinessTypes(business))
 		if validationErr != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": validationErr.Error()})
 			return
@@ -122,9 +150,9 @@ func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 		caps := services.DefaultCapabilitiesForTypes(businessTypes) // F037: always Capabilities{}
 
 		flags := models.DefaultFeatureFlags(nil, models.CapabilityToggles{
-			Tables:          req.Config.HasTables || caps.Tables,
-			Services:        req.Config.OffersServices || caps.Services,
-			FractionalUnits: req.Config.SellsByWeight,
+			Tables:          cfg.HasTables || caps.Tables,
+			Services:        cfg.OffersServices || caps.Services,
+			FractionalUnits: cfg.SellsByWeight,
 		})
 
 		// Spec 075 — ser proveedor B2B SÍ se deriva del tipo al registrarse: es
@@ -158,16 +186,16 @@ func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 				OwnerName:     req.Owner.Name,
 				Phone:         req.Owner.Phone,
 				PasswordHash:  string(ownerHash),
-				BusinessName:  req.Business.Name,
+				BusinessName:  businessName,
 				BusinessTypes: businessTypes,
 				FeatureFlags:  flags,
-				RazonSocial:   req.Business.RazonSocial,
-				NIT:           req.Business.NIT,
-				Address:       req.Business.Address,
-				SaleTypes:     req.Config.SaleTypes,
-				HasShowcases:  req.Config.HasShowcases,
-				HasTables:     req.Config.HasTables || flags.EnableTables,
-				LogoURL:       req.Business.LogoURL,
+				RazonSocial:   business.RazonSocial,
+				NIT:           business.NIT,
+				Address:       business.Address,
+				SaleTypes:     cfg.SaleTypes,
+				HasShowcases:  cfg.HasShowcases,
+				HasTables:     cfg.HasTables || flags.EnableTables,
+				LogoURL:       business.LogoURL,
 				// Spec F036 §4.2 — standalone capability columns
 				// pre-activated from the business type. OR'd with no
 				// form input (the register form doesn't collect these),
@@ -181,6 +209,11 @@ func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 				// Spec 098 — aceptación de términos capturada en el registro.
 				TermsAcceptedVersion: models.CatalogTermsVersion,
 				TermsAcceptedAt:      func() *time.Time { t := time.Now(); return &t }(),
+			}
+			// Spec 106 (FR-13) — aviso de datos del onboarding conversacional.
+			if req.DataNoticeAccepted {
+				now := time.Now()
+				tenant.DataNoticeAcceptedAt = &now
 			}
 			if err := tx.Create(&tenant).Error; err != nil {
 				return err
@@ -208,7 +241,7 @@ func TenantRegister(db *gorm.DB, jwtSecret string) gin.HandlerFunc {
 			branch := models.Branch{
 				TenantID:  tenant.ID,
 				Name:      "Principal",
-				Address:   req.Business.Address,
+				Address:   business.Address,
 				IsActive:  true,
 				IsDefault: true,
 			}

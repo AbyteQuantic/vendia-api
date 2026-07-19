@@ -23,4 +23,7 @@ const (
 	AIFeatureVoiceOrder = "VOICE_ORDER"
 	// Spec 098 — aporte automático al catálogo: verificación imagen↔producto.
 	AIFeatureCatalogVerify = "CATALOG_VERIFY"
+	// Spec 106 — onboarding conversacional con Vendi (interpretación de
+	// descripción libre + respuestas ambiguas).
+	AIFeatureOnboardingAgent = "ONBOARDING_AGENT"
 )
