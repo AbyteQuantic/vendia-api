@@ -45,6 +45,9 @@ type agentTurnRequest struct {
 	Chip      string `json:"chip"`
 	// Kind: "onboarding" (default) | "assist" (Spec 107, botón central).
 	Kind string `json:"kind"`
+	// Restart (Adenda A.3): abandona la sesión activa y arranca una nueva —
+	// el "Empezar de nuevo" del chat. La abandonada queda para el corpus.
+	Restart bool `json:"restart"`
 }
 
 type agentTypeWire struct {
@@ -227,6 +230,20 @@ func OnboardingAgentTurn(db *gorm.DB, ai AgentAI) gin.HandlerFunc {
 			return
 		}
 		req.Text = strings.TrimSpace(req.Text)
+
+		if req.Restart {
+			kind := req.Kind
+			if kind == "" {
+				kind = models.AgentSessionKindOnboarding
+			}
+			if err := db.Model(&models.AgentSession{}).
+				Where("tenant_id = ? AND kind = ? AND status = ?",
+					tenantID, kind, models.AgentSessionStatusActive).
+				Update("status", models.AgentSessionStatusAbandoned).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo reiniciar la conversación"})
+				return
+			}
+		}
 
 		session, created, err := loadOrCreateSession(db, tenantID, agentModelName(ai), req.Kind)
 		if err != nil {
