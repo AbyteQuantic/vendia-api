@@ -74,16 +74,27 @@ func TestDashboardSummaryParityAndShape(t *testing.T) {
 		Update("created_at", now.Add(-48*time.Hour)).Error)
 
 	// Fiados: 2 aceptados con saldo (uno viejo) + 1 pagado (no cuenta).
-	openA := models.CreditAccount{TenantID: tenant.ID, CustomerID: "11111111-1111-4111-8111-111111111111",
-		TotalAmount: 30000, PaidAmount: 8000, Status: "partial", FiadoStatus: "accepted"}
+	// Clientes reales primero (FK) y fiado_token uuid (columna type:uuid).
+	mkCustomer := func(name string) string {
+		cu := models.Customer{TenantID: tenant.ID, Name: name}
+		require.NoError(t, db.Create(&cu).Error)
+		t.Cleanup(func() { db.Unscoped().Delete(&cu) })
+		return cu.ID
+	}
+	c1, c2, c3 := mkCustomer("Marta"), mkCustomer("Pedro"), mkCustomer("Luz")
+	openA := models.CreditAccount{TenantID: tenant.ID, CustomerID: c1,
+		TotalAmount: 30000, PaidAmount: 8000, Status: "partial",
+		FiadoStatus: "accepted", FiadoToken: "aaaaaaa1-1111-4111-8111-111111111111"}
 	require.NoError(t, db.Create(&openA).Error)
 	require.NoError(t, db.Model(&models.CreditAccount{}).Where("id = ?", openA.ID).
 		Update("created_at", now.Add(-12*24*time.Hour)).Error)
-	openB := models.CreditAccount{TenantID: tenant.ID, CustomerID: "22222222-2222-4222-8222-222222222222",
-		TotalAmount: 10000, PaidAmount: 0, Status: "open", FiadoStatus: "accepted"}
+	openB := models.CreditAccount{TenantID: tenant.ID, CustomerID: c2,
+		TotalAmount: 10000, PaidAmount: 0, Status: "open",
+		FiadoStatus: "accepted", FiadoToken: "aaaaaaa2-2222-4222-8222-222222222222"}
 	require.NoError(t, db.Create(&openB).Error)
-	paid := models.CreditAccount{TenantID: tenant.ID, CustomerID: "33333333-3333-4333-8333-333333333333",
-		TotalAmount: 5000, PaidAmount: 5000, Status: "paid", FiadoStatus: "accepted"}
+	paid := models.CreditAccount{TenantID: tenant.ID, CustomerID: c3,
+		TotalAmount: 5000, PaidAmount: 5000, Status: "paid",
+		FiadoStatus: "accepted", FiadoToken: "aaaaaaa3-3333-4333-8333-333333333333"}
 	require.NoError(t, db.Create(&paid).Error)
 
 	// Stock bajo: 1 producto en umbral, 1 sano.
