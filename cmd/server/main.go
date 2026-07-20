@@ -1112,6 +1112,9 @@ func main() {
 
 		// Analytics / Reportes
 		v1.GET("/analytics/dashboard", backOffice, handlers.AnalyticsDashboard(db))
+		// Spec 107 — la ÚNICA llamada del inicio v2 (héroe + tarjetas +
+		// movimientos + counts de tareas en una respuesta).
+		v1.GET("/dashboard/summary", backOffice, handlers.DashboardSummary(db))
 		v1.GET("/analytics/top-products", backOffice, handlers.TopProducts(db))
 		v1.GET("/analytics/photo-coverage", backOffice, handlers.PhotoCoverage(db))
 		v1.GET("/analytics/sales-by-employee", backOffice, handlers.SalesByEmployee(db))

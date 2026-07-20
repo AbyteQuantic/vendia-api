@@ -31,6 +31,8 @@ import (
 type AgentAI interface {
 	InterpretAgentDescription(ctx context.Context, text string) (*services.AgentExtraction, error)
 	InterpretAgentYesNo(ctx context.Context, question, text string) (string, error)
+	// Spec 107 — modo asistente del botón central del Dashboard v2.
+	InterpretAssist(ctx context.Context, contextJSON, text string) (string, *services.AgentAssistAction, error)
 }
 
 const agentAITimeout = 45 * time.Second
@@ -41,6 +43,8 @@ type agentTurnRequest struct {
 	SessionID string `json:"session_id"`
 	Text      string `json:"text"`
 	Chip      string `json:"chip"`
+	// Kind: "onboarding" (default) | "assist" (Spec 107, botón central).
+	Kind string `json:"kind"`
 }
 
 type agentTypeWire struct {
@@ -69,6 +73,8 @@ type agentTurnResponse struct {
 	OfferFallback bool                    `json:"offer_fallback"`
 	Degraded      bool                    `json:"degraded"`
 	Reason        string                  `json:"reason,omitempty"`
+	// Spec 107 — resultado de una acción assist ejecutada.
+	ActionResult *services.AssistActionResult `json:"action_result,omitempty"`
 }
 
 func profileWire(p models.AgentProfile) agentProfileWire {
@@ -93,10 +99,19 @@ func profileWire(p models.AgentProfile) agentProfileWire {
 
 // loadOrCreateSession returns the tenant's single active onboarding session,
 // creating it (with Vendi's greeting as event #1) on first contact.
-func loadOrCreateSession(db *gorm.DB, tenantID, model string) (models.AgentSession, bool, error) {
+func loadOrCreateSession(db *gorm.DB, tenantID, model, kind string) (models.AgentSession, bool, error) {
+	if kind == "" {
+		kind = models.AgentSessionKindOnboarding
+	}
+	promptVersion := services.OnboardingAgentPromptVersion
+	phase := services.AgentPhaseAskName
+	if kind == services.AgentSessionKindAssist {
+		promptVersion = services.AssistPromptVersion
+		phase = "assist"
+	}
 	var session models.AgentSession
 	err := db.Where("tenant_id = ? AND kind = ? AND status = ?",
-		tenantID, models.AgentSessionKindOnboarding, models.AgentSessionStatusActive).
+		tenantID, kind, models.AgentSessionStatusActive).
 		Order("created_at DESC").First(&session).Error
 	if err == nil {
 		return session, false, nil
@@ -107,12 +122,12 @@ func loadOrCreateSession(db *gorm.DB, tenantID, model string) (models.AgentSessi
 
 	session = models.AgentSession{
 		TenantID:      tenantID,
-		Kind:          models.AgentSessionKindOnboarding,
+		Kind:          kind,
 		Channel:       "app",
 		Model:         model,
-		PromptVersion: services.OnboardingAgentPromptVersion,
+		PromptVersion: promptVersion,
 		Status:        models.AgentSessionStatusActive,
-		Phase:         services.AgentPhaseAskName,
+		Phase:         phase,
 		Profile:       models.AgentProfile{},
 	}
 	if err := db.Create(&session).Error; err != nil {
@@ -210,9 +225,16 @@ func OnboardingAgentTurn(db *gorm.DB, ai AgentAI) gin.HandlerFunc {
 		}
 		req.Text = strings.TrimSpace(req.Text)
 
-		session, created, err := loadOrCreateSession(db, tenantID, agentModelName(ai))
+		session, created, err := loadOrCreateSession(db, tenantID, agentModelName(ai), req.Kind)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo cargar la conversación"})
+			return
+		}
+
+		// Spec 107 — el modo asistente tiene su propio flujo (sin máquina
+		// de fases del onboarding).
+		if session.Kind == services.AgentSessionKindAssist {
+			handleAssistTurn(c, db, ai, session, req, created)
 			return
 		}
 
@@ -427,7 +449,7 @@ func OnboardingAgentFallback(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 
-		session, _, err := loadOrCreateSession(db, tenantID, "")
+		session, _, err := loadOrCreateSession(db, tenantID, "", models.AgentSessionKindOnboarding)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo cargar la conversación"})
 			return

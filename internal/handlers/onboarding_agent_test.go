@@ -23,10 +23,12 @@ import (
 
 // fakeAgentAI scripts the interpreter so handler tests never touch Gemini.
 type fakeAgentAI struct {
-	extraction *services.AgentExtraction
-	yesNo      string
-	err        error
-	calls      int
+	extraction   *services.AgentExtraction
+	yesNo        string
+	assistSay    string
+	assistAction *services.AgentAssistAction
+	err          error
+	calls        int
 }
 
 func (f *fakeAgentAI) InterpretAgentDescription(_ context.Context, _ string) (*services.AgentExtraction, error) {
@@ -43,6 +45,14 @@ func (f *fakeAgentAI) InterpretAgentYesNo(_ context.Context, _, _ string) (strin
 		return "", f.err
 	}
 	return f.yesNo, nil
+}
+
+func (f *fakeAgentAI) InterpretAssist(_ context.Context, _, _ string) (string, *services.AgentAssistAction, error) {
+	f.calls++
+	if f.err != nil {
+		return "", nil, f.err
+	}
+	return f.assistSay, f.assistAction, nil
 }
 
 // agentRouter mounts the three endpoints behind a stub auth middleware that

@@ -59,6 +59,17 @@ type AgentProfile struct {
 	UnclearRetry bool `json:"unclear_retry,omitempty"`
 	// Adjusting: tendero asked to tweak the proposal before confirming (FR-07).
 	Adjusting bool `json:"adjusting,omitempty"`
+	// Spec 107 (assist): acción propuesta pendiente de confirmación. El
+	// gate vive en el servidor — sin esta propuesta guardada, un chip
+	// confirm_action no ejecuta NADA.
+	PendingAction *AgentPendingAction `json:"pending_action,omitempty"`
+}
+
+// AgentPendingAction — acción del catálogo cerrado del modo assist
+// (Spec 107 FR-08b) esperando el "Sí" del tendero.
+type AgentPendingAction struct {
+	Type   string            `json:"type"`
+	Params map[string]string `json:"params"`
 }
 
 type AgentSession struct {
