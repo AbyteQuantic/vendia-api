@@ -258,9 +258,11 @@ func OnboardingAgentTurn(db *gorm.DB, ai AgentAI) gin.HandlerFunc {
 			return
 		}
 
-		// First contact: greet without consuming input.
+		// First contact: greet without consuming input — por su nombre,
+		// que el registro ya conoce (Adenda A).
 		if created || (req.Text == "" && req.Chip == "" && session.Turns == 0) {
-			turn := services.AgentTurn{Phase: session.Phase, Profile: session.Profile, Say: services.AgentGreeting()}
+			turn := services.AgentTurn{Phase: session.Phase, Profile: session.Profile,
+				Say: services.AgentGreeting(tenantOwnerName(db, tenantID))}
 			if err := persistTurn(db, &session, agentTurnRequest{}, turn, nil, 0); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo guardar la conversación"})
 				return
