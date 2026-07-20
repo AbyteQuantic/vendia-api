@@ -351,9 +351,25 @@ func ParseYesNo(text string) *bool {
 }
 
 // AgentGreeting is what the assistant says when a session starts.
-func AgentGreeting() []string {
+// AgentFirstName extrae el nombre de pila para dirigirse al tendero
+// (Adenda A: Vendi usa el nombre que ya conoce, jamás honoríficos colgantes).
+func AgentFirstName(full string) string {
+	fields := strings.Fields(strings.TrimSpace(full))
+	if len(fields) == 0 {
+		return ""
+	}
+	name := fields[0]
+	r := []rune(name)
+	return strings.ToUpper(string(r[0])) + strings.ToLower(string(r[1:]))
+}
+
+func AgentGreeting(ownerName string) []string {
+	hola := fmt.Sprintf("¡Hola! 👋 Soy <b>%s</b>.", AgentName)
+	if n := AgentFirstName(ownerName); n != "" {
+		hola = fmt.Sprintf("¡Mucho gusto, %s! 👋 Soy <b>%s</b>.", n, AgentName)
+	}
 	return []string{
-		fmt.Sprintf("¡Hola! 👋 Soy <b>%s</b>. Voy a dejar su tienda lista en un par de minutos, solo conversando.", AgentName),
+		hola + " Voy a dejar su tienda lista en un par de minutos, solo conversando.",
 		"Primero, ¿cómo se llama su negocio?",
 	}
 }

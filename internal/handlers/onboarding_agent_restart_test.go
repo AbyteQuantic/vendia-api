@@ -43,3 +43,20 @@ func TestAgentTurnRestartAbandonsAndCreatesNew(t *testing.T) {
 	require.Equal(t, http.StatusOK, code)
 	assert.Equal(t, secondID, data["session_id"])
 }
+
+// Adenda A: el saludo usa el nombre del dueño que el registro ya conoce.
+func TestAgentGreetingsUseOwnerFirstName(t *testing.T) {
+	db := setupTestDB(t)
+	tenant := createAgentTestTenant(t, db)
+	require.NoError(t, db.Model(&models.Tenant{}).Where("id = ?", tenant.ID).
+		Update("owner_name", "carmen lópez").Error)
+	r := agentRouter(db, &fakeAgentAI{}, tenant.ID)
+
+	_, data := agentPost(t, r, "/turn", map[string]any{})
+	say := data["say"].([]any)[0].(string)
+	assert.Contains(t, say, "Carmen")
+
+	_, data = agentPost(t, r, "/turn", map[string]any{"kind": "assist"})
+	say = data["say"].([]any)[0].(string)
+	assert.Contains(t, say, "Carmen")
+}

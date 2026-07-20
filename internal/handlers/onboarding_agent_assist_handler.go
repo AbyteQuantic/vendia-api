@@ -8,6 +8,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -24,10 +25,23 @@ const (
 	chipCancelAction  = "cancel_action"
 )
 
-func assistGreeting() []string {
-	return []string{
-		"¡Hola! 👋 Soy <b>Vendi</b>. Pregúnteme lo que quiera de su negocio — ventas, fiados, inventario — o pídame crear un producto o un cliente.",
+func assistGreeting(ownerName string) []string {
+	hola := "¡Hola! 👋 Soy <b>Vendi</b>."
+	if n := services.AgentFirstName(ownerName); n != "" {
+		hola = fmt.Sprintf("¡Hola, %s! 👋 Soy <b>Vendi</b>.", n)
 	}
+	return []string{
+		hola + " Pregúnteme lo que quiera de su negocio — ventas, fiados, inventario — o pídame crear un producto o un cliente.",
+	}
+}
+
+// tenantOwnerName: nombre del dueño para dirigirse a él (vacío si no carga).
+func tenantOwnerName(db *gorm.DB, tenantID string) string {
+	var t models.Tenant
+	if err := db.Select("owner_name").First(&t, "id = ?", tenantID).Error; err != nil {
+		return ""
+	}
+	return t.OwnerName
 }
 
 func handleAssistTurn(c *gin.Context, db *gorm.DB, ai AgentAI,
@@ -37,7 +51,8 @@ func handleAssistTurn(c *gin.Context, db *gorm.DB, ai AgentAI,
 
 	// Primer contacto o reanudación sin input → saludo (no consume turno IA).
 	if created || (req.Text == "" && req.Chip == "" && session.Turns == 0) {
-		turn := services.AgentTurn{Phase: "assist", Profile: session.Profile, Say: assistGreeting()}
+		turn := services.AgentTurn{Phase: "assist", Profile: session.Profile,
+			Say: assistGreeting(tenantOwnerName(db, tenantID))}
 		if err := persistTurn(db, &session, agentTurnRequest{}, turn, nil, 0); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo guardar la conversación"})
 			return
