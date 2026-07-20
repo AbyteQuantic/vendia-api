@@ -115,6 +115,87 @@ var agentTypeLabels = map[string]string{
 	models.BusinessTypePeluqueria:           "peluquería / belleza",
 }
 
+// Adenda A (spec 106): la confirmación presenta, no clasifica. El tipo
+// primario se dice como IDENTIDAD (artículo + nombre que el tendero reconoce
+// como SU negocio); los secundarios se traducen a ACTIVIDAD en verbo, nunca
+// como un segundo negocio ("tienda de barrio" confundía a una peluquería que
+// vende productos). Ningún secundario se oculta: el tendero debe poder negar
+// cualquier detección — en especial licores, que activa el control 18+.
+var agentTypeIdentity = map[string]string{
+	models.BusinessTypeTiendaBarrio:         "una <b>tienda de barrio</b>",
+	models.BusinessTypeMinimercado:          "un <b>minimercado</b>",
+	models.BusinessTypeDepositoConstruccion: "un <b>depósito de materiales</b>",
+	models.BusinessTypeRestaurante:          "un <b>restaurante</b>",
+	models.BusinessTypeComidasRapidas:       "un negocio de <b>comidas rápidas</b>",
+	models.BusinessTypeBar:                  "un <b>bar / venta de licores</b>",
+	models.BusinessTypeManufactura:          "un negocio de <b>manufactura</b>",
+	models.BusinessTypeReparacionMuebles:    "un taller de <b>reparación de muebles</b>",
+	models.BusinessTypeEmprendimientoGen:    "un <b>emprendimiento</b>",
+	models.BusinessTypeAcademias:            "una <b>academia</b>",
+	models.BusinessTypeProveedorAgricola:    "un <b>proveedor agrícola</b>",
+	models.BusinessTypeProveedorMayorista:   "un <b>proveedor mayorista</b>",
+	models.BusinessTypePeluqueria:           "una <b>peluquería</b>",
+}
+
+var agentTypeActivityPhrase = map[string]string{
+	models.BusinessTypeTiendaBarrio:         "que además vende productos",
+	models.BusinessTypeMinimercado:          "que además vende productos de mercado",
+	models.BusinessTypeDepositoConstruccion: "que además vende materiales de construcción",
+	models.BusinessTypeRestaurante:          "que además prepara y sirve comida",
+	models.BusinessTypeComidasRapidas:       "que además vende comidas rápidas",
+	models.BusinessTypeBar:                  "donde también se venden licores",
+	models.BusinessTypeManufactura:          "que además fabrica sus propios productos",
+	models.BusinessTypeReparacionMuebles:    "que además repara muebles",
+	models.BusinessTypeEmprendimientoGen:    "que además vende sus propios productos",
+	models.BusinessTypeAcademias:            "que además dicta clases o cursos",
+	models.BusinessTypeProveedorAgricola:    "que además surte productos del campo",
+	models.BusinessTypeProveedorMayorista:   "que además vende al por mayor",
+	models.BusinessTypePeluqueria:           "que además presta servicios de belleza",
+}
+
+// agentTypeReadyPhrase anuncia qué le queda listo por cada tipo secundario.
+// Solo capacidades que el catálogo realmente configura (spec §7 "nunca
+// inventa"); si un tipo no tiene entrada, la frase se omite.
+var agentTypeReadyPhrase = map[string]string{
+	models.BusinessTypeTiendaBarrio:   "el inventario para esos productos",
+	models.BusinessTypeMinimercado:    "el inventario para esos productos",
+	models.BusinessTypeBar:            "el control de venta de licores a mayores de edad",
+	models.BusinessTypeRestaurante:    "el manejo de platos y cocina",
+	models.BusinessTypeComidasRapidas: "el manejo de pedidos de comida",
+}
+
+// buildConfirmationSay es función pura de types: la re-entrada por texto
+// libre desde confirm_types produce exactamente el mismo formato.
+func buildConfirmationSay(types []models.AgentTypeGuess) string {
+	if len(types) == 0 {
+		return "¿Me confirma si eso es correcto? 🙂"
+	}
+	identity, ok := agentTypeIdentity[types[0].Key]
+	if !ok {
+		identity = agentTypeLabel(types[0].Key)
+	}
+	if len(types) == 1 {
+		return fmt.Sprintf("Entendido: su negocio es %s. ¿Es correcto?", identity)
+	}
+	activities := make([]string, 0, len(types)-1)
+	ready := make([]string, 0, len(types)-1)
+	for _, tg := range types[1:] {
+		if a, ok := agentTypeActivityPhrase[tg.Key]; ok {
+			activities = append(activities, a)
+		} else {
+			activities = append(activities, "que además "+strings.ToLower(agentTypeLabel(tg.Key)))
+		}
+		if r, ok := agentTypeReadyPhrase[tg.Key]; ok {
+			ready = append(ready, r)
+		}
+	}
+	base := fmt.Sprintf("Entendido: su negocio es %s %s.", identity, strings.Join(activities, " y "))
+	if len(ready) == 0 {
+		return base + " ¿Es correcto?"
+	}
+	return fmt.Sprintf("%s Le dejo listo %s, ¿es correcto?", base, strings.Join(ready, " y "))
+}
+
 func agentTypeLabel(key string) string {
 	if l, ok := agentTypeLabels[key]; ok {
 		return l
@@ -369,7 +450,7 @@ func advanceAskDescription(p models.AgentProfile, in AgentTurnInput) AgentTurn {
 	p.DescriptionAttempts = 0
 
 	return AgentTurn{Phase: AgentPhaseConfirmTypes, Profile: p,
-		Say: []string{fmt.Sprintf("Entendido: su negocio tiene %s. ¿Es correcto?", joinTypeLabels(p.Types))},
+		Say: []string{buildConfirmationSay(p.Types)},
 		Chips: []AgentChip{
 			{ID: ChipYes, Label: "Sí, así es"},
 			{ID: ChipNo, Label: "Falta algo / no es así"},
@@ -405,21 +486,6 @@ func mergeTypes(prev, add []models.AgentTypeGuess) []models.AgentTypeGuess {
 		}
 	}
 	return out
-}
-
-func joinTypeLabels(types []models.AgentTypeGuess) string {
-	labels := make([]string, 0, len(types))
-	for _, t := range types {
-		labels = append(labels, "<b>"+agentTypeLabel(t.Key)+"</b>")
-	}
-	switch len(labels) {
-	case 0:
-		return ""
-	case 1:
-		return labels[0]
-	default:
-		return strings.Join(labels[:len(labels)-1], ", ") + " y " + labels[len(labels)-1]
-	}
 }
 
 func advanceConfirmTypes(p models.AgentProfile, in AgentTurnInput) AgentTurn {

@@ -71,6 +71,9 @@ type agentTurnResponse struct {
 	Proposal      *services.AgentProposal `json:"proposal,omitempty"`
 	Done          bool                    `json:"done"`
 	OfferFallback bool                    `json:"offer_fallback"`
+	// PendingKey: follow-up en curso — el frontend lo usa para matizar el
+	// gesto/forma del orbe (Adenda A). Aditivo y retrocompatible.
+	PendingKey string `json:"pending_key,omitempty"`
 	Degraded      bool                    `json:"degraded"`
 	Reason        string                  `json:"reason,omitempty"`
 	// Spec 107 — resultado de una acción assist ejecutada.
@@ -338,6 +341,7 @@ func turnResponse(session models.AgentSession, turn services.AgentTurn) agentTur
 		Proposal:      turn.Proposal,
 		Done:          turn.Done,
 		OfferFallback: turn.OfferFallback,
+		PendingKey:    turn.PendingKey,
 	}
 }
 
