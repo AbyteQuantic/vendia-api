@@ -85,6 +85,13 @@ func ListProducts(db *gorm.DB) gin.HandlerFunc {
 			Where("tenant_id = ? AND is_available = true AND is_draft = false", tenantID)
 		query = ApplyBranchScope(query, scope)
 
+		// Spec 107 (FR-11) — búsqueda por nombre para el buscador del inicio.
+		// Mismo patrón LOWER+LIKE que ListCustomers (customers.go).
+		if q := strings.TrimSpace(c.Query("q")); q != "" {
+			like := "%" + strings.ToLower(q) + "%"
+			query = query.Where("LOWER(name) LIKE ?", like)
+		}
+
 		// sellable_only (POS / caché Isar): oculta los platos de menú
 		// INCOMPLETOS — is_menu_item sin receta con ingredientes, no costeables
 		// (Spec 078). El inventario y demás consumidores NO pasan el flag, así
